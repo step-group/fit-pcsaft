@@ -1,30 +1,51 @@
 # fit-pcsaft
 
-Fit PC(P)-SAFT pure component parameters to experimental vapor pressure and liquid density data, wrapping [FeOs](https://github.com/feos-org/feos) for equation of state evaluation and automatic differentiation.
+A simple Python tool for fitting PC-SAFT (and PCP-SAFT) equation
+of state parameters to experimental data. Built on the PC-SAFT
+implementation provided by
+[FeOs](https://github.com/feos-org/feos).
+
+Setting up fitting procedures repeatedly in ad hoc notebooks is
+tedious. This tool streamlines the process: provide a component
+identifier and get back the fitted result along with a phase
+diagram to visually assess fit quality (not data quality!).
 
 ## Installation
+
+Install the package directly from GitHub using your preferred python package manager (e.g. `pip`):
 
 ```bash
 pip install git+https://github.com/maximilianfv/fit-pcsaft.git
 ```
 
-## Quick start
+## Quick Start
+
+Fitting parameters for a compound like **ethanol** only takes a few lines of code.
 
 ```python
 from fit_pcsaft import fit_pure
 
+# 1. Fit parameters to experimental data
 result = fit_pure(
-    id="ethanol",
-    psat_path="data/psat/ethanol.csv",
-    density_path="data/density/ethanol.csv",
-    na=1, nb=1,  # 2B association scheme
+    id="ethanol",                     # Search PubChem by name, SMILES, or InChI
+    psat_path="data/psat/ethanol.csv", # Vapor pressure data
+    density_path="data/density/ethanol.csv", # Liquid density data
+    na=1, nb=1,                        # 2B association scheme for alcohols
 )
+
+# 2. Inspect the results
 print(result)
-result.to_json("parameters.json")
-result.plot(path="ethanol.png")
+
+# 3. Save for future use in FeOs/other tools
+result.to_json(path="my_parameters.json")
+
+# 4. Create a phase diagram
+result.plot(path="ethanol_fit.png", color="red")
 ```
 
-```
+### Example Output
+
+```text
 Fitted parameters:
   m (segments):            3.6856
   σ (diameter):            2.7184 Å
@@ -40,99 +61,39 @@ Fitting quality:
   RMS weighted resid.:     0.0009
   Converged:               True
   Function evals:          20
-  Time elapsed:            1.66 s
+  Time elapsed:            0.26 s
 ```
 
-## Data format
+---
 
-CSV with temperature in the first column and the property in the second. Extra columns are ignored — NIST TDE exports work directly.
+## Data Format
 
+The tool expects simple CSV files. The **first column** must be temperature, and the **second column** must be the property (saturation pressure or mass density).
+
+* **Vapor Pressure**: Default units are **K** and **kPa**.
+* **Liquid Density**: Default units are **K** and **kg/m³**.
+
+## Handling Units
+
+If your data uses different SI units (e.g., Celsius, bar, or g/cm³), you can specify them using the `si_units` package (which is installed automatically):
+
+```python
+import si_units as si
+
+result = fit_pure(
+    ...,
+    temperature_unit=si.CELSIUS,
+    pressure_unit=si.BAR,
+    density_unit=si.GRAM / si.CENTI * si.METER**3
+)
 ```
-Temperature ( K ),vapor pressure ( kPa ),...
-231.15,100.0,...
-```
-
-Default units: **K**, **kPa**, **kg/m³**.
 
 ## Examples
 
-### Non-associating — propane
+For practical demonstrations of different chemical classes (hydrocarbons, polar solvents, and associating fluids), please explore the [examples/](examples/) directory in this repository.
 
-```python
-fit_pure(id="propane", psat_path=..., density_path=...)
-```
+---
 
-### Polar — acetone (fit dipole moment)
+## License
 
-```python
-fit_pure(id="acetone", psat_path=..., density_path=..., mu=None)
-```
-
-### Associating — ethanol (2B scheme)
-
-```python
-fit_pure(id="ethanol", psat_path=..., density_path=..., na=1, nb=1)
-```
-
-### HBD/HBA metadata only — e.g. carbonyl oxygen
-
-Passes `na`/`nb` to the output JSON without fitting association parameters:
-
-```python
-fit_pure(id="acetone", psat_path=..., density_path=..., na=1)  # nb defaults to 0
-```
-
-### Quadrupolar — CO₂
-
-```python
-fit_pure(id="carbon dioxide", psat_path=..., density_path=..., q=4.4)
-# Note: q != 0 triggers numerical Jacobian (~3 min)
-```
-
-### Robust loss — outlier-heavy data
-
-```python
-fit_pure(..., loss="huber", f_scale=0.01)
-```
-
-## API reference
-
-### `fit_pure`
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `id` | `str` | — | Compound name, SMILES, or InChI (resolved via PubChem) |
-| `psat_path` | `str\|Path` | — | Path to vapor pressure CSV |
-| `density_path` | `str\|Path` | — | Path to liquid density CSV |
-| `mu` | `float\|None` | `0.0` | Dipole moment (D). `None` to fit it |
-| `q` | `float` | `0.0` | Quadrupole moment (D·Å), fixed. Triggers numerical Jacobian |
-| `na` | `int\|None` | `None` | Association sites A. `na>0, nb>0` → fit κ_ab and ε_ab/k |
-| `nb` | `int\|None` | `None` | Association sites B. `nb=0` → metadata only, no assoc. fitting |
-| `psat_weight` | `float` | `3.0` | Relative weight of vapor pressure residuals |
-| `density_weight` | `float` | `2.0` | Relative weight of density residuals |
-| `extrapolate_psat` | `bool` | `False` | Clausius-Clapeyron extrapolation for near-critical/supercritical data points |
-| `loss` | `str` | `'linear'` | Scipy loss function: `'linear'`, `'huber'`, `'soft_l1'`, `'cauchy'`, `'arctan'`. Non-linear losses switch solver to TRF |
-| `f_scale` | `float` | `1.0` | Soft margin for robust loss functions |
-| `temperature_unit` | `si.SIObject` | `si.KELVIN` | Temperature unit in CSV |
-| `pressure_unit` | `si.SIObject` | `si.KILO * si.PASCAL` | Pressure unit in CSV |
-| `density_unit` | `si.SIObject` | `si.KILOGRAM / si.METER**3` | Density unit in CSV |
-| `scipy_kwargs` | `dict\|None` | `None` | Override `scipy.least_squares` defaults |
-
-### `FitResult`
-
-| Attribute | Description |
-|---|---|
-| `params` | Dict of fitted parameters (`m`, `sigma`, `epsilon_k`, optionally `mu`, `kappa_ab`, `epsilon_k_ab`) |
-| `eos` | Ready-to-use `feos.EquationOfState` |
-| `ard_psat` | ARD% for vapor pressure |
-| `ard_rho` | ARD% for liquid density |
-| `time_elapsed` | Wall time for the optimization loop (s) |
-| `scipy_result` | Raw `scipy.OptimizeResult` |
-
-#### `result.to_json(path)`
-
-Appends the fitted record to a feos-compatible JSON parameter file. Creates the file and parent directories if needed.
-
-#### `result.plot(path=None)`
-
-Two-panel phase diagram (Clausius-Clapeyron + T-ρ) with experimental data overlay. Returns `(fig, axes)`. Saves to `path` if provided.
+This project is licensed under the **MIT** or (**BSD-2-Clause** OR **Apache-2.0**) license.
