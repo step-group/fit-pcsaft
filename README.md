@@ -90,7 +90,15 @@ result = fit_pure(
 
 ## Examples
 
-For practical demonstrations of different chemical classes (hydrocarbons, polar solvents, and associating fluids), please explore the [examples/](examples/) directory in this repository.
+For practical demonstrations of different substances (hydrocarbons, polar solvents, and associating fluids), please explore the [examples/](examples/) folder in this repo.
+
+## Roadmap
+
+Future features and improvements:
+- [ ] **Binary Interaction Parameters**:
+    - [ ] Support for **VLE** (Vapor-Liquid Equilibrium) data.
+    - [ ] Support for **LLE** (Liquid-Liquid Equilibrium) data.
+    - [ ] Support for **SLE** (Solid-Liquid Equilibrium) data.
 
 ## License
 
