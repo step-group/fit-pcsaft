@@ -92,8 +92,6 @@ result = fit_pure(
 
 For practical demonstrations of different chemical classes (hydrocarbons, polar solvents, and associating fluids), please explore the [examples/](examples/) directory in this repository.
 
----
-
 ## License
 
 This project is licensed under the **MIT** or (**BSD-2-Clause** OR **Apache-2.0**) license.
