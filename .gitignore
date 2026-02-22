@@ -1,0 +1,14 @@
+/pure_fitting
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+test_feos_params.py

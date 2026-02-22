@@ -1,0 +1,267 @@
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+from fit_pcsaft._types import Compound, ModelSpec, PureData, Units
+
+
+@dataclass(frozen=True)
+class FitResult:
+    """Result of PC-SAFT pure component fitting.
+
+    Attributes
+    ----------
+        params : dict
+            Dictionary of fitted parameters {"m", "sigma", "epsilon_k", ...}
+
+        eos : object
+            Fitted feos.EquationOfState object
+
+        data : PureData
+            Experimental data used for fitting
+
+        compound : Compound
+            Compound identifier and molar weight
+
+        spec : ModelSpec
+            Model specification (mu, q, na, nb)
+
+        units : Units
+            Units used for experimental data
+
+        ard_psat : float
+            Average relative deviation for vapor pressure (%)
+
+        ard_rho : float
+            Average relative deviation for liquid density (%)
+
+        scipy_result : object
+            Raw scipy OptimizeResult from least_squares
+
+    Methods
+    -------
+        to_json(path: Path | str) -> None
+            Append fitted parameters to a feos-compatible JSON parameter file.
+        ```
+    """
+
+    params: dict
+    eos: object
+    data: PureData
+    compound: Compound
+    spec: ModelSpec
+    units: Units
+    ard_psat: float
+    ard_rho: float
+    scipy_result: object
+    time_elapsed: float
+
+    def to_json(self, path: "Path | str") -> None:
+        """Append or update fitted parameters in a feos-compatible JSON parameter file.
+
+        If an entry with the same CAS number or name already exists, it is replaced.
+        If the file does not exist, a new single-entry list is created.
+        Parent directories are created automatically if needed.
+
+        Parameters
+        ----------
+        path : Path or str
+            Path to the JSON parameter file.
+
+        Raises
+        ------
+        json.JSONDecodeError
+            If the existing file contains invalid JSON.
+
+        Examples
+        --------
+        ```python
+        >>> result = fit_pure(
+        ...     id="ethanol",
+        ...     psat_path=psat_path,
+        ...     density_path=density_path,
+        ...     na=1,
+        ...     nb=1,
+        ... )
+        >>> result.to_json("path/to/parameters.json")
+        ```
+
+        ```json
+        {
+            "identifier": {
+            "cas": "64-17-5",
+            "name": "ethanol",
+            "iupac_name": "ethanol",
+            "smiles": "CCO",
+            "inchi": "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3",
+            "formula": "C2H6O"
+            },
+            "molarweight": 46.07,
+            "m": 3.6856059608152645,
+            "sigma": 2.718370938956805,
+            "epsilon_k": 175.508463577238,
+            "association_sites": [
+            {
+                "na": 1.0,
+                "nb": 1.0,
+                "kappa_ab": 0.11116132011425092,
+                "epsilon_k_ab": 2182.115702815104
+            }
+            ]
+        }
+        ```
+        """
+        identifier = self.compound.identifier
+        mu = self.spec.mu if "mu" not in self.params else self.params["mu"]
+        q = self.spec.q
+        na = self.spec.na
+        nb = self.spec.nb
+
+        path = Path(path)
+        entry = {
+            "identifier": {
+                "cas": identifier.cas,
+                "name": identifier.name,
+                "iupac_name": identifier.iupac_name,
+                "smiles": identifier.smiles,
+                "inchi": identifier.inchi,
+                "formula": identifier.formula,
+            },
+            "molarweight": self.compound.mw,
+            "m": self.params["m"],
+            "sigma": self.params["sigma"],
+            "epsilon_k": self.params["epsilon_k"],
+        }
+
+        if mu != 0.0:
+            entry["mu"] = mu
+        if q != 0.0:
+            entry["q"] = q
+        if na is not None:
+            site = {"na": float(na), "nb": float(nb)}
+            if "kappa_ab" in self.params:
+                site["kappa_ab"] = self.params["kappa_ab"]
+                site["epsilon_k_ab"] = self.params["epsilon_k_ab"]
+            entry["association_sites"] = [site]
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        if path.exists():
+            data = json.loads(path.read_text())
+            # Remove existing entries with same CAS or name
+            data = [
+                d
+                for d in data
+                if d.get("identifier", {}).get("cas") != identifier.cas
+                and d.get("identifier", {}).get("name") != identifier.name
+            ]
+        else:
+            data = []
+
+        data.append(entry)
+        path.write_text(json.dumps(data, indent=2))
+
+    def plot(
+        self,
+        path=None,
+        color: str = "red",
+        line_color: str = "black",
+        linestyle: str = "-",
+        scatter_kw: dict | None = None,
+        line_kw: dict | None = None,
+    ):
+        """Two-panel phase diagram with experimental data overlay.
+
+        Parameters
+        ----------
+        path : str or Path, optional
+            If given, save the figure to this path.
+        color : str
+            Colour for experimental data points. Preset name ("red", "blue",
+            "green", "orange", "purple", "cyan", "black") or any matplotlib
+            colour string. Default: "red".
+        line_color : str
+            Colour for the PC-SAFT curves. Same preset names or any matplotlib
+            colour string. Default: "black".
+        linestyle : str
+            Line style for PC-SAFT curves, e.g. "-", "--", "-.", ":".
+            Default: "-".
+        scatter_kw : dict, optional
+            Extra kwargs merged into scatter calls (overrides defaults).
+        line_kw : dict, optional
+            Extra kwargs merged into line plot calls (overrides defaults).
+
+        Returns
+        -------
+        fig, axes
+        """
+        from fit_pcsaft._plot import plot_pure
+
+        return plot_pure(
+            self, path=path, color=color, line_color=line_color,
+            linestyle=linestyle, scatter_kw=scatter_kw, line_kw=line_kw,
+        )
+
+    def __str__(self) -> str:
+        """Pretty-print fitted parameters and quality metrics."""
+        mu = self.params.get("mu", self.spec.mu or 0.0)
+        q = self.spec.q
+        na = self.spec.na
+        nb = self.spec.nb
+        n_psat = len(self.data.T_psat)
+        n_rho = len(self.data.T_rho)
+
+        lines = [
+            "Fitted parameters:",
+            f"  m (segments):            {self.params['m']:.4f}",
+            f"  σ (diameter):            {self.params['sigma']:.4f} Å",
+            f"  ε/k (energy):            {self.params['epsilon_k']:.2f} K",
+        ]
+
+        if mu != 0.0:
+            lines.append(f"  μ (dipole):              {mu:.4f} D")
+        if q != 0.0:
+            lines.append(f"  q (quadrupole):          {q:.4f} DÅ")
+        if "kappa_ab" in self.params:
+            lines.append(f"  κ_ab (assoc. volume):    {self.params['kappa_ab']:.6f}")
+        if "epsilon_k_ab" in self.params:
+            lines.append(
+                f"  ε_ab/k (assoc. energy):  {self.params['epsilon_k_ab']:.2f} K"
+            )
+
+        if na is not None:
+            scheme = _assoc_scheme_name(na, nb)
+            lines.append(
+                f"\nAssociation scheme:        {scheme} (na={na}, nb={nb})"
+            )
+
+        rms = np.sqrt(2.0 * self.scipy_result.cost / len(self.scipy_result.fun))
+        lines.extend(
+            [
+                "",
+                "Fitting quality:",
+                f"  ARD vapor pressure:      {self.ard_psat:.2f}%  (n={n_psat})",
+                f"  ARD liquid density:      {self.ard_rho:.2f}%  (n={n_rho})",
+                f"  RMS weighted resid.:     {rms:.4f}",
+                f"  Converged:               {self.scipy_result.success}",
+                f"  Function evals:          {self.scipy_result.nfev}",
+                f"  Time elapsed:            {self.time_elapsed:.2f} s",
+            ]
+        )
+
+        return "\n".join(lines)
+
+
+def _assoc_scheme_name(na: int, nb: int) -> str:
+    """Return common association scheme name for given na and nb."""
+    _schemes = {
+        (1, 0): "1A",
+        (0, 1): "1A",
+        (1, 1): "2B",
+        (1, 2): "3B",
+        (2, 1): "3B",
+        (2, 2): "4C",
+    }
+    return _schemes.get((na, nb), "custom")
