@@ -64,8 +64,6 @@ Fitting quality:
   Time elapsed:            0.26 s
 ```
 
----
-
 ## Data Format
 
 The tool expects simple CSV files. The **first column** must be temperature, and the **second column** must be the property (saturation pressure or mass density).
@@ -95,17 +93,17 @@ For practical demonstrations of different substances (hydrocarbons, polar solven
 ## Roadmap
 
 Future features and improvements:
-- [ ] **Binary Interaction Parameters**:
-    - [ ] Support for **VLE** (Vapor-Liquid Equilibrium) data.
-    - [ ] Support for **LLE** (Liquid-Liquid Equilibrium) data.
-    - [ ] Support for **SLE** (Solid-Liquid Equilibrium) data.
+* [ ] **Binary Interaction Parameters**:
+  * [ ] Support for **VLE** (Vapor-Liquid Equilibrium) data.
+  * [ ] Support for **LLE** (Liquid-Liquid Equilibrium) data.
+  * [ ] Support for **SLE** (Solid-Liquid Equilibrium) data.
 
 ## License
 
 Licensed under either of
 
-- [MIT](https://opensource.org/licenses/MIT)
-- [Apache-2.0](https://opensource.org/licenses/Apache-2.0)
-- [BSD-2-Clause](https://opensource.org/licenses/BSD-2-Clause)
+* [MIT](https://opensource.org/licenses/MIT)
+* [Apache-2.0](https://opensource.org/licenses/Apache-2.0)
+* [BSD-2-Clause](https://opensource.org/licenses/BSD-2-Clause)
 
 at your option.
