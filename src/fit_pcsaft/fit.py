@@ -200,7 +200,7 @@ def fit_pure(
     elif nb is not None and na is None:
         na = 0
 
-    assoc = na is not None and na > 0 and nb > 0
+    is_associative = na is not None and nb is not None and na > 0 and nb > 0
 
     identifier, mw = _fetch_compound(id)
 
@@ -258,7 +258,7 @@ def fit_pure(
 
     t0 = time.perf_counter()
     results = []
-    for x0i in _get_initial_sets(fit_mu, assoc=assoc):
+    for x0i in _get_initial_sets(fit_mu, assoc=is_associative):
         try:
             res = least_squares(cost_fn, np.sqrt(x0i), jac=jac_fn, **ls_kwargs)
             results.append(res)
@@ -278,7 +278,7 @@ def fit_pure(
         units,
     )
 
-    params_dict = _extract_params_dict(params_fitted, mu, assoc=assoc)
+    params_dict = _extract_params_dict(params_fitted, mu, assoc=is_associative)
 
     return FitResult(
         params=params_dict,
