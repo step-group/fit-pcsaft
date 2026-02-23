@@ -98,6 +98,8 @@ Future features and improvements:
   * [ ] Support for **LLE** (Liquid-Liquid Equilibrium) data.
   * [ ] Support for **SLE** (Solid-Liquid Equilibrium) data.
 
+* [ ] **Refactor for readability and mantainability** (this was heavily vibe coded)
+
 ## License
 
 Licensed under either of
