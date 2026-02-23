@@ -52,8 +52,6 @@ def _compute_ard_metrics(
     spec: ModelSpec,
     units: Units,
     eos=None,
-    p_pred_cached=None,
-    rho_pred_cached=None,
 ):
     """Compute ARD% metrics for fitted parameters."""
     if eos is None:
@@ -67,28 +65,23 @@ def _compute_ard_metrics(
     pressure_unit = units.pressure
     density_unit = units.density
 
-    if p_pred_cached is not None:
-        p_pred = p_pred_cached
-    else:
-        try:
-            p_pred = np.array(
-                [
-                    feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)[0]
-                    / pressure_unit
-                    for T in T_psat
-                ]
-            )
-        except Exception:
-            p_pred = None
+    try:
+        p_pred = np.array(
+            [
+                feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)[0]
+                / pressure_unit
+                for T in T_psat
+            ]
+        )
+    except Exception:
+        p_pred = None
 
     if p_pred is not None:
         ard_psat = 100.0 * np.mean(np.abs((p_pred - p_psat) / p_psat))
     else:
         ard_psat = np.nan
 
-    if rho_pred_cached is not None:
-        rho_pred = rho_pred_cached
-    elif len(T_rho) > 0:
+    if len(T_rho) > 0:
         try:
             rho_pred = np.array(
                 [
@@ -174,7 +167,7 @@ def fit_pure(
         psat_weight : float
             Weight for vapor pressure in cost function (default: 3.0)
         density_weight : float
-            Weight for density in cost function (default: 2.0)
+            Weight for liquid density in cost function (default: 2.0)
         extrapolate_psat : bool
             If True, Clausius-Clapeyron extrapolation fills in psat for temperatures
             where the EOS fails (e.g. above Tc). Useful for datasets that include
@@ -301,4 +294,4 @@ def fit_pure(
     )
 
 
-def fit_binary() -> FitResult: ...
+#! TODO def fit_binary() -> FitResult: ...

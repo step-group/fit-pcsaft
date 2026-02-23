@@ -17,7 +17,7 @@ _COLOR_PRESETS: dict[str, str] = {
 _DEFAULT_EXP_COLOR = _COLOR_PRESETS["red"]
 
 
-def plot_pure(
+def _plot_pure(
     result,
     path=None,
     color: str = "red",

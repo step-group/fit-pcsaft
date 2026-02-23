@@ -197,11 +197,16 @@ class FitResult:
         -------
         fig, axes
         """
-        from fit_pcsaft._plot import plot_pure
+        from fit_pcsaft._plot import _plot_pure
 
-        return plot_pure(
-            self, path=path, color=color, line_color=line_color,
-            linestyle=linestyle, scatter_kw=scatter_kw, line_kw=line_kw,
+        return _plot_pure(
+            self,
+            path=path,
+            color=color,
+            line_color=line_color,
+            linestyle=linestyle,
+            scatter_kw=scatter_kw,
+            line_kw=line_kw,
         )
 
     def __str__(self) -> str:
@@ -233,9 +238,7 @@ class FitResult:
 
         if na is not None:
             scheme = _assoc_scheme_name(na, nb)
-            lines.append(
-                f"\nAssociation scheme:        {scheme} (na={na}, nb={nb})"
-            )
+            lines.append(f"\nAssociation scheme:        {scheme} (na={na}, nb={nb})")
 
         rms = np.sqrt(2.0 * self.scipy_result.cost / len(self.scipy_result.fun))
         lines.extend(
