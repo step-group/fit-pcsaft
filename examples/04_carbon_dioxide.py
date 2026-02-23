@@ -4,7 +4,7 @@ Example: Fit PC-SAFT parameters to carbon dioxide data.
 Carbon dioxide has a non-negligible quadrupolar moment. This example fits
 m, sigma, and epsilon_k, with q (quadrupole moment) fixed at 4.4 AD.
 
-NOTE: this one takes 3-6 minutes.
+NOTE: this one takes 5-10 minutes.
 """
 
 from pathlib import Path
