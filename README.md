@@ -102,4 +102,10 @@ Future features and improvements:
 
 ## License
 
-This project is licensed under the **MIT** or (**BSD-2-Clause** OR **Apache-2.0**) license.
+Licensed under either of
+
+- [MIT](https://opensource.org/licenses/MIT)
+- [Apache-2.0](https://opensource.org/licenses/Apache-2.0)
+- [BSD-2-Clause](https://opensource.org/licenses/BSD-2-Clause)
+
+at your option.
