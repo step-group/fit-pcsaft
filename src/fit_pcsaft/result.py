@@ -2,6 +2,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import feos
 import numpy as np
 
 from fit_pcsaft._types import Compound, ModelSpec, PureData, Units
@@ -48,7 +49,7 @@ class FitResult:
     """
 
     params: dict
-    eos: object
+    eos: feos.EquationOfState
     data: PureData
     compound: Compound
     spec: ModelSpec

@@ -26,15 +26,20 @@ _X0_NONASSOC: list[list[float]] = [
     [2.0, 3.0, 200],
 ]
 _X0_ASSOC: list[list[float]] = [
-    [2.5, 3.2, 220, 0.03, 2500],
-    [2.0, 3.1, 200, 0.02, 2600],
-    [3.0, 3.2, 200, 0.04, 2400],
-    [2.5, 3.1, 240, 0.03, 2700],
-    [2.0, 3.2, 220, 0.04, 2500],
-    [3.0, 3.1, 200, 0.02, 2600],
+    # Small alcohols (methanol, ethanol)
+    [2.0, 3.1, 200, 0.03, 2600],
+    [2.5, 3.2, 220, 0.02, 2500],
+    # Mid-size alcohols (propanol–hexanol)
+    [3.0, 3.4, 230, 0.03, 2500],
+    [3.5, 3.5, 240, 0.02, 2600],
+    # Large alcohols (octanol–decanol and beyond)
+    [4.5, 3.7, 240, 0.01, 2700],
+    [5.0, 3.8, 250, 0.01, 2600],
+    [5.5, 3.9, 260, 0.01, 2700],
+    [6.0, 3.8, 250, 0.02, 2500],
 ]
 _MU_NONASSOC: list[float] = [1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
-_MU_ASSOC: list[float] = [1.0, 1.5, 2.0, 1.0, 1.5, 2.0]
+_MU_ASSOC: list[float] = [1.0, 1.5, 1.0, 1.5, 1.0, 1.5, 1.0, 1.5]
 
 
 def _get_initial_sets(fit_mu: bool, assoc: bool = False):
@@ -264,6 +269,12 @@ def fit_pure(
             results.append(res)
         except Exception:
             continue
+
+    if not results:
+        raise RuntimeError(
+            "All initial parameter sets failed. Try different starting values or "
+            "check that the data covers a valid temperature range."
+        )
 
     result = min(results, key=lambda r: r.cost)
     time_elapsed = time.perf_counter() - t0
