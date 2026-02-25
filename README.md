@@ -27,10 +27,11 @@ from fit_pcsaft import fit_pure
 
 # 1. Fit parameters to experimental data
 result = fit_pure(
-    id="ethanol",                     # Search PubChem by name, SMILES, or InChI
-    psat_path="data/psat/ethanol.csv", # Vapor pressure data
+    id="ethanol",                          # Search PubChem by name, SMILES, or InChI
+    psat_path="data/psat/ethanol.csv",     # Vapor pressure data
     density_path="data/density/ethanol.csv", # Liquid density data
-    na=1, nb=1,                        # 2B association scheme for alcohols
+    hvap_path="data/hvap/ethanol.csv",     # Enthalpy of vaporization (optional)
+    na=1, nb=1,                            # 2B association scheme for alcohols
 )
 
 # 2. Inspect the results
@@ -58,6 +59,8 @@ Association scheme:        2B (na=1, nb=1)
 Fitting quality:
   ARD vapor pressure:      6.19%  (n=458)
   ARD liquid density:      0.23%  (n=161)
+  ARD enthalpy of vap.:    1.45%  (n=42)
+  ARD total:               7.87%
   RMS weighted resid.:     0.0009
   Converged:               True
   Function evals:          20
@@ -70,6 +73,7 @@ The tool expects simple CSV files. The **first column** must be temperature, and
 
 * **Vapor Pressure**: Default units are **K** and **kPa**.
 * **Liquid Density**: Default units are **K** and **kg/m³**.
+* **Enthalpy of Vaporization**: Default units are **K** and **kJ/mol**.
 
 ## Handling Units
 
@@ -82,7 +86,8 @@ result = fit_pure(
     ...,
     temperature_unit=si.CELSIUS,
     pressure_unit=si.BAR,
-    density_unit=si.GRAM / si.CENTI * si.METER**3
+    density_unit=si.GRAM / si.CENTI * si.METER**3,
+    enthalpy_unit=si.JOULE / si.MOL,
 )
 ```
 
