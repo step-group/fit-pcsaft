@@ -180,11 +180,11 @@ def _make_core(
     inv_d_psat = 1.0 / d_psat
     inv_d_rho = 1.0 / d_rho if n_rho > 0 else None
     inv_T_psat = 1.0 / T_psat
-    psat_cost_scale = config.w_psat / n_psat
-    rho_cost_scale = config.w_rho / n_rho if n_rho > 0 else 0.0
+    psat_cost_scale = np.sqrt(config.w_psat / n_psat)
+    rho_cost_scale = np.sqrt(config.w_rho / n_rho) if n_rho > 0 else 0.0
     # Pa → kPa for psat; kmol/m³ → kg/m³ for rho (via mw)
-    psat_jac_scale = (config.w_psat / (n_psat * 1000.0)) / d_psat
-    rho_jac_scale = (config.w_rho * mw / n_rho) / d_rho if n_rho > 0 else np.zeros(1)
+    psat_jac_scale = (np.sqrt(config.w_psat / n_psat) / 1000.0) / d_psat
+    rho_jac_scale = (np.sqrt(config.w_rho / n_rho) * mw) / d_rho if n_rho > 0 else np.zeros(1)
 
     temps_array_psat = np.expand_dims(np.array(T_psat), 1)
     temps_array_rho = np.expand_dims(np.array(T_rho), 1) if n_rho > 0 else None

@@ -184,9 +184,9 @@ def _make_cost_fn(
     n_rho = len(T_rho)
     n_hvap = len(T_hvap)
     n_total = n_psat + n_rho + n_hvap
-    psat_cost_scale = config.w_psat / n_psat
-    rho_cost_scale = config.w_rho / n_rho if n_rho > 0 else 0.0
-    hvap_cost_scale = config.w_hvap / n_hvap if n_hvap > 0 else 0.0
+    psat_cost_scale = np.sqrt(config.w_psat / n_psat)
+    rho_cost_scale = np.sqrt(config.w_rho / n_rho) if n_rho > 0 else 0.0
+    hvap_cost_scale = np.sqrt(config.w_hvap / n_hvap) if n_hvap > 0 else 0.0
     inv_d_psat = 1.0 / d_psat
     inv_d_rho = 1.0 / d_rho if n_rho > 0 else None
     inv_d_hvap = 1.0 / d_hvap if n_hvap > 0 else None
