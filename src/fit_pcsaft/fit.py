@@ -342,6 +342,7 @@ def fit_pure(
         ard_hvap=ard_hvap,
         scipy_result=result,
         time_elapsed=time_elapsed,
+        input_name=id,
     )
 
 

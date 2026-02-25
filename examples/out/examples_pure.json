@@ -92,5 +92,20 @@
         "epsilon_k_ab": 2171.499421953652
       }
     ]
+  },
+  {
+    "identifier": {
+      "cas": "76-22-2",
+      "name": "1,7,7-trimethylbicyclo[2.2.1]heptan-2-one",
+      "iupac_name": "1,7,7-trimethylbicyclo[2.2.1]heptan-2-one",
+      "smiles": "CC1(C2CCC1(C(=O)C2)C)C",
+      "inchi": "InChI=1S/C10H16O/c1-9(2)7-4-5-10(9,3)8(11)6-7/h7H,4-6H2,1-3H3",
+      "formula": "C10H16O"
+    },
+    "molarweight": 152.23,
+    "m": 3.4806859430650103,
+    "sigma": 4.000955093938726,
+    "epsilon_k": 308.92832673126054,
+    "mu": 2.9
   }
 ]

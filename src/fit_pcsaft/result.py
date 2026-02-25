@@ -62,6 +62,7 @@ class FitResult:
     ard_hvap: float
     scipy_result: object
     time_elapsed: float
+    input_name: str = ""
 
     def to_json(self, path: "Path | str") -> None:
         """Append or update fitted parameters in a feos-compatible JSON parameter file.
