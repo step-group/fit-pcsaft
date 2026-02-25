@@ -173,17 +173,23 @@ def _make_cost_fn(
     d_psat = data.p_psat
     T_rho = data.T_rho
     d_rho = data.rho
+    T_hvap = data.T_hvap
+    d_hvap = data.hvap
     temperature_unit = units.temperature
     psat_unit = units.pressure
     rho_unit = units.density
+    enthalpy_unit = units.enthalpy
 
     n_psat = len(T_psat)
     n_rho = len(T_rho)
-    n_total = n_psat + n_rho
-    psat_cost_scale = config.w_psat / n_psat
-    rho_cost_scale = config.w_rho / n_rho
+    n_hvap = len(T_hvap)
+    n_total = n_psat + n_rho + n_hvap
+    psat_cost_scale = np.sqrt(config.w_psat / n_psat)
+    rho_cost_scale = np.sqrt(config.w_rho / n_rho) if n_rho > 0 else 0.0
+    hvap_cost_scale = np.sqrt(config.w_hvap / n_hvap) if n_hvap > 0 else 0.0
     inv_d_psat = 1.0 / d_psat
-    inv_d_rho = 1.0 / d_rho
+    inv_d_rho = 1.0 / d_rho if n_rho > 0 else None
+    inv_d_hvap = 1.0 / d_hvap if n_hvap > 0 else None
     inv_T_psat = 1.0 / T_psat
 
     def cost_function(params_vec):
@@ -219,7 +225,6 @@ def _make_cost_fn(
         residuals.append(psat_cost_scale * (p_pred * inv_d_psat - 1.0))
 
         # Density residuals
-        rho_pred = None
         if n_rho > 0:
             try:
                 rho_pred_vals = [
@@ -234,6 +239,25 @@ def _make_cost_fn(
                 return np.full(n_total, 1e10)
 
             residuals.append(rho_cost_scale * (rho_pred * inv_d_rho - 1.0))
+
+        # Enthalpy of vaporization residuals
+        if n_hvap > 0:
+            try:
+                hvap_pred_vals = []
+                for T in T_hvap:
+                    vle = feos.PhaseEquilibrium.pure(eos, T * temperature_unit)
+                    hvap_pred_vals.append(
+                        (
+                            vle.vapor.molar_enthalpy(feos.Contributions.Residual)
+                            - vle.liquid.molar_enthalpy(feos.Contributions.Residual)
+                        )
+                        / enthalpy_unit
+                    )
+                hvap_pred = np.array(hvap_pred_vals)
+            except Exception:
+                return np.full(n_total, 1e10)
+
+            residuals.append(hvap_cost_scale * (hvap_pred * inv_d_hvap - 1.0))
 
         return np.concatenate(residuals)
 

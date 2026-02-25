@@ -13,6 +13,7 @@ from fit_pcsaft import fit_pure
 data_dir = Path(__file__).parent / "data"
 psat_path = data_dir / "psat" / "acetone.csv"
 density_path = data_dir / "density" / "acetone.csv"
+hvap_path = data_dir / "hvap" / "acetone.csv"
 
 
 def main() -> None:
@@ -20,6 +21,7 @@ def main() -> None:
         id="acetone",
         psat_path=psat_path,
         density_path=density_path,
+        hvap_path=hvap_path,
         na=1,
         mu=None,  # fit dipole moment
     )
