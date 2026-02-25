@@ -66,9 +66,12 @@ def _compute_ard_metrics(
     p_psat = data.p_psat
     T_rho = data.T_rho
     rho_data = data.rho
+    T_hvap = data.T_hvap
+    hvap_data = data.hvap
     temperature_unit = units.temperature
     pressure_unit = units.pressure
     density_unit = units.density
+    enthalpy_unit = units.enthalpy
 
     try:
         p_pred = np.array(
@@ -107,7 +110,30 @@ def _compute_ard_metrics(
     else:
         ard_rho = np.nan
 
-    return eos, ard_psat, ard_rho
+    if len(T_hvap) > 0:
+        try:
+            hvap_pred_vals = []
+            for T in T_hvap:
+                vle = feos.PhaseEquilibrium.pure(eos, T * temperature_unit)
+                hvap_pred_vals.append(
+                    (
+                        vle.vapor.molar_enthalpy(feos.Contributions.Residual)
+                        - vle.liquid.molar_enthalpy(feos.Contributions.Residual)
+                    )
+                    / enthalpy_unit
+                )
+            hvap_pred = np.array(hvap_pred_vals)
+        except Exception:
+            hvap_pred = None
+    else:
+        hvap_pred = None
+
+    if hvap_pred is not None:
+        ard_hvap = 100.0 * np.mean(np.abs((hvap_pred - hvap_data) / hvap_data))
+    else:
+        ard_hvap = np.nan
+
+    return eos, ard_psat, ard_rho, ard_hvap
 
 
 def _extract_params_dict(
@@ -135,18 +161,21 @@ def fit_pure(
     id: str,
     psat_path: Path | str,
     density_path: Path | str,
+    hvap_path: Optional[Path | str] = None,
     mu: Optional[float] = 0.0,
     q: float = 0.0,
     na: Optional[int] = None,
     nb: Optional[int] = None,
     psat_weight: float = 3.0,
     density_weight: float = 2.0,
+    hvap_weight: float = 1.0,
     extrapolate_psat: bool = False,
     loss: str = "linear",
     f_scale: float = 1.0,
     pressure_unit: si.SIObject = si.KILO * si.PASCAL,
     temperature_unit: si.SIObject = si.KELVIN,
     density_unit: si.SIObject = si.KILOGRAM / (si.METER**3),
+    enthalpy_unit: si.SIObject = si.KILO * si.JOULE / si.MOL,
     scipy_kwargs: Optional[dict] = None,
 ) -> FitResult:
     """Fit PC-SAFT parameters to vapor pressure and liquid density data.
@@ -161,6 +190,9 @@ def fit_pure(
             Path to vapor pressure CSV (T, Psat)
         density_path : Path | str
             Path to liquid density CSV (T, rhoL)
+        hvap_path : Path | str or None
+            Path to enthalpy of vaporization CSV (T, Hvap). Optional. When provided,
+            forces numerical Jacobian (no AD available for Hvap).
         mu : float or None
             Dipole moment. If None, mu is fitted. If float, fixed (default: 0.0).
         q : float
@@ -173,6 +205,8 @@ def fit_pure(
             Weight for vapor pressure in cost function (default: 3.0)
         density_weight : float
             Weight for liquid density in cost function (default: 2.0)
+        hvap_weight : float
+            Weight for enthalpy of vaporization in cost function (default: 1.0)
         extrapolate_psat : bool
             If True, Clausius-Clapeyron extrapolation fills in psat for temperatures
             where the EOS fails (e.g. above Tc). Useful for datasets that include
@@ -190,6 +224,8 @@ def fit_pure(
             Unit for temperature in CSV (default: K)
         density_unit : si.SIObject
             Unit for density in CSV (default: kg/m³)
+        enthalpy_unit : si.SIObject
+            Unit for enthalpy of vaporization in CSV (default: kJ/mol)
         scipy_kwargs : Optional[dict]
             Optional dict to override scipy least_squares defaults
 
@@ -212,31 +248,52 @@ def fit_pure(
     _t_psat, _p_psat = _load_csv(psat_path)
     _t_rhoL, _d_rhoLsat = _load_csv(density_path)
 
-    data = PureData(T_psat=_t_psat, p_psat=_p_psat, T_rho=_t_rhoL, rho=_d_rhoLsat)
+    if hvap_path is not None:
+        _t_hvap, _d_hvap = _load_csv(hvap_path)
+    else:
+        _t_hvap, _d_hvap = np.array([]), np.array([])
+
+    data = PureData(
+        T_psat=_t_psat,
+        p_psat=_p_psat,
+        T_rho=_t_rhoL,
+        rho=_d_rhoLsat,
+        T_hvap=_t_hvap,
+        hvap=_d_hvap,
+    )
 
     compound = Compound(identifier=identifier, mw=float(mw))
 
     spec = ModelSpec(mu=mu, na=na, nb=nb, q=q)
 
     units = Units(
-        temperature=temperature_unit, pressure=pressure_unit, density=density_unit
+        temperature=temperature_unit,
+        pressure=pressure_unit,
+        density=density_unit,
+        enthalpy=enthalpy_unit,
     )
 
     config = FitConfig(
-        w_psat=psat_weight, w_rho=density_weight, extrapolate_psat=extrapolate_psat
+        w_psat=psat_weight,
+        w_rho=density_weight,
+        w_hvap=hvap_weight,
+        extrapolate_psat=extrapolate_psat,
     )
 
-    if q != 0.0:
-        # Analytical Jacobian does not include the quadrupole term — fall back to
-        # numerical differentiation. Cost function uses individual feos calls.
-        print(
-            "Note: q != 0 — analytical Jacobian does not include quadrupole term. "
-            "Falling back to numerical Jacobian (jac='2-point').\n"
-        )
+    use_numerical_jac = q != 0.0 or hvap_path is not None
 
+    if use_numerical_jac:
+        reasons = []
+        if q != 0.0:
+            reasons.append("q != 0 (quadrupole term not in analytical Jacobian)")
+        if hvap_path is not None:
+            reasons.append("hvap data provided (no AD available for Hvap)")
+        print(
+            f"Note: {'; '.join(reasons)} — "
+            "falling back to numerical Jacobian (jac='2-point').\n"
+        )
         cost_fn = _make_cost_fn(data, compound, spec, units, config)
         jac_fn = "2-point"
-
     else:
         cost_fn, jac_fn = _make_f_and_df(data, compound, spec, units, config)
 
@@ -281,7 +338,7 @@ def fit_pure(
 
     params_fitted = result.x**2
 
-    eos_final, ard_psat, ard_rho = _compute_ard_metrics(
+    eos_final, ard_psat, ard_rho, ard_hvap = _compute_ard_metrics(
         params_fitted,
         data,
         compound,
@@ -300,6 +357,7 @@ def fit_pure(
         units=units,
         ard_psat=ard_psat,
         ard_rho=ard_rho,
+        ard_hvap=ard_hvap,
         scipy_result=result,
         time_elapsed=time_elapsed,
     )

@@ -38,6 +38,9 @@ class FitResult:
         ard_rho : float
             Average relative deviation for liquid density (%)
 
+        ard_hvap : float
+            Average relative deviation for enthalpy of vaporization (%). nan if no hvap data.
+
         scipy_result : object
             Raw scipy OptimizeResult from least_squares
 
@@ -56,6 +59,7 @@ class FitResult:
     units: Units
     ard_psat: float
     ard_rho: float
+    ard_hvap: float
     scipy_result: object
     time_elapsed: float
 
@@ -218,6 +222,7 @@ class FitResult:
         nb = self.spec.nb
         n_psat = len(self.data.T_psat)
         n_rho = len(self.data.T_rho)
+        n_hvap = len(self.data.T_hvap)
 
         lines = [
             "Fitted parameters:",
@@ -242,18 +247,25 @@ class FitResult:
             lines.append(f"\nAssociation scheme:        {scheme} (na={na}, nb={nb})")
 
         rms = np.sqrt(2.0 * self.scipy_result.cost / len(self.scipy_result.fun))
-        lines.extend(
+        quality_lines = [
+            "",
+            "Fitting quality:",
+            f"  ARD vapor pressure:      {self.ard_psat:.2f}%  (n={n_psat})",
+            f"  ARD liquid density:      {self.ard_rho:.2f}%  (n={n_rho})",
+        ]
+        if n_hvap > 0:
+            quality_lines.append(
+                f"  ARD enthalpy of vap.:    {self.ard_hvap:.2f}%  (n={n_hvap})"
+            )
+        quality_lines.extend(
             [
-                "",
-                "Fitting quality:",
-                f"  ARD vapor pressure:      {self.ard_psat:.2f}%  (n={n_psat})",
-                f"  ARD liquid density:      {self.ard_rho:.2f}%  (n={n_rho})",
                 f"  RMS weighted resid.:     {rms:.4f}",
                 f"  Converged:               {self.scipy_result.success}",
                 f"  Function evals:          {self.scipy_result.nfev}",
                 f"  Time elapsed:            {self.time_elapsed:.2f} s",
             ]
         )
+        lines.extend(quality_lines)
 
         return "\n".join(lines)
 

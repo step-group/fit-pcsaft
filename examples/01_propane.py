@@ -13,11 +13,18 @@ from fit_pcsaft import fit_pure
 data_dir = Path(__file__).parent / "data"
 psat_path = data_dir / "psat" / "propane.csv"
 density_path = data_dir / "density" / "propane.csv"
+hvap_path = data_dir / "hvap" / "propane.csv"
 
 
 def main() -> None:
     # Fit PC-SAFT parameters
-    result = fit_pure(id="propane", psat_path=psat_path, density_path=density_path)
+    result = fit_pure(
+        id="propane",
+        psat_path=psat_path,
+        density_path=density_path,
+        hvap_path=hvap_path,
+        hvap_weight=3,
+    )
     print(result)
     result.to_json("examples/out/examples_pure.json")
     result.plot(path="examples/out/propane.png", line_color="black")
