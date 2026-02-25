@@ -161,6 +161,9 @@ def _build_eos(
     return feos.EquationOfState.pcsaft(parameters)
 
 
+_EPS_2PT = np.sqrt(np.finfo(float).eps)  # ~1.49e-8
+
+
 def _make_cost_fn(
     data: PureData,
     compound: Compound,
@@ -262,3 +265,54 @@ def _make_cost_fn(
         return np.concatenate(residuals)
 
     return cost_function
+
+
+def _make_f_and_df_numerical(
+    data: PureData,
+    compound: Compound,
+    spec: ModelSpec,
+    units: Units,
+    config: FitConfig,
+) -> Tuple[Callable, Callable]:
+    """Create cost function + 2-point numerical Jacobian with shared base-eval cache.
+
+    Scipy calls f(x) then jac(x) at the same x each iteration. Caching the last
+    (x, f(x)) means the Jacobian reuses the base evaluation instead of rerunning feos.
+    """
+    _cost = _make_cost_fn(data, compound, spec, units, config)
+
+    # Use standard variables instead of a list hack
+    x_cached = None
+    f_cached = None
+
+    def f(x: np.ndarray) -> np.ndarray:
+        nonlocal x_cached, f_cached
+        fx = _cost(x)
+        x_cached = x.copy()
+        f_cached = fx
+        return fx
+
+    def df(x: np.ndarray) -> np.ndarray:
+        nonlocal x_cached, f_cached
+
+        if x_cached is not None and np.array_equal(x, x_cached):
+            f0 = f_cached
+        else:
+            f0 = _cost(x)
+            x_cached = x.copy()
+            f_cached = f0
+
+        n = len(x)
+        J = np.empty((len(f0), n))
+
+        for i in range(n):
+            # Calculate a relative step size, falling back to absolute for values near 0
+            h = _EPS_2PT * max(abs(x[i]), 1.0)
+
+            x_pert = x.copy()
+            x_pert[i] += h
+            J[:, i] = (_cost(x_pert) - f0) / h
+
+        return J
+
+    return f, df

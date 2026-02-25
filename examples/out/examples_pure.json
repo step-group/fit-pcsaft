@@ -52,28 +52,6 @@
   },
   {
     "identifier": {
-      "cas": "64-17-5",
-      "name": "ethanol",
-      "iupac_name": "ethanol",
-      "smiles": "CCO",
-      "inchi": "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3",
-      "formula": "C2H6O"
-    },
-    "molarweight": 46.07,
-    "m": 4.004888616327608,
-    "sigma": 2.6296018041416014,
-    "epsilon_k": 165.61184149656438,
-    "association_sites": [
-      {
-        "na": 1.0,
-        "nb": 1.0,
-        "kappa_ab": 0.15635155622476327,
-        "epsilon_k_ab": 2171.499126217132
-      }
-    ]
-  },
-  {
-    "identifier": {
       "cas": "67-64-1",
       "name": "propan-2-one",
       "iupac_name": "propan-2-one",
@@ -90,6 +68,28 @@
       {
         "na": 1.0,
         "nb": 0.0
+      }
+    ]
+  },
+  {
+    "identifier": {
+      "cas": "64-17-5",
+      "name": "ethanol",
+      "iupac_name": "ethanol",
+      "smiles": "CCO",
+      "inchi": "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3",
+      "formula": "C2H6O"
+    },
+    "molarweight": 46.07,
+    "m": 4.004887858106864,
+    "sigma": 2.6296019861900013,
+    "epsilon_k": 165.6118514246345,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.1563514169134588,
+        "epsilon_k_ab": 2171.499421953652
       }
     ]
   }

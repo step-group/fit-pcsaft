@@ -11,7 +11,7 @@ from fit_pcsaft._fit_utils import (
     _build_eos,
     _fetch_compound,
     _load_csv,
-    _make_cost_fn,
+    _make_f_and_df_numerical,
 )
 from fit_pcsaft._pure.jacobian import _make_f_and_df
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
@@ -50,6 +50,53 @@ def _get_initial_sets(fit_mu: bool, assoc: bool = False):
     return base
 
 
+def _predict_psat(eos, T_psat, temperature_unit, pressure_unit) -> Optional[np.ndarray]:
+    try:
+        return np.array(
+            [
+                feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)[0]
+                / pressure_unit
+                for T in T_psat
+            ]
+        )
+    except Exception:
+        return None
+
+
+def _predict_rho(eos, T_rho, temperature_unit, density_unit) -> Optional[np.ndarray]:
+    if len(T_rho) == 0:
+        return None
+    try:
+        return np.array(
+            [
+                feos.PhaseEquilibrium.pure(eos, T * temperature_unit).liquid.mass_density()
+                / density_unit
+                for T in T_rho
+            ]
+        )
+    except Exception:
+        return None
+
+
+def _predict_hvap(eos, T_hvap, temperature_unit, enthalpy_unit) -> Optional[np.ndarray]:
+    if len(T_hvap) == 0:
+        return None
+    try:
+        return np.array(
+            [
+                (
+                    vle.vapor.molar_enthalpy(feos.Contributions.Residual)
+                    - vle.liquid.molar_enthalpy(feos.Contributions.Residual)
+                )
+                / enthalpy_unit
+                for T in T_hvap
+                for vle in [feos.PhaseEquilibrium.pure(eos, T * temperature_unit)]
+            ]
+        )
+    except Exception:
+        return None
+
+
 def _compute_ard_metrics(
     params_fitted: np.ndarray,
     data: PureData,
@@ -62,78 +109,14 @@ def _compute_ard_metrics(
     if eos is None:
         eos = _build_eos(params_fitted, compound, spec)
 
-    T_psat = data.T_psat
-    p_psat = data.p_psat
-    T_rho = data.T_rho
-    rho_data = data.rho
-    T_hvap = data.T_hvap
-    hvap_data = data.hvap
-    temperature_unit = units.temperature
-    pressure_unit = units.pressure
-    density_unit = units.density
-    enthalpy_unit = units.enthalpy
+    def ard(pred, ref):
+        return 100.0 * np.mean(np.abs((pred - ref) / ref)) if pred is not None else np.nan
 
-    try:
-        p_pred = np.array(
-            [
-                feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)[0]
-                / pressure_unit
-                for T in T_psat
-            ]
-        )
-    except Exception:
-        p_pred = None
+    p_pred = _predict_psat(eos, data.T_psat, units.temperature, units.pressure)
+    rho_pred = _predict_rho(eos, data.T_rho, units.temperature, units.density)
+    hvap_pred = _predict_hvap(eos, data.T_hvap, units.temperature, units.enthalpy)
 
-    if p_pred is not None:
-        ard_psat = 100.0 * np.mean(np.abs((p_pred - p_psat) / p_psat))
-    else:
-        ard_psat = np.nan
-
-    if len(T_rho) > 0:
-        try:
-            rho_pred = np.array(
-                [
-                    feos.PhaseEquilibrium.pure(
-                        eos, T * temperature_unit
-                    ).liquid.mass_density()
-                    / density_unit
-                    for T in T_rho
-                ]
-            )
-        except Exception:
-            rho_pred = None
-    else:
-        rho_pred = None
-
-    if rho_pred is not None:
-        ard_rho = 100.0 * np.mean(np.abs((rho_pred - rho_data) / rho_data))
-    else:
-        ard_rho = np.nan
-
-    if len(T_hvap) > 0:
-        try:
-            hvap_pred_vals = []
-            for T in T_hvap:
-                vle = feos.PhaseEquilibrium.pure(eos, T * temperature_unit)
-                hvap_pred_vals.append(
-                    (
-                        vle.vapor.molar_enthalpy(feos.Contributions.Residual)
-                        - vle.liquid.molar_enthalpy(feos.Contributions.Residual)
-                    )
-                    / enthalpy_unit
-                )
-            hvap_pred = np.array(hvap_pred_vals)
-        except Exception:
-            hvap_pred = None
-    else:
-        hvap_pred = None
-
-    if hvap_pred is not None:
-        ard_hvap = 100.0 * np.mean(np.abs((hvap_pred - hvap_data) / hvap_data))
-    else:
-        ard_hvap = np.nan
-
-    return eos, ard_psat, ard_rho, ard_hvap
+    return eos, ard(p_pred, data.p_psat), ard(rho_pred, data.rho), ard(hvap_pred, data.hvap)
 
 
 def _extract_params_dict(
@@ -290,10 +273,9 @@ def fit_pure(
             reasons.append("hvap data provided (no AD available for Hvap)")
         print(
             f"Note: {'; '.join(reasons)} — "
-            "falling back to numerical Jacobian (jac='2-point').\n"
+            "falling back to numerical Jacobian (2-point).\n"
         )
-        cost_fn = _make_cost_fn(data, compound, spec, units, config)
-        jac_fn = "2-point"
+        cost_fn, jac_fn = _make_f_and_df_numerical(data, compound, spec, units, config)
     else:
         cost_fn, jac_fn = _make_f_and_df(data, compound, spec, units, config)
 

@@ -12,7 +12,8 @@ diagram to visually assess fit quality (not data quality!).
 
 ## Installation
 
-Install the package directly from GitHub using your preferred python package manager (e.g. `pip`):
+Install the package directly from GitHub using your preferred python package 
+manager (e.g. `pip`):
 
 ```bash
 pip install git+https://github.com/maximilianfv/fit-pcsaft.git

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fit_pcsaft import fit_pure
 
-data_dir = Path(__file__).parent / "data"
+data_dir = Path(__file__).parent.parent / "data"
 psat_path = data_dir / "psat" / "ethanol.csv"
 density_path = data_dir / "density" / "ethanol.csv"
 hvap_path = data_dir / "hvap" / "ethanol.csv"
