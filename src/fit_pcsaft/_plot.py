@@ -87,7 +87,8 @@ def _plot_pure(
     pu = result.units.pressure
     du = result.units.density
 
-    T_start = float(result.data.T_psat.min()) * tu
+    all_T = [result.data.T_psat, result.data.T_rho, result.data.T_hvap]
+    T_start = float(min(T.min() for T in all_T if len(T) > 0)) * tu
     phase_diagram = feos.PhaseDiagram.pure(result.eos, T_start, 501)
 
     T_pd = phase_diagram.vapor.temperature / si.KELVIN
