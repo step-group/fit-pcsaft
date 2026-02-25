@@ -247,6 +247,9 @@ class FitResult:
             lines.append(f"\nAssociation scheme:        {scheme} (na={na}, nb={nb})")
 
         rms = np.sqrt(2.0 * self.scipy_result.cost / len(self.scipy_result.fun))
+        ard_total = sum(
+            v for v in [self.ard_psat, self.ard_rho, self.ard_hvap] if not np.isnan(v)
+        )
         quality_lines = [
             "",
             "Fitting quality:",
@@ -257,6 +260,7 @@ class FitResult:
             quality_lines.append(
                 f"  ARD enthalpy of vap.:    {self.ard_hvap:.2f}%  (n={n_hvap})"
             )
+        quality_lines.append(f"  ARD total:               {ard_total:.2f}%")
         quality_lines.extend(
             [
                 f"  RMS weighted resid.:     {rms:.4f}",

@@ -13,6 +13,7 @@ from fit_pcsaft import fit_pure
 data_dir = Path(__file__).parent / "data"
 psat_path = data_dir / "psat" / "ethanol.csv"
 density_path = data_dir / "density" / "ethanol.csv"
+hvap_path = data_dir / "hvap" / "ethanol.csv"
 
 
 def main() -> None:
@@ -20,6 +21,8 @@ def main() -> None:
         id="ethanol",
         psat_path=psat_path,
         density_path=density_path,
+        hvap_path=hvap_path,
+        hvap_weight=1.0,
         na=1,
         nb=1,
     )

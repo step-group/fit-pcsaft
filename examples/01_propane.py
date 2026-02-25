@@ -23,7 +23,9 @@ def main() -> None:
         psat_path=psat_path,
         density_path=density_path,
         hvap_path=hvap_path,
-        hvap_weight=3,
+        hvap_weight=1.0,
+        loss="cauchy",
+        f_scale=0.01,
     )
     print(result)
     result.to_json("examples/out/examples_pure.json")
