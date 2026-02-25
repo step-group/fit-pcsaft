@@ -47,7 +47,7 @@ result.plot(path="ethanol_fit.png", color="red")
 ### Example Output
 
 ```text
-Fitted parameters:
+[Fitted parameters:
   m (segments):            3.6856
   σ (diameter):            2.7184 Å
   ε/k (energy):            175.51 K
@@ -64,7 +64,26 @@ Fitting quality:
   RMS weighted resid.:     0.0009
   Converged:               True
   Function evals:          20
-  Time elapsed:            0.26 s
+  Time elapsed:            0.26 s](Note: hvap data provided (no AD available for Hvap) — falling back to numerical Jacobian (jac='2-point').
+
+Fitted parameters:
+  m (segments):            4.0049
+  σ (diameter):            2.6296 Å
+  ε/k (energy):            165.61 K
+  κ_ab (assoc. volume):    0.156352
+  ε_ab/k (assoc. energy):  2171.50 K
+
+Association scheme:        2B (na=1, nb=1)
+
+Fitting quality:
+  ARD vapor pressure:      6.28%  (n=458)
+  ARD liquid density:      0.32%  (n=161)
+  ARD enthalpy of vap.:    4.23%  (n=33)
+  ARD total:               10.84%
+  RMS weighted resid.:     0.0110
+  Converged:               True
+  Function evals:          20
+  Time elapsed:            12.29 s)
 ```
 
 ## Data Format
