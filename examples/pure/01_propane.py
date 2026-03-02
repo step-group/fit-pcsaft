@@ -10,7 +10,7 @@ from pathlib import Path
 from fit_pcsaft import fit_pure
 
 # Data paths (relative to this file)
-data_dir = Path(__file__).parent / "data"
+data_dir = Path(__file__).parent.parent / "data"
 psat_path = data_dir / "psat" / "propane.csv"
 density_path = data_dir / "density" / "propane.csv"
 hvap_path = data_dir / "hvap" / "propane.csv"
@@ -24,8 +24,8 @@ def main() -> None:
         density_path=density_path,
         hvap_path=hvap_path,
         hvap_weight=1.0,
-        loss="cauchy",
-        f_scale=0.01,
+        loss="arctan",
+        f_scale=0.001,
     )
     print(result)
     result.to_json("examples/out/examples_pure.json")

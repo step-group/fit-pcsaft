@@ -1,9 +1,10 @@
 """
-Example: Fit PC-SAFT parameters to 1-decanol data.
+Example: Fit PC-SAFT parameters to camphor data.
 
-1-decanol is an associating compound (hydrogen bonding). This example fits
-m, sigma, epsilon_k, kappa_ab, and epsilon_k_ab using the 2B association
-scheme (na=1, nb=1), with mu fixed at 0.
+Camphor is a non-associating polar compound (mu fixed at 2.9 D). This example
+fits m, sigma, and epsilon_k using vapor pressure, liquid density, and
+enthalpy of vaporization data. Psat extrapolation is enabled to handle
+near-critical temperatures in the dataset.
 """
 
 from pathlib import Path
