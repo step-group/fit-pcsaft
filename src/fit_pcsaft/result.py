@@ -129,7 +129,7 @@ class FitResult:
         entry = {
             "identifier": {
                 "cas": identifier.cas,
-                "name": identifier.name,
+                "name": self.input_name or identifier.name,
                 "iupac_name": identifier.iupac_name,
                 "smiles": identifier.smiles,
                 "inchi": identifier.inchi,
@@ -157,11 +157,12 @@ class FitResult:
         if path.exists():
             data = json.loads(path.read_text())
             # Remove existing entries with same CAS or name
+            name_to_match = self.input_name or identifier.name
             data = [
                 d
                 for d in data
                 if d.get("identifier", {}).get("cas") != identifier.cas
-                and d.get("identifier", {}).get("name") != identifier.name
+                and d.get("identifier", {}).get("name") != name_to_match
             ]
         else:
             data = []

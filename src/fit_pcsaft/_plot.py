@@ -96,7 +96,7 @@ def _plot_pure(
     rho_vap = phase_diagram.vapor.mass_density / du
     rho_liq = phase_diagram.liquid.mass_density / du
 
-    name = result.input_name or result.compound.identifier.name or result.compound.identifier.cas
+    name = result.input_name
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
