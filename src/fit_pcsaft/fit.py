@@ -85,7 +85,9 @@ def _predict_rho(eos, T_rho, temperature_unit, density_unit) -> Optional[np.ndar
     try:
         return np.array(
             [
-                feos.PhaseEquilibrium.pure(eos, T * temperature_unit).liquid.mass_density()
+                feos.PhaseEquilibrium.pure(
+                    eos, T * temperature_unit
+                ).liquid.mass_density()
                 / density_unit
                 for T in T_rho
             ]
@@ -126,13 +128,20 @@ def _compute_ard_metrics(
         eos = _build_eos(params_fitted, compound, spec)
 
     def ard(pred, ref):
-        return 100.0 * np.mean(np.abs((pred - ref) / ref)) if pred is not None else np.nan
+        return (
+            100.0 * np.mean(np.abs((pred - ref) / ref)) if pred is not None else np.nan
+        )
 
     p_pred = _predict_psat(eos, data.T_psat, units.temperature, units.pressure)
     rho_pred = _predict_rho(eos, data.T_rho, units.temperature, units.density)
     hvap_pred = _predict_hvap(eos, data.T_hvap, units.temperature, units.enthalpy)
 
-    return eos, ard(p_pred, data.p_psat), ard(rho_pred, data.rho), ard(hvap_pred, data.hvap)
+    return (
+        eos,
+        ard(p_pred, data.p_psat),
+        ard(rho_pred, data.rho),
+        ard(hvap_pred, data.hvap),
+    )
 
 
 def _extract_params_dict(
@@ -424,7 +433,7 @@ def fit_pure_de(
 
     Differential evolution explores the full parameter space without requiring
     initial guesses. Useful when the multi-start LM approach (fit_pure) gets
-    stuck in local minima or when no good initial guess is available.
+    too stuck in local minima or when no good initial guess is available.
 
     Arguments
     ---------
@@ -506,7 +515,7 @@ def fit_pure_de(
     de_defaults = {
         "maxiter": 1000,
         "popsize": 15,
-        "tol": 1e-7,
+        "tol": 1e-06,
         "polish": True,
         "seed": None,
     }
