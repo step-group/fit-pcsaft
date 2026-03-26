@@ -11,6 +11,7 @@ from pathlib import Path
 from fit_pcsaft import fit_pure
 
 data_dir = Path(__file__).parent.parent / "data"
+out_dir = Path(__file__).parent.parent / "out"
 psat_path = data_dir / "psat" / "ethanol.csv"
 density_path = data_dir / "density" / "ethanol.csv"
 
@@ -26,8 +27,8 @@ def main() -> None:
         nb=1,
     )
     print(result)
-    result.to_json("examples/out/examples_pure.json")
-    result.plot(path="examples/out/ethanol.png")
+    result.to_json(out_dir / "examples_pure.json")
+    result.plot(path=out_dir / "ethanol.png")
 
 
 if __name__ == "__main__":

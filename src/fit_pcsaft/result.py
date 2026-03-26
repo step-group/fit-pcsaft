@@ -155,7 +155,7 @@ class FitResult:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         if path.exists():
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             # Remove existing entries with same CAS or name
             name_to_match = self.input_name or identifier.name
             data = [
@@ -168,7 +168,7 @@ class FitResult:
             data = []
 
         data.append(entry)
-        path.write_text(json.dumps(data, indent=2))
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def plot(
         self,

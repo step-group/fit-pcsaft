@@ -11,6 +11,7 @@ from pathlib import Path
 from fit_pcsaft import fit_pure
 
 data_dir = Path(__file__).parent.parent / "data"
+out_dir = Path(__file__).parent.parent / "out"
 psat_path = data_dir / "psat" / "acetone.csv"
 density_path = data_dir / "density" / "acetone.csv"
 hvap_path = data_dir / "hvap" / "acetone.csv"
@@ -26,8 +27,8 @@ def main() -> None:
         mu=None,  # fit dipole moment
     )
     print(result)
-    result.to_json("examples/out/examples_pure.json")
-    result.plot(path="examples/out/acetone.png")
+    result.to_json(out_dir / "examples_pure.json")
+    result.plot(path=out_dir / "acetone.png")
 
 
 if __name__ == "__main__":

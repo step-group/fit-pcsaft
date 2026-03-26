@@ -72,7 +72,9 @@ Fitting quality:
 
 ## Data Format
 
-The tool expects simple CSV files. The **first column** must be temperature, and the **second column** must be the property (saturation pressure or mass density).
+The tool expects simple CSV files.
+
+The **first column** must be temperature, and the **second column** must be the property (saturation pressure or mass density).
 
 * **Vapor Pressure**: Default units are **K** and **kPa**.
 * **Liquid Density**: Default units are **K** and **kg/m³**.
