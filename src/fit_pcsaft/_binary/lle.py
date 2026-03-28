@@ -25,7 +25,9 @@ def fit_kij_lle(
     kij_t_ref: float = 293.15,
     kij_bounds: tuple = (-0.5, 0.5),
     temperature_unit=si.KELVIN,
+    temperature_offset: float = 0.0,
     phases: "tuple[str, ...] | None" = None,
+    composition: str = "molefrac",
     scipy_kwargs: "dict | None" = None,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE data.
@@ -35,8 +37,34 @@ def fit_kij_lle(
     id1, id2 : str
         Component identifiers matching names in the params JSON file.
     lle_path : Path | str
-        CSV file with column T (required) and at least one of x1_I, x1_II.
-        Optional column P [bar]; defaults to 1 bar if absent.
+        CSV file with the following columns (matched by name, not position):
+
+        **Required:**
+
+        - ``T`` — temperature; also accepted: ``temperature_K``, ``temperature``,
+          ``T_K``, ``t``, ``t_C``, ``T_C``
+
+        **At least one required** (for ``composition="molefrac"``):
+
+        - ``x1_I``  — mole fraction of component 1 in the component-1-lean phase;
+          also accepted: ``xI``, ``x_I``
+        - ``x1_II`` — mole fraction of component 1 in the component-1-rich phase;
+          also accepted: ``xII``, ``x_II``
+
+        **At least one required** (for ``composition="massfrac"``):
+
+        - ``w1_I``  — mass fraction of component 1 in the component-1-lean phase;
+          also accepted: ``wI``, ``w_I``
+        - ``w1_II`` — mass fraction of component 1 in the component-1-rich phase;
+          also accepted: ``wII``, ``w_II``
+
+        **Optional:**
+
+        - ``P`` — pressure [bar]; also accepted: ``pressure``, ``pressure_kPa``,
+          ``P_kPa``. Defaults to 1 bar when absent.
+
+        Extra columns (e.g. ``source``) are silently ignored.
+
     params_path : Path | str
         Feos-compatible JSON parameter file (output of FitResult.to_json).
     kij_order : int
@@ -46,9 +74,20 @@ def fit_kij_lle(
     kij_bounds : tuple
         (lower, upper) bounds for the constant term k_ij0.
     temperature_unit : si.SIObject
-        Unit of T column in CSV (default: K).
+        Unit of T column in CSV (default: ``si.KELVIN``). Use ``si.CELSIUS`` for
+        °C data instead of ``temperature_offset``.
+    temperature_offset : float
+        Added to every T value before applying ``temperature_unit`` (default: 0.0).
+        Use ``273.15`` to convert °C → K when ``temperature_unit=si.KELVIN``.
+    phases : tuple[str, ...] | None
+        Restrict which phases to use in the residuals. Pass ``("I",)`` or
+        ``("II",)`` to use only one phase; ``None`` (default) uses all available.
+    composition : str
+        ``"molefrac"`` (default) or ``"massfrac"``. When ``"massfrac"``,
+        the CSV columns are ``w1_I`` / ``w1_II`` and are converted to mole
+        fractions using the molar masses from the params JSON.
     scipy_kwargs : dict | None
-        Overrides for scipy.optimize.least_squares keyword arguments.
+        Overrides for ``scipy.optimize.least_squares`` keyword arguments.
 
     Returns
     -------
@@ -57,13 +96,49 @@ def fit_kij_lle(
     import feos
 
     record1, record2 = _load_pure_records(params_path, id1, id2)
-    data = _load_binary_csv(lle_path)
 
-    T_arr = data["T"]
+    # Load CSV by column name (aliases resolved by _load_binary_csv)
+    raw = _load_binary_csv(lle_path)
+
+    if "T" not in raw:
+        raise ValueError(
+            "LLE CSV is missing a temperature column.\n"
+            "Supported names: T, temperature_K, temperature, T_K, t, t_C, T_C"
+        )
+
+    if composition == "molefrac":
+        comp_col_I, comp_col_II = "x1_I", "x1_II"
+        alias_hint = "x1_I / xI / x_I  and/or  x1_II / xII / x_II"
+    elif composition == "massfrac":
+        comp_col_I, comp_col_II = "w1_I", "w1_II"
+        alias_hint = "w1_I / wI / w_I  and/or  w1_II / wII / w_II"
+    else:
+        raise ValueError(f"composition must be 'molefrac' or 'massfrac', got {composition!r}")
+
+    if comp_col_I not in raw and comp_col_II not in raw:
+        raise ValueError(
+            f"LLE CSV is missing composition columns for composition={composition!r}.\n"
+            f"Expected at least one of: {alias_hint}"
+        )
+
+    T_raw = raw["T"].astype(float)
+    data: dict[str, np.ndarray] = {"T": T_raw}
+    if comp_col_I in raw:
+        data["x1_I"] = raw[comp_col_I].astype(float)
+    if comp_col_II in raw:
+        data["x1_II"] = raw[comp_col_II].astype(float)
+
+    if composition == "massfrac":
+        M1 = float(record1.molarweight)
+        M2 = float(record2.molarweight)
+        for col in ["x1_I", "x1_II"]:
+            if col in data:
+                w = data[col]
+                data[col] = (w / M1) / (w / M1 + (1.0 - w) / M2)
+
+    T_arr = data["T"] + temperature_offset
     has_phase_I = "x1_I" in data
     has_phase_II = "x1_II" in data
-    if not has_phase_I and not has_phase_II:
-        raise ValueError("LLE CSV must contain at least one of: x1_I, x1_II")
 
     if phases is not None:
         has_phase_I = has_phase_I and "I" in phases
@@ -73,7 +148,7 @@ def fit_kij_lle(
 
     x1_I_arr = data["x1_I"] if has_phase_I else None
     x1_II_arr = data["x1_II"] if has_phase_II else None
-    P_arr = data.get("P", np.ones(len(T_arr)))  # default 1 bar
+    P_arr = raw["P"].astype(float) if "P" in raw else np.ones(len(T_arr))  # default 1 bar
 
     n_rows = len(T_arr)
     n_phases = int(has_phase_I) + int(has_phase_II)
@@ -110,13 +185,22 @@ def fit_kij_lle(
                     )
                     x_exp = []
                     if has_phase_I:
-                        x_exp.append(float(x1_I_arr[i]))
+                        v = float(x1_I_arr[i])
+                        if not np.isnan(v):
+                            x_exp.append(v)
                     if has_phase_II:
-                        x_exp.append(float(x1_II_arr[i]))
-                    for j, x_e in enumerate(sorted(x_exp)):
+                        v = float(x1_II_arr[i])
+                        if not np.isnan(v):
+                            x_exp.append(v)
+                    j = 0
+                    for x_e in sorted(x_exp):
                         xp = x_pred[j]
                         resids[r + j * 2]     = (xp - x_e) / max(x_e, 1e-10)
                         resids[r + j * 2 + 1] = ((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10)
+                        j += 1
+                    # fill unused slots (NaN rows) with 0 — no contribution
+                    for k in range(j * 2, n_phases * 2):
+                        resids[r + k] = 0.0
                 except Exception:
                     resids[r:r + n_phases * 2] = 1.0
             r += n_phases * 2
@@ -167,9 +251,13 @@ def fit_kij_lle(
             )
             x_exp = []
             if has_phase_I:
-                x_exp.append(float(x1_I_arr[i]))
+                v = float(x1_I_arr[i])
+                if not np.isnan(v):
+                    x_exp.append(v)
             if has_phase_II:
-                x_exp.append(float(x1_II_arr[i]))
+                v = float(x1_II_arr[i])
+                if not np.isnan(v):
+                    x_exp.append(v)
             x_exp_sorted = sorted(x_exp)
             for j, x_e in enumerate(x_exp_sorted):
                 xp = x_pred[j]

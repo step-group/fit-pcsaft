@@ -9,14 +9,34 @@ import si_units as si
 
 
 def _load_pure_records(
-    params_path: "Path | str", id1: str, id2: str
+    params_path: "Path | str | list[Path | str]", id1: str, id2: str
 ) -> "tuple[feos.PureRecord, feos.PureRecord]":
-    """Load two pure-component records from a feos JSON parameter file."""
-    params_path = str(params_path)
-    params = feos.Parameters.from_json(
-        [id1, id2],
-        pure_path=params_path,
-    )
+    """Load two pure-component records from one or more feos JSON parameter files.
+
+    When params_path is a list, the JSON arrays are merged into a temporary
+    file so feos can search across all of them.
+    """
+    import json
+    import tempfile
+
+    if isinstance(params_path, (list, tuple)):
+        combined = []
+        for p in params_path:
+            combined.extend(json.loads(Path(p).read_text(encoding="utf-8")))
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        )
+        json.dump(combined, tmp)
+        tmp.close()
+        pure_path = tmp.name
+    else:
+        pure_path = str(params_path)
+
+    params = feos.Parameters.from_json([id1, id2], pure_path=pure_path)
+
+    if isinstance(params_path, (list, tuple)):
+        Path(pure_path).unlink(missing_ok=True)
+
     records = params.pure_records
     return records[0], records[1]
 
@@ -43,6 +63,9 @@ _COL_ALIASES: dict[str, str] = {
     "temperature_K": "T",
     "temperature": "T",
     "T_K": "T",
+    "t": "T",
+    "t_C": "T",
+    "T_C": "T",
     # Pressure
     "pressure_kPa": "P",
     "pressure": "P",
@@ -56,6 +79,24 @@ _COL_ALIASES: dict[str, str] = {
     # LLE phase mole fractions (already standard; listed for completeness)
     "x1_I": "x1_I",
     "x1_II": "x1_II",
+    "xI": "x1_I",
+    "xII": "x1_II",
+    "x_I": "x1_I",
+    "x_II": "x1_II",
+    # LLE phase mass fractions
+    "w1_I": "w1_I",
+    "w1_II": "w1_II",
+    "w_I": "w1_I",
+    "w_II": "w1_II",
+    "wI": "w1_I",
+    "wII": "w1_II",
+    # Henry's law constant
+    "henry": "H",
+    "henry_constant": "H",
+    "H_MPa": "H",
+    "H_kPa": "H",
+    "H_bar": "H",
+    "H_Pa": "H",
 }
 
 

@@ -32,7 +32,7 @@ def _scatter_kw(color: str, marker: str = "o") -> dict:
     )
 
 
-def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si.KILO * si.PASCAL):
+def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si.KILO * si.PASCAL, henry_unit=si.MEGA * si.PASCAL):
     eq = result.equilibrium_type
     if eq == "vle":
         return _plot_vle(result, path, temperature_unit, pressure_unit)
@@ -40,6 +40,8 @@ def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si
         return _plot_lle(result, path, temperature_unit)
     elif eq == "sle":
         return _plot_sle(result, path, temperature_unit)
+    elif eq == "henry":
+        return _plot_henry(result, path, temperature_unit, henry_unit)
     else:
         raise ValueError(f"Unknown equilibrium_type: {eq!r}")
 
@@ -334,6 +336,93 @@ def _plot_sle(result, path, temperature_unit):
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
+    return fig, ax
+
+
+# ---------------------------------------------------------------------------
+# Henry
+# ---------------------------------------------------------------------------
+
+def _henry_label(hu) -> str:
+    if hu == "molfrac":
+        return "mol/mol"
+    scale = hu / si.PASCAL
+    if abs(scale - 1e6) < 1e2:
+        return "MPa"
+    if abs(scale - 1e5) < 1e1:
+        return "bar"
+    if abs(scale - 101325) < 10:
+        return "atm"
+    if abs(scale - 1e3) < 1:
+        return "kPa"
+    return f"{scale:.4g} Pa"
+
+
+def _plot_henry(result, path, temperature_unit, henry_unit):
+    import feos
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    sns.set_context("talk")
+    sns.set_style("ticks")
+
+    data = result.data
+    t_scale = float(temperature_unit / si.KELVIN)
+    T_data = data["T"].astype(float) * t_scale  # → K
+    H_data = data["H"].astype(float)
+
+    use_molfrac = henry_unit == "molfrac"
+
+    # Build pure solvent EOS for molfrac conversion
+    eos_solvent = None
+    if use_molfrac and result._solvent_record is not None:
+        eos_solvent = feos.EquationOfState.pcsaft(
+            feos.Parameters.new_pure(result._solvent_record)
+        )
+
+    def _h_pred(T_K: float) -> "float | None":
+        try:
+            H_pa = feos.State.henrys_law_constant_binary(
+                result.eos, T_K * si.KELVIN
+            ) / si.PASCAL
+            if use_molfrac:
+                if eos_solvent is None:
+                    return None
+                pvap = feos.PhaseEquilibrium.vapor_pressure(
+                    eos_solvent, T_K * si.KELVIN
+                )[0] / si.PASCAL
+                return H_pa / pvap
+            else:
+                return H_pa / (henry_unit / si.PASCAL)
+        except Exception:
+            return None
+
+    T_min, T_max = float(T_data.min()), float(T_data.max())
+    T_pad = max((T_max - T_min) * 0.05, 2.0)
+    T_curve = np.linspace(T_min - T_pad, T_max + T_pad, 120)
+    H_curve = [_h_pred(T) for T in T_curve]
+    mask_curve = [h is not None for h in H_curve]
+    T_curve_valid = T_curve[mask_curve]
+    H_curve_valid = np.array([h for h in H_curve if h is not None])
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    h_lbl = _henry_label(henry_unit)
+
+    if len(T_curve_valid) > 0:
+        ax.plot(T_curve_valid, H_curve_valid, color=_LINE_COLOR, label="PC-SAFT")
+
+    ax.scatter(T_data, H_data, label="Exp.", **_scatter_kw(_EXP_COLOR_1))
+
+    ax.set_xlabel("$T$ / K")
+    ax.set_ylabel(f"$H$ / {h_lbl}")
+    ax.set_title(f"Henry: {result.id1} (solute) + {result.id2} (solvent)")
+    ax.legend(fontsize="small")
+    sns.despine(offset=10)
+    plt.tight_layout()
+
+    if path is not None:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
     return fig, ax
 
 

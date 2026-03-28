@@ -14,7 +14,6 @@ data_dir = Path(__file__).parent.parent / "data"
 out_dir = Path(__file__).parent.parent / "out"
 psat_path = data_dir / "psat" / "propane.csv"
 density_path = data_dir / "density" / "propane.csv"
-hvap_path = data_dir / "hvap" / "propane.csv"
 
 
 def main() -> None:
@@ -23,10 +22,6 @@ def main() -> None:
         id="propane",
         psat_path=psat_path,
         density_path=density_path,
-        hvap_path=hvap_path,
-        hvap_weight=1.0,
-        loss="arctan",
-        f_scale=0.001,
     )
     print(result)
     result.to_json(out_dir / "examples_pure.json")

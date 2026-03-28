@@ -47,6 +47,8 @@ class BinaryFitResult:
     ard: float
     scipy_result: object
     time_elapsed: float
+    # Henry-specific: pure solvent record (needed for molfrac plot)
+    _solvent_record: object = None
     # SLE-specific (NaN / 0 for VLE/LLE)
     tm_K: float = float("nan")
     delta_hfus_J: float = float("nan")
@@ -96,7 +98,7 @@ class BinaryFitResult:
         data.append(entry)
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    def plot(self, path=None, temperature_unit=None, pressure_unit=None):
+    def plot(self, path=None, temperature_unit=None, pressure_unit=None, henry_unit=None):
         """Plot binary equilibrium diagram with experimental data overlay.
 
         Parameters
@@ -117,6 +119,7 @@ class BinaryFitResult:
             path=path,
             temperature_unit=si.KELVIN if temperature_unit is None else temperature_unit,
             pressure_unit=si.KILO * si.PASCAL if pressure_unit is None else pressure_unit,
+            henry_unit=si.MEGA * si.PASCAL if henry_unit is None else henry_unit,
         )
 
     def __str__(self) -> str:

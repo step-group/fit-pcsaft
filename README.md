@@ -104,9 +104,10 @@ For practical demonstrations of different substances (hydrocarbons, polar solven
 
 Future features and improvements:
 * [ ] **Binary Interaction Parameters**:
-  * [ ] Support for **VLE** (Vapor-Liquid Equilibrium) data.
-  * [ ] Support for **LLE** (Liquid-Liquid Equilibrium) data.
-  * [ ] Support for **SLE** (Solid-Liquid Equilibrium) data.
+  * [x] Support for **VLE** (Vapor-Liquid Equilibrium) data.
+  * [x] Support for **LLE** (Liquid-Liquid Equilibrium) data.
+  * [x] Support for **SLE** (Solid-Liquid Equilibrium) data.
+  * [ ] Support for Henry's law data.
 
 * [ ] **Refactor for readability and mantainability** (this was heavily vibe coded)
 

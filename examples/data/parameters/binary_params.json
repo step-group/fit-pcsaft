@@ -86,5 +86,27 @@
     "epsilon_k": 290.32768184752115,
     "mu": 0.39290143132174465,
     "q": 3.7
+  },
+  {
+    "identifier": {
+      "cas": "115-18-4",
+      "name": "2-methyl-3-buten-2-ol",
+      "iupac_name": "2-methylbut-3-en-2-ol",
+      "smiles": "CC(C)(C=C)O",
+      "inchi": "InChI=1S/C5H10O/c1-4-5(2,3)6/h4,6H,1H2,2-3H3",
+      "formula": "C5H10O"
+    },
+    "molarweight": 86.13,
+    "m": 3.1057391279492905,
+    "sigma": 3.498368461999279,
+    "epsilon_k": 180.07990439852446,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.07748302155082505,
+        "epsilon_k_ab": 2441.104605173193
+      }
+    ]
   }
 ]
