@@ -105,7 +105,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "feos", specifier = ">=0.9.3,<0.10.0" },
+    { name = "feos", specifier = ">=0.9.4,<0.10.0" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "polars", specifier = ">=1.38.1" },
     { name = "pubchempy", specifier = "==1.0.5" },

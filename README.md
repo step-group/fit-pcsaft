@@ -72,7 +72,9 @@ Fitting quality:
 
 ## Data Format
 
-The tool expects simple CSV files. The **first column** must be temperature, and the **second column** must be the property (saturation pressure or mass density).
+The tool expects simple CSV files.
+
+The **first column** must be temperature, and the **second column** must be the property (saturation pressure or mass density).
 
 * **Vapor Pressure**: Default units are **K** and **kPa**.
 * **Liquid Density**: Default units are **K** and **kg/m³**.
@@ -102,9 +104,10 @@ For practical demonstrations of different substances (hydrocarbons, polar solven
 
 Future features and improvements:
 * [ ] **Binary Interaction Parameters**:
-  * [ ] Support for **VLE** (Vapor-Liquid Equilibrium) data.
-  * [ ] Support for **LLE** (Liquid-Liquid Equilibrium) data.
-  * [ ] Support for **SLE** (Solid-Liquid Equilibrium) data.
+  * [x] Support for **VLE** (Vapor-Liquid Equilibrium) data.
+  * [x] Support for **LLE** (Liquid-Liquid Equilibrium) data.
+  * [x] Support for **SLE** (Solid-Liquid Equilibrium) data.
+  * [ ] Support for Henry's law data.
 
 * [ ] **Refactor for readability and mantainability** (this was heavily vibe coded)
 
