@@ -114,6 +114,30 @@ def _load_binary_csv(path: "Path | str") -> "dict[str, np.ndarray]":
     return result
 
 
+def _load_lle_csv(
+    path: "Path | str",
+) -> "tuple[np.ndarray, np.ndarray, np.ndarray | None]":
+    """Load LLE data CSV by **column position** (header names are ignored).
+
+    Layout::
+
+        2 columns  →  (T, x1_I)            one-sided tieline
+        3+ columns →  (T, x1_I, x1_II)     full tieline
+
+    Returns
+    -------
+    T_arr  : (n,) temperatures in CSV units
+    x1_I   : (n,) mole/mass fraction in the first phase column
+    x1_II  : (n,) or None
+    """
+    df = pl.read_csv(Path(path), infer_schema_length=9999, truncate_ragged_lines=True)
+    cols = df.columns
+    T_arr = df[cols[0]].to_numpy().astype(float)
+    x1_I = df[cols[1]].to_numpy().astype(float)
+    x1_II = df[cols[2]].to_numpy().astype(float) if len(cols) >= 3 else None
+    return T_arr, x1_I, x1_II
+
+
 def _make_binary_jac_fn(fun, n_params: int, h: float = 1e-012):
     """Build a central-difference (3-point) Jacobian for a binary cost function."""
 

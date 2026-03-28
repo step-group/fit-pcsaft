@@ -2,6 +2,7 @@
 import time
 from pathlib import Path
 
+import feos
 import numpy as np
 import si_units as si
 from scipy.optimize import least_squares
@@ -9,11 +10,59 @@ from scipy.optimize import least_squares
 from fit_pcsaft._binary._utils import (
     _build_binary_eos,
     _kij_at_T,
-    _load_binary_csv,
+    _load_lle_csv,
     _load_pure_records,
     _make_binary_jac_fn,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
+
+# 5 evenly-spaced global-composition candidates for one-sided tieline rows
+_Z_CANDIDATES = np.linspace(0.1, 0.9, 5)
+
+
+def _bubble_P(eos, T_si, z1: float):
+    """Bubble-point pressure at mole fraction z1. Returns None on failure."""
+    try:
+        z = np.array([z1, 1.0 - z1])
+        bp = feos.PhaseEquilibrium.bubble_point(eos, T_si, z)
+        return bp.liquid.pressure()
+    except Exception:
+        return None
+
+
+def _is_lle(flash) -> bool:
+    """True when both phases of a tp_flash result are liquid-like (density > 50 kg/m³)."""
+    try:
+        rho_a = flash.liquid.mass_density() / (si.KILOGRAM / si.METER**3)
+        rho_b = flash.vapor.mass_density() / (si.KILOGRAM / si.METER**3)
+        return min(rho_a, rho_b) > 50.0
+    except Exception:
+        return False
+
+
+def _find_z(eos0, T_si, xi_I: float, xi_II: "float | None") -> float:
+    """Pre-compute the global composition z1 for one data point.
+
+    Full tieline (both phases known): z1 = midpoint.
+    One-sided (xi_II is None or NaN): try 5 evenly-spaced candidates at the
+    initial EOS; fall back to 0.5 if none yield a valid LLE flash.
+    """
+    if xi_II is not None and not np.isnan(xi_II):
+        return 0.5 * (xi_I + xi_II)
+
+    for z1 in _Z_CANDIDATES:
+        P = _bubble_P(eos0, T_si, z1)
+        if P is None:
+            continue
+        try:
+            flash = feos.PhaseEquilibrium.tp_flash(
+                eos0, T_si, P, np.array([z1, 1.0 - z1]) * si.MOL
+            )
+            if _is_lle(flash):
+                return float(z1)
+        except Exception:
+            continue
+    return 0.5  # fallback
 
 
 def fit_kij_lle(
@@ -32,41 +81,30 @@ def fit_kij_lle(
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE data.
 
+    The CSV is read **by column position** (header names are ignored)::
+
+        2 columns  →  (T, x1_I)            one-sided tieline
+        3+ columns →  (T, x1_I, x1_II)     full tieline
+
+    For each data point the global flash composition is:
+
+    - **Full tieline**: midpoint of the two experimental compositions.
+    - **One-sided**: the first of five evenly-spaced candidates
+      [0.1, 0.3, 0.5, 0.7, 0.9] that yields a valid LLE flash with the
+      initial EOS (k_ij = 0); falls back to 0.5.
+
+    The flash pressure is the bubble-point pressure of the mixture at the
+    global composition (recomputed each evaluation); falls back to 1 bar when
+    the bubble-point calculation fails.
+
     Parameters
     ----------
     id1, id2 : str
         Component identifiers matching names in the params JSON file.
     lle_path : Path | str
-        CSV file with the following columns (matched by name, not position):
-
-        **Required:**
-
-        - ``T`` — temperature; also accepted: ``temperature_K``, ``temperature``,
-          ``T_K``, ``t``, ``t_C``, ``T_C``
-
-        **At least one required** (for ``composition="molefrac"``):
-
-        - ``x1_I``  — mole fraction of component 1 in the component-1-lean phase;
-          also accepted: ``xI``, ``x_I``
-        - ``x1_II`` — mole fraction of component 1 in the component-1-rich phase;
-          also accepted: ``xII``, ``x_II``
-
-        **At least one required** (for ``composition="massfrac"``):
-
-        - ``w1_I``  — mass fraction of component 1 in the component-1-lean phase;
-          also accepted: ``wI``, ``w_I``
-        - ``w1_II`` — mass fraction of component 1 in the component-1-rich phase;
-          also accepted: ``wII``, ``w_II``
-
-        **Optional:**
-
-        - ``P`` — pressure [bar]; also accepted: ``pressure``, ``pressure_kPa``,
-          ``P_kPa``. Defaults to 1 bar when absent.
-
-        Extra columns (e.g. ``source``) are silently ignored.
-
+        CSV file — column order determines meaning, not header names.
     params_path : Path | str
-        Feos-compatible JSON parameter file (output of FitResult.to_json).
+        Feos-compatible JSON parameter file.
     kij_order : int
         Polynomial order for k_ij(T): 0=constant, 1=linear, 2=quadratic, 3=cubic.
     kij_t_ref : float
@@ -74,18 +112,17 @@ def fit_kij_lle(
     kij_bounds : tuple
         (lower, upper) bounds for the constant term k_ij0.
     temperature_unit : si.SIObject
-        Unit of T column in CSV (default: ``si.KELVIN``). Use ``si.CELSIUS`` for
-        °C data instead of ``temperature_offset``.
+        Unit of the first CSV column (default: ``si.KELVIN``).
     temperature_offset : float
         Added to every T value before applying ``temperature_unit`` (default: 0.0).
         Use ``273.15`` to convert °C → K when ``temperature_unit=si.KELVIN``.
     phases : tuple[str, ...] | None
-        Restrict which phases to use in the residuals. Pass ``("I",)`` or
+        Restrict which phases contribute to the residuals.  Pass ``("I",)`` or
         ``("II",)`` to use only one phase; ``None`` (default) uses all available.
     composition : str
-        ``"molefrac"`` (default) or ``"massfrac"``. When ``"massfrac"``,
-        the CSV columns are ``w1_I`` / ``w1_II`` and are converted to mole
-        fractions using the molar masses from the params JSON.
+        ``"molefrac"`` (default) or ``"massfrac"``.  When ``"massfrac"``, columns
+        2 and 3 are treated as mass fractions and converted to mole fractions
+        using the molar masses from the params JSON.
     scipy_kwargs : dict | None
         Overrides for ``scipy.optimize.least_squares`` keyword arguments.
 
@@ -93,52 +130,30 @@ def fit_kij_lle(
     -------
     BinaryFitResult
     """
-    import feos
-
     record1, record2 = _load_pure_records(params_path, id1, id2)
 
-    # Load CSV by column name (aliases resolved by _load_binary_csv)
-    raw = _load_binary_csv(lle_path)
+    # --- Load CSV by column position -----------------------------------------
+    T_raw, x1_I_raw, x1_II_raw = _load_lle_csv(lle_path)
 
-    if "T" not in raw:
-        raise ValueError(
-            "LLE CSV is missing a temperature column.\n"
-            "Supported names: T, temperature_K, temperature, T_K, t, t_C, T_C"
-        )
-
-    if composition == "molefrac":
-        comp_col_I, comp_col_II = "x1_I", "x1_II"
-        alias_hint = "x1_I / xI / x_I  and/or  x1_II / xII / x_II"
-    elif composition == "massfrac":
-        comp_col_I, comp_col_II = "w1_I", "w1_II"
-        alias_hint = "w1_I / wI / w_I  and/or  w1_II / wII / w_II"
-    else:
-        raise ValueError(f"composition must be 'molefrac' or 'massfrac', got {composition!r}")
-
-    if comp_col_I not in raw and comp_col_II not in raw:
-        raise ValueError(
-            f"LLE CSV is missing composition columns for composition={composition!r}.\n"
-            f"Expected at least one of: {alias_hint}"
-        )
-
-    T_raw = raw["T"].astype(float)
-    data: dict[str, np.ndarray] = {"T": T_raw}
-    if comp_col_I in raw:
-        data["x1_I"] = raw[comp_col_I].astype(float)
-    if comp_col_II in raw:
-        data["x1_II"] = raw[comp_col_II].astype(float)
-
+    # Massfrac → molefrac conversion
     if composition == "massfrac":
         M1 = float(record1.molarweight)
         M2 = float(record2.molarweight)
-        for col in ["x1_I", "x1_II"]:
-            if col in data:
-                w = data[col]
-                data[col] = (w / M1) / (w / M1 + (1.0 - w) / M2)
 
-    T_arr = data["T"] + temperature_offset
-    has_phase_I = "x1_I" in data
-    has_phase_II = "x1_II" in data
+        def w2x(w: np.ndarray) -> np.ndarray:
+            return (w / M1) / (w / M1 + (1.0 - w) / M2)
+
+        x1_I_raw = w2x(x1_I_raw)
+        if x1_II_raw is not None:
+            x1_II_raw = w2x(x1_II_raw)
+    elif composition != "molefrac":
+        raise ValueError(f"composition must be 'molefrac' or 'massfrac', got {composition!r}")
+
+    T_arr = T_raw + temperature_offset
+    n_rows = len(T_arr)
+
+    has_phase_I = True
+    has_phase_II = x1_II_raw is not None
 
     if phases is not None:
         has_phase_I = has_phase_I and "I" in phases
@@ -146,19 +161,35 @@ def fit_kij_lle(
         if not has_phase_I and not has_phase_II:
             raise ValueError(f"phases={phases!r} excluded all available phases from the CSV")
 
-    x1_I_arr = data["x1_I"] if has_phase_I else None
-    x1_II_arr = data["x1_II"] if has_phase_II else None
-    P_arr = raw["P"].astype(float) if "P" in raw else np.ones(len(T_arr))  # default 1 bar
+    x1_I_arr = x1_I_raw if has_phase_I else None
+    x1_II_arr = x1_II_raw if has_phase_II else None
 
-    n_rows = len(T_arr)
+    data: dict = {"T": T_raw}
+    if x1_I_arr is not None:
+        data["x1_I"] = x1_I_arr
+    if x1_II_arr is not None:
+        data["x1_II"] = x1_II_arr
+
+    # --- Pre-compute global compositions z1 for each row ---------------------
+    eos0 = _build_binary_eos(record1, record2, 0.0)
+    z_arr = np.empty(n_rows)
+    for i in range(n_rows):
+        T_si = T_arr[i] * temperature_unit
+        xi_I = float(x1_I_arr[i]) if x1_I_arr is not None else 0.5
+        xi_II = float(x1_II_arr[i]) if x1_II_arr is not None else None
+        z_arr[i] = _find_z(eos0, T_si, xi_I, xi_II)
+
+    # --- Build cost function -------------------------------------------------
     n_phases = int(has_phase_I) + int(has_phase_II)
-    n_resid = n_rows * n_phases * 2  # x1 and x2 for each phase
+    n_resid = n_rows * n_phases * 2
 
     def fun(coeffs: np.ndarray) -> np.ndarray:
         resids = np.empty(n_resid)
-        kij_per_row = np.array([_kij_at_T(coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)])
+        kij_per_row = np.array(
+            [_kij_at_T(coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)]
+        )
         unique_kijs = np.unique(kij_per_row)
-        eos_map: dict[float, object] = {}
+        eos_map: dict = {}
         for kij_val in unique_kijs:
             try:
                 eos_map[kij_val] = _build_binary_eos(record1, record2, float(kij_val))
@@ -167,45 +198,48 @@ def fit_kij_lle(
 
         r = 0
         for i in range(n_rows):
-            T_i = float(T_arr[i])
-            P_i = float(P_arr[i]) if hasattr(P_arr, "__len__") else float(P_arr)
+            T_si = T_arr[i] * temperature_unit
+            z1 = z_arr[i]
+            z = np.array([z1, 1.0 - z1])
             eos = eos_map[kij_per_row[i]]
+
             if eos is None:
-                resids[r:r + n_phases] = 1.0
-            else:
-                try:
-                    flash = feos.PhaseEquilibrium.tp_flash(
-                        eos,
-                        T_i * temperature_unit,
-                        P_i * si.BAR,
-                        np.array([0.5, 0.5]) * si.MOL,
-                    )
-                    x_pred = sorted(
-                        [float(flash.liquid.molefracs[0]), float(flash.vapor.molefracs[0])]
-                    )
-                    x_exp = []
-                    if has_phase_I:
-                        v = float(x1_I_arr[i])
-                        if not np.isnan(v):
-                            x_exp.append(v)
-                    if has_phase_II:
-                        v = float(x1_II_arr[i])
-                        if not np.isnan(v):
-                            x_exp.append(v)
-                    j = 0
-                    for x_e in sorted(x_exp):
-                        xp = x_pred[j]
-                        resids[r + j * 2]     = (xp - x_e) / max(x_e, 1e-10)
-                        resids[r + j * 2 + 1] = ((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10)
-                        j += 1
-                    # fill unused slots (NaN rows) with 0 — no contribution
-                    for k in range(j * 2, n_phases * 2):
-                        resids[r + k] = 0.0
-                except Exception:
-                    resids[r:r + n_phases * 2] = 1.0
+                resids[r : r + n_phases * 2] = 1.0
+                r += n_phases * 2
+                continue
+
+            # Saturation pressure: bubble point at global composition z
+            P_si = _bubble_P(eos, T_si, z1)
+            P_si = P_si if P_si is not None else si.BAR
+
+            try:
+                flash = feos.PhaseEquilibrium.tp_flash(eos, T_si, P_si, z * si.MOL)
+                x_pred = sorted(
+                    [float(flash.liquid.molefracs[0]), float(flash.vapor.molefracs[0])]
+                )
+                x_exp = []
+                if has_phase_I:
+                    v = float(x1_I_arr[i])
+                    if not np.isnan(v):
+                        x_exp.append(v)
+                if has_phase_II:
+                    v = float(x1_II_arr[i])
+                    if not np.isnan(v):
+                        x_exp.append(v)
+                j = 0
+                for x_e in sorted(x_exp):
+                    xp = x_pred[j]
+                    resids[r + j * 2] = (xp - x_e) / max(x_e, 1e-10)
+                    resids[r + j * 2 + 1] = ((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10)
+                    j += 1
+                for k in range(j * 2, n_phases * 2):
+                    resids[r + k] = 0.0
+            except Exception:
+                resids[r : r + n_phases * 2] = 1.0
             r += n_phases * 2
         return resids
 
+    # --- Optimize ------------------------------------------------------------
     n_coeffs = kij_order + 1
     jac = _make_binary_jac_fn(fun, n_coeffs)
 
@@ -231,21 +265,19 @@ def fit_kij_lle(
     kij_coeffs = result.x
     eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
 
-    # ARD on mole fractions
-    abs_devs = []
-    x_exp_vals = []
+    # --- ARD -----------------------------------------------------------------
+    abs_devs: list[float] = []
     for i in range(n_rows):
         T_i = float(T_arr[i])
-        P_i = float(P_arr[i]) if hasattr(P_arr, "__len__") else float(P_arr)
+        T_si = T_i * temperature_unit
+        z1 = z_arr[i]
+        z = np.array([z1, 1.0 - z1])
         kij = _kij_at_T(kij_coeffs, T_i, kij_t_ref)
         try:
             eos = _build_binary_eos(record1, record2, kij)
-            flash = feos.PhaseEquilibrium.tp_flash(
-                eos,
-                T_i * temperature_unit,
-                P_i * si.BAR,
-                np.array([0.5, 0.5]) * si.MOL,
-            )
+            P_si = _bubble_P(eos, T_si, z1)
+            P_si = P_si if P_si is not None else si.BAR
+            flash = feos.PhaseEquilibrium.tp_flash(eos, T_si, P_si, z * si.MOL)
             x_pred = sorted(
                 [float(flash.liquid.molefracs[0]), float(flash.vapor.molefracs[0])]
             )
@@ -258,19 +290,14 @@ def fit_kij_lle(
                 v = float(x1_II_arr[i])
                 if not np.isnan(v):
                     x_exp.append(v)
-            x_exp_sorted = sorted(x_exp)
-            for j, x_e in enumerate(x_exp_sorted):
+            for j, x_e in enumerate(sorted(x_exp)):
                 xp = x_pred[j]
                 abs_devs.append(abs(xp - x_e) / max(x_e, 1e-10))
                 abs_devs.append(abs((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10))
-                x_exp_vals.append(x_e)
         except Exception:
             pass
 
-    if abs_devs:
-        ard = 100.0 * float(np.mean(abs_devs))
-    else:
-        ard = float("nan")
+    ard = 100.0 * float(np.mean(abs_devs)) if abs_devs else float("nan")
 
     return BinaryFitResult(
         kij_coeffs=kij_coeffs,
