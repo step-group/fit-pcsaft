@@ -6,6 +6,7 @@ import si_units as si
 _LINE_COLOR = "#000000"
 _EXP_COLOR_1 = "#E32F2F"   # liquid / phase I
 _EXP_COLOR_2 = "#1F77B4"   # vapor / phase II
+_GRAY = "#AAAAAA"           # filtered-out (unused) data points
 
 _R = 8.314462618  # J/(mol·K)
 
@@ -30,6 +31,39 @@ def _scatter_kw(color: str, marker: str = "o") -> dict:
         linewidths=1.2,
         zorder=5,
     )
+
+
+def _curve_plot(ax, x_arr, y_arr, fit_min_K, fit_max_K, y_is_T: bool, **line_kw):
+    """Plot a curve solid within the fitting range and dashed outside it.
+
+    Parameters
+    ----------
+    x_arr, y_arr : array-like
+        Curve coordinates.
+    fit_min_K, fit_max_K : float
+        Fitting temperature bounds in K (NaN = no bound).
+    y_is_T : bool
+        True when the temperature axis is Y (LLE/SLE); False when it is X (unused here).
+    """
+    x_arr = np.asarray(x_arr)
+    y_arr = np.asarray(y_arr)
+    T_arr = y_arr if y_is_T else x_arr
+
+    has_min = not np.isnan(fit_min_K)
+    has_max = not np.isnan(fit_max_K)
+    if not has_min and not has_max:
+        ax.plot(x_arr, y_arr, **line_kw)
+        return
+
+    lo = fit_min_K if has_min else -np.inf
+    hi = fit_max_K if has_max else np.inf
+    in_range = (T_arr >= lo) & (T_arr <= hi)
+
+    # Draw dashed line for the full curve, then solid on top for the in-range part
+    out_kw = {**line_kw, "linestyle": "--", "alpha": 0.45, "label": None}
+    ax.plot(x_arr, y_arr, **out_kw)
+    if in_range.any():
+        ax.plot(x_arr[in_range], y_arr[in_range], **line_kw)
 
 
 def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si.KILO * si.PASCAL, henry_unit=si.MEGA * si.PASCAL):
@@ -72,6 +106,14 @@ def _plot_vle(result, path, temperature_unit, pressure_unit):
     fig, ax = plt.subplots(figsize=(8, 6))
     p_lbl = _pressure_label(pressure_unit)
 
+    fit_min_K = result.t_filter_min_K
+    fit_max_K = result.t_filter_max_K
+
+    T_data_full = result.data_full["T"].astype(float) * t_scale
+    lo = fit_min_K if not np.isnan(fit_min_K) else -np.inf
+    hi = fit_max_K if not np.isnan(fit_max_K) else np.inf
+    unused_mask = (T_data_full < lo) | (T_data_full > hi)
+
     if is_isobaric:
         # T-x-y diagram at mean pressure
         P_mean = float(np.mean(P_data))
@@ -80,12 +122,22 @@ def _plot_vle(result, path, temperature_unit, pressure_unit):
                 result.eos, P_mean * pressure_unit, npoints=200
             )
             T_curve = vle_pd.liquid.temperature / si.KELVIN
-            ax.plot(vle_pd.liquid.molefracs[:, 0], T_curve,
-                    color=_LINE_COLOR, linestyle="-", label="PC-SAFT (bubble)")
-            ax.plot(vle_pd.vapor.molefracs[:, 0], T_curve,
-                    color=_LINE_COLOR, linestyle="--", label="PC-SAFT (dew)")
+            _curve_plot(ax, vle_pd.liquid.molefracs[:, 0], T_curve,
+                        fit_min_K, fit_max_K, y_is_T=True,
+                        color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (bubble)")
+            _curve_plot(ax, vle_pd.vapor.molefracs[:, 0], T_curve,
+                        fit_min_K, fit_max_K, y_is_T=True,
+                        color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (dew)")
         except Exception:
             pass
+
+        if unused_mask.any():
+            x1_full = result.data_full["x1"].astype(float)
+            ax.scatter(x1_full[unused_mask], T_data_full[unused_mask],
+                       **_scatter_kw(_GRAY))
+            if "y1" in result.data_full:
+                ax.scatter(result.data_full["y1"].astype(float)[unused_mask],
+                           T_data_full[unused_mask], **_scatter_kw(_GRAY, "^"))
 
         ax.scatter(x1_data, T_data, label=r"Exp. $x_1$", **_scatter_kw(_EXP_COLOR_1))
         if has_y1:
@@ -97,29 +149,41 @@ def _plot_vle(result, path, temperature_unit, pressure_unit):
         ax.set_title(f"VLE: {result.id1} + {result.id2}  ($p$ = {P_mean:.0f} {p_lbl})")
 
     else:
-        # Multi-isothermal P-x-y diagram: one curve per unique temperature
-        unique_Ts = sorted(np.unique(np.round(T_data, 0)))
+        # Multi-isothermal P-x-y diagram: one curve per unique temperature (full data)
+        T_data_full = result.data_full["T"].astype(float) * t_scale
+        unique_Ts = sorted(np.unique(np.round(T_data_full, 0)))
         cmap = plt.cm.plasma
         colors = [cmap(i / max(1, len(unique_Ts) - 1)) for i in range(len(unique_Ts))]
 
+        x1_full = result.data_full["x1"].astype(float)
+        P_full = result.data_full["P"].astype(float)
+        y1_full = result.data_full["y1"].astype(float) if "y1" in result.data_full else None
+
         for k, T_iso in enumerate(unique_Ts):
             color = colors[k]
-            mask = np.abs(T_data - T_iso) < 0.6
+            iso_in_range = lo <= T_iso <= hi
+            alpha = 1.0 if iso_in_range else 0.45
+            ls = "-" if iso_in_range else "--"
+            scatter_color = color if iso_in_range else _GRAY
             try:
                 vle_iso = feos.PhaseDiagram.binary_vle(
                     result.eos, T_iso * si.KELVIN, npoints=200
                 )
                 P_curve = vle_iso.liquid.pressure / pressure_unit
-                ax.plot(vle_iso.liquid.molefracs[:, 0], P_curve, color=color, linestyle="-")
-                ax.plot(vle_iso.vapor.molefracs[:, 0], P_curve, color=color, linestyle="--")
+                ax.plot(vle_iso.liquid.molefracs[:, 0], P_curve,
+                        color=color, linestyle=ls, alpha=alpha)
+                ax.plot(vle_iso.vapor.molefracs[:, 0], P_curve,
+                        color=color, linestyle=ls, alpha=alpha)
             except Exception:
                 pass
 
-            ax.scatter(x1_data[mask], P_data[mask],
-                       label=f"{T_iso:.0f} K", **_scatter_kw(color))
-            if has_y1:
-                ax.scatter(data["y1"].astype(float)[mask], P_data[mask],
-                           **_scatter_kw(color, "^"))
+            iso_mask_full = np.abs(T_data_full - T_iso) < 0.6
+            ax.scatter(x1_full[iso_mask_full], P_full[iso_mask_full],
+                       label=f"{T_iso:.0f} K" if iso_in_range else None,
+                       **_scatter_kw(scatter_color))
+            if y1_full is not None:
+                ax.scatter(y1_full[iso_mask_full], P_full[iso_mask_full],
+                           **_scatter_kw(scatter_color, "^"))
 
         ax.set_xlabel(rf"$x_1,\,y_1$ ({result.id1})")
         ax.set_ylabel(f"$p$ / {p_lbl}")
@@ -157,7 +221,13 @@ def _plot_lle(result, path, temperature_unit):
 
     T_min = float(T_data.min())
     T_max = float(T_data.max())
-    T_pad = max((T_max - T_min) * 0.05, 1.0)
+    T_full = result.data_full["T"].astype(float) * t_scale
+    T_pad = max((T_full.max() - T_full.min()) * 0.05, 1.0)
+
+    fit_min_K = result.t_filter_min_K
+    fit_max_K = result.t_filter_max_K
+    curve_T_min = float(T_full.min()) - T_pad
+    curve_T_max = float(T_full.max()) + T_pad
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -165,25 +235,40 @@ def _plot_lle(result, path, temperature_unit):
         x = np.asarray(x, dtype=float)
         return np.log10(np.clip(x, 1e-15, 1.0) / np.clip(1.0 - x, 1e-15, 1.0))
 
+    # Unused (filtered-out) points mask
+    lo = fit_min_K if not np.isnan(fit_min_K) else -np.inf
+    hi = fit_max_K if not np.isnan(fit_max_K) else np.inf
+    unused_mask = (T_full < lo) | (T_full > hi)
+
     try:
         lle_pd = feos.PhaseDiagram.lle(
             result.eos,
             1.0 * si.BAR,
             feed=np.array([0.5, 0.5]) * si.MOL,
-            min_tp=(T_min - T_pad) * si.KELVIN,
-            max_tp=(T_max + T_pad) * si.KELVIN,
+            min_tp=curve_T_min * si.KELVIN,
+            max_tp=curve_T_max * si.KELVIN,
             npoints=200,
         )
         T_curve = lle_pd.liquid.temperature / si.KELVIN
         x_liq = lle_pd.liquid.molefracs[:, 0]
         x_vap = lle_pd.vapor.molefracs[:, 0]
         if len(T_curve) > 0 and np.max(np.abs(x_liq - x_vap)) > 1e-3:
-            ax.plot(_log_odds(x_liq), T_curve,
-                    color=_LINE_COLOR, linestyle="-", label="PC-SAFT (phase I)")
-            ax.plot(_log_odds(x_vap), T_curve,
-                    color=_LINE_COLOR, linestyle="--", label="PC-SAFT (phase II)")
+            _curve_plot(ax, _log_odds(x_vap), T_curve, fit_min_K, fit_max_K, y_is_T=True,
+                        color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (phase I)")
+            _curve_plot(ax, _log_odds(x_liq), T_curve, fit_min_K, fit_max_K, y_is_T=True,
+                        color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (phase II)")
     except BaseException:
         pass
+
+    # Unused experimental points (gray, drawn first so used points sit on top)
+    if unused_mask.any():
+        T_unused = T_full[unused_mask]
+        if "x1_I" in result.data_full:
+            ax.scatter(_log_odds(result.data_full["x1_I"].astype(float)[unused_mask]),
+                       T_unused, **_scatter_kw(_GRAY))
+        if "x1_II" in result.data_full:
+            ax.scatter(_log_odds(result.data_full["x1_II"].astype(float)[unused_mask]),
+                       T_unused, **_scatter_kw(_GRAY, "^"))
 
     if has_I:
         ax.scatter(_log_odds(data["x1_I"].astype(float)), T_data,
@@ -263,6 +348,11 @@ def _plot_sle(result, path, temperature_unit):
     solid_index2 = 1 - solid_index
 
     T_min = float(T_data.min())
+    T_full = result.data_full["T"].astype(float) * t_scale
+
+    fit_min_K = result.t_filter_min_K
+    fit_max_K = result.t_filter_max_K
+    curve_T_min = float(T_full.min())
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -273,7 +363,7 @@ def _plot_sle(result, path, temperature_unit):
             Tm_K, dHfus_J, solid_index,
             Tm2_K, dHfus2_J, solid_index2,
         )
-        T_start = T_eut if not np.isnan(T_eut) else T_min * 0.995
+        T_start = T_eut if not np.isnan(T_eut) else curve_T_min * 0.995
 
         def _plot_branch(Tm, dHfus, si_idx, x0_start, label, linestyle="-"):
             x1_curve, T_curve = [], []
@@ -289,13 +379,15 @@ def _plot_sle(result, path, temperature_unit):
                 except Exception:
                     pass
             if x1_curve:
-                ax.plot(x1_curve, T_curve, color=_LINE_COLOR, linestyle=linestyle, label=label)
+                _curve_plot(ax, np.array(x1_curve), np.array(T_curve),
+                            fit_min_K, fit_max_K, y_is_T=True,
+                            color=_LINE_COLOR, linestyle="-", label=label)
 
         solid_name = result.id2 if solid_index == 1 else result.id1
         solid_name2 = result.id1 if solid_index == 1 else result.id2
         x0_eut = x1_eut if not np.isnan(x1_eut) else float(x1_data[np.argmin(T_data)])
-        _plot_branch(Tm_K, dHfus_J, solid_index, x0_eut, f"PC-SAFT ({solid_name})", "-")
-        _plot_branch(Tm2_K, dHfus2_J, solid_index2, x0_eut, f"PC-SAFT ({solid_name2})", "--")
+        _plot_branch(Tm_K, dHfus_J, solid_index, x0_eut, f"PC-SAFT ({solid_name})")
+        _plot_branch(Tm2_K, dHfus2_J, solid_index2, x0_eut, f"PC-SAFT ({solid_name2})")
 
         if not np.isnan(T_eut):
             ax.scatter(
@@ -308,7 +400,7 @@ def _plot_sle(result, path, temperature_unit):
     else:
         solid_name = result.id2 if solid_index == 1 else result.id1
         x1_curve, T_curve = [], []
-        T_range = np.linspace(T_min * 0.995, Tm_K, 120)
+        T_range = np.linspace(curve_T_min * 0.995, Tm_K, 120)
         x0 = float(x1_data[np.argmin(T_data)])
         for T_i in T_range:
             try:
@@ -320,8 +412,19 @@ def _plot_sle(result, path, temperature_unit):
             except Exception:
                 pass
         if x1_curve:
-            ax.plot(x1_curve, T_curve, color=_LINE_COLOR, label="PC-SAFT")
+            _curve_plot(ax, np.array(x1_curve), np.array(T_curve),
+                        fit_min_K, fit_max_K, y_is_T=True,
+                        color=_LINE_COLOR, linestyle="-", label="PC-SAFT")
         title = f"SLE: {result.id1} + {result.id2}  (solid: {solid_name})"
+
+    # Unused experimental points (gray, behind used ones)
+    lo_f = fit_min_K if not np.isnan(fit_min_K) else -np.inf
+    hi_f = fit_max_K if not np.isnan(fit_max_K) else np.inf
+    unused_mask = (T_full < lo_f) | (T_full > hi_f)
+    if unused_mask.any():
+        x1_full = result.data_full["x1"].astype(float)
+        ax.scatter(x1_full[unused_mask], T_full[unused_mask],
+                   **_scatter_kw(_GRAY))
 
     ax.scatter(x1_data, T_data, label="Exp.", **_scatter_kw(_EXP_COLOR_1))
 

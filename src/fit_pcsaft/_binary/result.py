@@ -44,6 +44,7 @@ class BinaryFitResult:
     equilibrium_type: str
     eos: feos.EquationOfState
     data: dict
+    data_full: dict
     ard: float
     scipy_result: object
     time_elapsed: float
@@ -56,6 +57,9 @@ class BinaryFitResult:
     # Second solid for eutectic systems (NaN when not applicable)
     tm2_K: float = float("nan")
     delta_hfus2_J: float = float("nan")
+    # Temperature filter bounds used during fitting [K] (NaN = no bound)
+    t_filter_min_K: float = float("nan")
+    t_filter_max_K: float = float("nan")
 
     def kij_at(self, T: float) -> float:
         """Evaluate the k_ij polynomial at temperature T [K]."""

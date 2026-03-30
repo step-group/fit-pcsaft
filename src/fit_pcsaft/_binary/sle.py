@@ -32,6 +32,8 @@ def fit_kij_sle(
     kij_t_ref: float = 293.15,
     kij_bounds: tuple = (-0.5, 0.5),
     temperature_unit=si.KELVIN,
+    t_min: "si.SIObject | None" = None,
+    t_max: "si.SIObject | None" = None,
     scipy_kwargs: "dict | None" = None,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from SLE solubility data.
@@ -75,6 +77,10 @@ def fit_kij_sle(
         (lower, upper) bounds for the constant term k_ij0.
     temperature_unit : si.SIObject
         Unit of T column in CSV (default: K).
+    t_min : si.SIObject | None
+        Lower temperature bound. Rows with T < t_min are excluded.
+    t_max : si.SIObject | None
+        Upper temperature bound. Rows with T > t_max are excluded.
     scipy_kwargs : dict | None
         Overrides for scipy.optimize.least_squares keyword arguments.
 
@@ -89,6 +95,16 @@ def fit_kij_sle(
 
     record1, record2 = _load_pure_records(params_path, id1, id2)
     data = _load_binary_csv(sle_path)
+    data_full = {k: v.copy() for k, v in data.items()}
+
+    # --- Temperature filter --------------------------------------------------
+    if t_min is not None or t_max is not None:
+        mask = np.ones(len(data["T"]), dtype=bool)
+        if t_min is not None:
+            mask &= data["T"] >= float(t_min / temperature_unit)
+        if t_max is not None:
+            mask &= data["T"] <= float(t_max / temperature_unit)
+        data = {k: v[mask] for k, v in data.items()}
 
     T_arr = data["T"]
     x1_arr = data["x1"]
@@ -224,6 +240,9 @@ def fit_kij_sle(
         solid_index=solid_index,
         tm2_K=Tm2_K,
         delta_hfus2_J=dHfus2_J,
+        t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
+        t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
+        data_full=data_full,
     )
 
 

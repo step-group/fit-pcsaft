@@ -155,6 +155,7 @@ def fit_kij_henry(
         equilibrium_type="henry",
         eos=eos_ref,
         data=data,
+        data_full=data,
         ard=ard,
         scipy_result=result,
         time_elapsed=time_elapsed,

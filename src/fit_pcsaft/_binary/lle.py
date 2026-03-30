@@ -77,6 +77,8 @@ def fit_kij_lle(
     temperature_offset: float = 0.0,
     phases: "tuple[str, ...] | None" = None,
     composition: str = "molefrac",
+    t_min: "si.SIObject | None" = None,
+    t_max: "si.SIObject | None" = None,
     scipy_kwargs: "dict | None" = None,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE data.
@@ -123,6 +125,10 @@ def fit_kij_lle(
         ``"molefrac"`` (default) or ``"massfrac"``.  When ``"massfrac"``, columns
         2 and 3 are treated as mass fractions and converted to mole fractions
         using the molar masses from the params JSON.
+    t_min : si.SIObject | None
+        Lower temperature bound. Rows with T < t_min are excluded.
+    t_max : si.SIObject | None
+        Upper temperature bound. Rows with T > t_max are excluded.
     scipy_kwargs : dict | None
         Overrides for ``scipy.optimize.least_squares`` keyword arguments.
 
@@ -150,6 +156,25 @@ def fit_kij_lle(
         raise ValueError(f"composition must be 'molefrac' or 'massfrac', got {composition!r}")
 
     T_arr = T_raw + temperature_offset
+
+    # Capture full data (after massfrac conversion, before filtering)
+    T_arr_full = T_arr.copy()
+    x1_I_raw_full = x1_I_raw.copy()
+    x1_II_raw_full = x1_II_raw.copy() if x1_II_raw is not None else None
+
+    # --- Temperature filter --------------------------------------------------
+    if t_min is not None or t_max is not None:
+        mask = np.ones(len(T_arr), dtype=bool)
+        if t_min is not None:
+            mask &= T_arr >= float(t_min / temperature_unit)
+        if t_max is not None:
+            mask &= T_arr <= float(t_max / temperature_unit)
+        T_raw = T_raw[mask]
+        T_arr = T_arr[mask]
+        x1_I_raw = x1_I_raw[mask]
+        if x1_II_raw is not None:
+            x1_II_raw = x1_II_raw[mask]
+
     n_rows = len(T_arr)
 
     has_phase_I = True
@@ -169,6 +194,10 @@ def fit_kij_lle(
         data["x1_I"] = x1_I_arr
     if x1_II_arr is not None:
         data["x1_II"] = x1_II_arr
+
+    data_full: dict = {"T": T_arr_full, "x1_I": x1_I_raw_full}
+    if x1_II_raw_full is not None:
+        data_full["x1_II"] = x1_II_raw_full
 
     # --- Pre-compute global compositions z1 for each row ---------------------
     eos0 = _build_binary_eos(record1, record2, 0.0)
@@ -307,7 +336,10 @@ def fit_kij_lle(
         equilibrium_type="lle",
         eos=eos_ref,
         data=data,
+        data_full=data_full,
         ard=ard,
         scipy_result=result,
         time_elapsed=time_elapsed,
+        t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
+        t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
     )

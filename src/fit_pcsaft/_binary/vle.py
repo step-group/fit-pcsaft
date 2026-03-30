@@ -26,6 +26,8 @@ def fit_kij_vle(
     kij_bounds: tuple = (-0.5, 0.5),
     temperature_unit=si.KELVIN,
     pressure_unit=si.KILO * si.PASCAL,
+    t_min: "si.SIObject | None" = None,
+    t_max: "si.SIObject | None" = None,
     scipy_kwargs: "dict | None" = None,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from VLE bubble-point data.
@@ -49,6 +51,10 @@ def fit_kij_vle(
         Unit of T column in CSV (default: K).
     pressure_unit : si.SIObject
         Unit of P column in CSV (default: kPa).
+    t_min : si.SIObject | None
+        Lower temperature bound. Rows with T < t_min are excluded.
+    t_max : si.SIObject | None
+        Upper temperature bound. Rows with T > t_max are excluded.
     scipy_kwargs : dict | None
         Overrides for scipy.optimize.least_squares keyword arguments.
 
@@ -58,6 +64,16 @@ def fit_kij_vle(
     """
     record1, record2 = _load_pure_records(params_path, id1, id2)
     data = _load_binary_csv(vle_path)
+    data_full = {k: v.copy() for k, v in data.items()}
+
+    # --- Temperature filter --------------------------------------------------
+    if t_min is not None or t_max is not None:
+        mask = np.ones(len(data["T"]), dtype=bool)
+        if t_min is not None:
+            mask &= data["T"] >= float(t_min / temperature_unit)
+        if t_max is not None:
+            mask &= data["T"] <= float(t_max / temperature_unit)
+        data = {k: v[mask] for k, v in data.items()}
 
     T_arr = data["T"]
     P_arr = data["P"]
@@ -147,9 +163,12 @@ def fit_kij_vle(
         equilibrium_type="vle",
         eos=eos_ref,
         data=data,
+        data_full=data_full,
         ard=ard,
         scipy_result=result,
         time_elapsed=time_elapsed,
+        t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
+        t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
     )
 
 

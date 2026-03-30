@@ -56,8 +56,9 @@ def main() -> None:
                 params_path=tmp_path,
                 kij_order=2,
                 kij_t_ref=298.15,
-                kij_bounds=(-0.2, 0.2),
+                kij_bounds=(-1, 1),
                 temperature_unit=si.KELVIN,
+                t_min=300 * si.KELVIN,
             )
             ard = result.ard
             print(f"{model_name:<35} {result.kij_coeffs[0]:>8.4f}  {ard:>7.2f}%")
