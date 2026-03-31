@@ -40,29 +40,60 @@ def _is_lle(flash) -> bool:
         return False
 
 
-def _find_z(eos0, T_si, xi_I: float, xi_II: "float | None") -> float:
+def _tp_flash_robust(eos, T_si, P_si, feed, prev_flash=None):
+    """Attempt tp_flash with warm-start, falling back to cold start.
+
+    Returns a PhaseEquilibrium on success, or None on failure.
+    """
+    attempts = [prev_flash, None] if prev_flash is not None else [None]
+    for attempt_state in attempts:
+        try:
+            if attempt_state is not None:
+                flash = feos.PhaseEquilibrium.tp_flash(
+                    eos, T_si, P_si, feed, initial_state=attempt_state
+                )
+            else:
+                flash = feos.PhaseEquilibrium.tp_flash(eos, T_si, P_si, feed)
+            return flash
+        except Exception:
+            continue
+    return None
+
+
+def _find_z(
+    eos0, T_si, xi_I: float, xi_II: "float | None",
+    prev_flash=None,
+) -> "tuple[float, object | None]":
     """Pre-compute the global composition z1 for one data point.
 
-    Full tieline (both phases known): z1 = midpoint.
-    One-sided (xi_II is None or NaN): try 5 evenly-spaced candidates at the
-    initial EOS; fall back to 0.5 if none yield a valid LLE flash.
+    Full tieline (both phases known): z1 = midpoint; also attempts a flash to
+    produce a warm-start hint for the next temperature point.
+    One-sided (xi_II is None or NaN): try 5 evenly-spaced candidates; falls
+    back to 0.5 if none yield a valid LLE flash.
+
+    Returns (z1, flash_result) where flash_result can be passed as prev_flash
+    to the next call for warm-starting.
     """
     if xi_II is not None and not np.isnan(xi_II):
-        return 0.5 * (xi_I + xi_II)
+        z1 = 0.5 * (xi_I + xi_II)
+        P = _bubble_P(eos0, T_si, z1)
+        if P is not None:
+            z = np.array([z1, 1.0 - z1])
+            flash = _tp_flash_robust(eos0, T_si, P, z * si.MOL, prev_flash)
+            if flash is not None and _is_lle(flash):
+                return z1, flash
+        return z1, prev_flash  # keep propagating even if this flash failed
 
     for z1 in _Z_CANDIDATES:
         P = _bubble_P(eos0, T_si, z1)
         if P is None:
             continue
-        try:
-            flash = feos.PhaseEquilibrium.tp_flash(
-                eos0, T_si, P, np.array([z1, 1.0 - z1]) * si.MOL
-            )
-            if _is_lle(flash):
-                return float(z1)
-        except Exception:
-            continue
-    return 0.5  # fallback
+        z = np.array([z1, 1.0 - z1])
+        flash = _tp_flash_robust(eos0, T_si, P, z * si.MOL, prev_flash)
+        if flash is not None and _is_lle(flash):
+            return float(z1), flash
+
+    return 0.5, prev_flash  # fallback
 
 
 def fit_kij_lle(
@@ -199,14 +230,17 @@ def fit_kij_lle(
     if x1_II_raw_full is not None:
         data_full["x1_II"] = x1_II_raw_full
 
-    # --- Pre-compute global compositions z1 for each row ---------------------
+    # --- Pre-compute global compositions z1, sorted by temperature -----------
     eos0 = _build_binary_eos(record1, record2, 0.0)
     z_arr = np.empty(n_rows)
-    for i in range(n_rows):
-        T_si = T_arr[i] * temperature_unit
-        xi_I = float(x1_I_arr[i]) if x1_I_arr is not None else 0.5
-        xi_II = float(x1_II_arr[i]) if x1_II_arr is not None else None
-        z_arr[i] = _find_z(eos0, T_si, xi_I, xi_II)
+    sort_idx = np.argsort(T_arr)  # ascending temperature order
+
+    prev_flash = None
+    for idx in sort_idx:
+        T_si = T_arr[idx] * temperature_unit
+        xi_I = float(x1_I_arr[idx]) if x1_I_arr is not None else 0.5
+        xi_II = float(x1_II_arr[idx]) if x1_II_arr is not None else None
+        z_arr[idx], prev_flash = _find_z(eos0, T_si, xi_I, xi_II, prev_flash)
 
     # --- Build cost function -------------------------------------------------
     n_phases = int(has_phase_I) + int(has_phase_II)
@@ -225,8 +259,12 @@ def fit_kij_lle(
             except Exception:
                 eos_map[kij_val] = None
 
-        r = 0
-        for i in range(n_rows):
+        # Iterate in ascending temperature order for warm-starting
+        prev = None
+        for k in range(n_rows):
+            i = sort_idx[k]
+            r = i * n_phases * 2  # stable residual position for row i
+
             T_si = T_arr[i] * temperature_unit
             z1 = z_arr[i]
             z = np.array([z1, 1.0 - z1])
@@ -234,15 +272,16 @@ def fit_kij_lle(
 
             if eos is None:
                 resids[r : r + n_phases * 2] = 1.0
-                r += n_phases * 2
                 continue
 
-            # Saturation pressure: bubble point at global composition z
             P_si = _bubble_P(eos, T_si, z1)
             P_si = P_si if P_si is not None else si.BAR
 
-            try:
-                flash = feos.PhaseEquilibrium.tp_flash(eos, T_si, P_si, z * si.MOL)
+            flash = _tp_flash_robust(eos, T_si, P_si, z * si.MOL, prev)
+
+            if flash is not None:
+                if _is_lle(flash):
+                    prev = flash  # only seed warm-start from confirmed LLE results
                 x_pred = sorted(
                     [float(flash.liquid.molefracs[0]), float(flash.vapor.molefracs[0])]
                 )
@@ -261,11 +300,11 @@ def fit_kij_lle(
                     resids[r + j * 2] = (xp - x_e) / max(x_e, 1e-10)
                     resids[r + j * 2 + 1] = ((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10)
                     j += 1
-                for k in range(j * 2, n_phases * 2):
-                    resids[r + k] = 0.0
-            except Exception:
+                for jj in range(j * 2, n_phases * 2):
+                    resids[r + jj] = 0.0
+            else:
                 resids[r : r + n_phases * 2] = 1.0
-            r += n_phases * 2
+
         return resids
 
     # --- Optimize ------------------------------------------------------------
@@ -296,7 +335,9 @@ def fit_kij_lle(
 
     # --- ARD -----------------------------------------------------------------
     abs_devs: list[float] = []
-    for i in range(n_rows):
+    prev_ard = None
+    for k in range(n_rows):
+        i = sort_idx[k]
         T_i = float(T_arr[i])
         T_si = T_i * temperature_unit
         z1 = z_arr[i]
@@ -306,7 +347,10 @@ def fit_kij_lle(
             eos = _build_binary_eos(record1, record2, kij)
             P_si = _bubble_P(eos, T_si, z1)
             P_si = P_si if P_si is not None else si.BAR
-            flash = feos.PhaseEquilibrium.tp_flash(eos, T_si, P_si, z * si.MOL)
+            flash = _tp_flash_robust(eos, T_si, P_si, z * si.MOL, prev_ard)
+            if flash is None or not _is_lle(flash):
+                continue
+            prev_ard = flash
             x_pred = sorted(
                 [float(flash.liquid.molefracs[0]), float(flash.vapor.molefracs[0])]
             )
