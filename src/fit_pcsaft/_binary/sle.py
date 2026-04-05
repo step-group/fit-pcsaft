@@ -15,7 +15,7 @@ from fit_pcsaft._binary._utils import (
 )
 from fit_pcsaft._binary.result import BinaryFitResult
 
-_R = 8.314462618  # J/(mol·K)
+_R = si.RGAS / (si.JOULE / (si.MOL * si.KELVIN))
 
 
 def fit_kij_sle(

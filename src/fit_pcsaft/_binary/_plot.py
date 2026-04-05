@@ -7,8 +7,9 @@ _LINE_COLOR = "#000000"
 _EXP_COLOR_1 = "#E32F2F"   # liquid / phase I
 _EXP_COLOR_2 = "#1F77B4"   # vapor / phase II
 _GRAY = "#AAAAAA"           # filtered-out (unused) data points
+_PRED_COLOR = "#888888"     # unfitted / predictive (k_ij = 0) curves
 
-_R = 8.314462618  # J/(mol·K)
+_R = si.RGAS / (si.JOULE / (si.MOL * si.KELVIN))
 
 
 def _pressure_label(pu) -> str:
@@ -66,12 +67,12 @@ def _curve_plot(ax, x_arr, y_arr, fit_min_K, fit_max_K, y_is_T: bool, **line_kw)
         ax.plot(x_arr[in_range], y_arr[in_range], **line_kw)
 
 
-def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si.KILO * si.PASCAL, henry_unit=si.MEGA * si.PASCAL):
+def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si.KILO * si.PASCAL, henry_unit=si.MEGA * si.PASCAL, plot_unfitted: bool = False):
     eq = result.equilibrium_type
     if eq == "vle":
-        return _plot_vle(result, path, temperature_unit, pressure_unit)
+        return _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted=plot_unfitted)
     elif eq == "lle":
-        return _plot_lle(result, path, temperature_unit)
+        return _plot_lle(result, path, temperature_unit, plot_unfitted=plot_unfitted)
     elif eq == "sle":
         return _plot_sle(result, path, temperature_unit)
     elif eq == "henry":
@@ -84,7 +85,18 @@ def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si
 # VLE
 # ---------------------------------------------------------------------------
 
-def _plot_vle(result, path, temperature_unit, pressure_unit):
+def _build_eos_kij0(result):
+    """Return a new EOS with k_ij=0.0, or None if the parameters are unavailable."""
+    import feos
+    try:
+        pure_records = result.eos.parameters.pure_records
+        params = feos.Parameters.new_binary(pure_records, k_ij=0.0)
+        return feos.EquationOfState.pcsaft(params)
+    except Exception:
+        return None
+
+
+def _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted: bool = False):
     import feos
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -130,6 +142,21 @@ def _plot_vle(result, path, temperature_unit, pressure_unit):
                         color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (dew)")
         except Exception:
             pass
+
+        if plot_unfitted:
+            eos_u = _build_eos_kij0(result)
+            if eos_u is not None:
+                try:
+                    vle_u = feos.PhaseDiagram.binary_vle(
+                        eos_u, P_mean * pressure_unit, npoints=200
+                    )
+                    T_u = vle_u.liquid.temperature / si.KELVIN
+                    ax.plot(vle_u.liquid.molefracs[:, 0], T_u,
+                            color=_PRED_COLOR, linestyle="--", label="Predictive (k_ij = 0)")
+                    ax.plot(vle_u.vapor.molefracs[:, 0], T_u,
+                            color=_PRED_COLOR, linestyle="--")
+                except Exception:
+                    pass
 
         if unused_mask.any():
             x1_full = result.data_full["x1"].astype(float)
@@ -205,7 +232,7 @@ def _plot_vle(result, path, temperature_unit, pressure_unit):
 # LLE
 # ---------------------------------------------------------------------------
 
-def _plot_lle(result, path, temperature_unit):
+def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
     import feos
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -259,6 +286,29 @@ def _plot_lle(result, path, temperature_unit):
                         color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (phase II)")
     except BaseException:
         pass
+
+    if plot_unfitted:
+        eos_u = _build_eos_kij0(result)
+        if eos_u is not None:
+            try:
+                lle_u = feos.PhaseDiagram.lle(
+                    eos_u,
+                    1.0 * si.BAR,
+                    feed=np.array([0.5, 0.5]) * si.MOL,
+                    min_tp=curve_T_min * si.KELVIN,
+                    max_tp=curve_T_max * si.KELVIN,
+                    npoints=200,
+                )
+                T_u = lle_u.liquid.temperature / si.KELVIN
+                x_liq_u = lle_u.liquid.molefracs[:, 0]
+                x_vap_u = lle_u.vapor.molefracs[:, 0]
+                if len(T_u) > 0 and np.max(np.abs(x_liq_u - x_vap_u)) > 1e-3:
+                    ax.plot(_log_odds(x_vap_u), T_u,
+                            color=_PRED_COLOR, linestyle="--", label="Predictive (k_ij = 0)")
+                    ax.plot(_log_odds(x_liq_u), T_u,
+                            color=_PRED_COLOR, linestyle="--")
+            except BaseException:
+                pass
 
     # Unused experimental points (gray, drawn first so used points sit on top)
     if unused_mask.any():

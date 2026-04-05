@@ -102,7 +102,7 @@ class BinaryFitResult:
         data.append(entry)
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    def plot(self, path=None, temperature_unit=None, pressure_unit=None, henry_unit=None):
+    def plot(self, path=None, temperature_unit=None, pressure_unit=None, henry_unit=None, plot_unfitted: bool = False):
         """Plot binary equilibrium diagram with experimental data overlay.
 
         Parameters
@@ -113,6 +113,8 @@ class BinaryFitResult:
             Unit of the T column in the CSV (default: si.KELVIN).
         pressure_unit : si.SIObject, optional
             Unit of the P column in the CSV, VLE only (default: si.KILO * si.PASCAL).
+        plot_unfitted : bool, optional
+            If True, overlay a "predictive" curve computed with k_ij = 0.0.
         """
         import si_units as si
 
@@ -124,6 +126,7 @@ class BinaryFitResult:
             temperature_unit=si.KELVIN if temperature_unit is None else temperature_unit,
             pressure_unit=si.KILO * si.PASCAL if pressure_unit is None else pressure_unit,
             henry_unit=si.MEGA * si.PASCAL if henry_unit is None else henry_unit,
+            plot_unfitted=plot_unfitted,
         )
 
     def __str__(self) -> str:
