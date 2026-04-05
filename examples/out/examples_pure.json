@@ -1,27 +1,6 @@
 [
   {
     "identifier": {
-      "cas": "67-64-1",
-      "name": "acetone",
-      "iupac_name": "propan-2-one",
-      "smiles": "CC(=O)C",
-      "inchi": "InChI=1S/C3H6O/c1-3(2)4/h1-2H3",
-      "formula": "C3H6O"
-    },
-    "molarweight": 58.08,
-    "m": 3.205747153286719,
-    "sigma": 3.0911021569227795,
-    "epsilon_k": 210.61842765089784,
-    "mu": 3.073082404345041,
-    "association_sites": [
-      {
-        "na": 1.0,
-        "nb": 0.0
-      }
-    ]
-  },
-  {
-    "identifier": {
       "cas": "64-17-5",
       "name": "ethanol",
       "iupac_name": "ethanol",
@@ -144,5 +123,25 @@
     "m": 2.0088389081946616,
     "sigma": 3.730476280935515,
     "epsilon_k": 210.7128619289104
+  },
+  {
+    "identifier": {
+      "cas": "67-64-1",
+      "name": "acetone",
+      "iupac_name": "propan-2-one",
+      "smiles": "CC(=O)C",
+      "inchi": "InChI=1S/C3H6O/c1-3(2)4/h1-2H3",
+      "formula": "C3H6O"
+    },
+    "molarweight": 58.08,
+    "m": 3.2709273010511484,
+    "sigma": 3.099599692922516,
+    "epsilon_k": 230.09366668662932,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 0.0
+      }
+    ]
   }
 ]

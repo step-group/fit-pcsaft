@@ -12,12 +12,17 @@ from fit_pcsaft._binary._utils import (
     _kij_at_T,
     _load_lle_csv,
     _load_pure_records,
-    _make_binary_jac_fn,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
 
 # 5 evenly-spaced global-composition candidates for one-sided tieline rows
 _Z_CANDIDATES = np.linspace(0.1, 0.9, 5)
+
+# Number of kij0 scan points for choosing the initial guess
+_N_KIJ_SCAN = 9
+
+# Pressure used for LLE diagram computations
+_LLE_P = 1.0 * si.BAR
 
 
 def _bubble_P(eos, T_si, z1: float):
@@ -58,6 +63,45 @@ def _tp_flash_robust(eos, T_si, P_si, feed, prev_flash=None):
         except Exception:
             continue
     return None
+
+
+def _lle_diagram(eos, T_arr_K, z1: float):
+    """Compute an LLE phase diagram and return (x_I, x_II) interpolated at T_arr_K.
+
+    Uses ``PhaseDiagram.lle`` (continuation method) which does not require a
+    cold-start initial guess.  Returns (x_I, x_II) arrays of length len(T_arr_K)
+    with NaN where interpolation fails, or (None, None) if the diagram call fails.
+
+    x_I  = component-1 mole fraction in the lean (low x1) phase.
+    x_II = component-1 mole fraction in the rich (high x1) phase.
+    """
+    T_min_K = float(T_arr_K.min())
+    T_max_K = float(T_arr_K.max())
+    # Expand range slightly so the diagram covers all data points.
+    margin = max(1.0, 0.01 * (T_max_K - T_min_K))
+    try:
+        feed = np.array([z1, 1.0 - z1]) * si.MOL
+        diag = feos.PhaseDiagram.lle(
+            eos,
+            _LLE_P,
+            feed=feed,
+            min_tp=(T_min_K - margin) * si.KELVIN,
+            max_tp=(T_max_K + margin) * si.KELVIN,
+            npoints=max(50, 4 * len(T_arr_K)),
+        )
+        T_diag = diag.liquid.temperature / si.KELVIN  # shape (npoints,)
+        if len(T_diag) == 0:
+            return None, None
+        # liquid = denser phase (water-rich), vapor = lighter phase (toluene-rich)
+        x_I_diag = diag.vapor.molefracs[:, 0]   # lean phase, comp-1
+        x_II_diag = diag.liquid.molefracs[:, 0]  # rich phase, comp-1
+
+        # Interpolate at experimental temperatures.
+        x_I = np.interp(T_arr_K, T_diag, x_I_diag)
+        x_II = np.interp(T_arr_K, T_diag, x_II_diag)
+        return x_I, x_II
+    except BaseException:
+        return None, None
 
 
 def _find_z(
@@ -119,16 +163,11 @@ def fit_kij_lle(
         2 columns  →  (T, x1_I)            one-sided tieline
         3+ columns →  (T, x1_I, x1_II)     full tieline
 
-    For each data point the global flash composition is:
-
-    - **Full tieline**: midpoint of the two experimental compositions.
-    - **One-sided**: the first of five evenly-spaced candidates
-      [0.1, 0.3, 0.5, 0.7, 0.9] that yields a valid LLE flash with the
-      initial EOS (k_ij = 0); falls back to 0.5.
-
-    The flash pressure is the bubble-point pressure of the mixture at the
-    global composition (recomputed each evaluation); falls back to 1 bar when
-    the bubble-point calculation fails.
+    For each candidate k_ij the LLE phase diagram is computed via
+    ``PhaseDiagram.lle`` (continuation method), which is robust to the
+    cold-start convergence issues of plain ``tp_flash``.  The predicted
+    compositions are interpolated at each experimental temperature and
+    compared to the data.
 
     Parameters
     ----------
@@ -242,92 +281,103 @@ def fit_kij_lle(
         xi_II = float(x1_II_arr[idx]) if x1_II_arr is not None else None
         z_arr[idx], prev_flash = _find_z(eos0, T_si, xi_I, xi_II, prev_flash)
 
-    # --- Build cost function -------------------------------------------------
+    # Global feed composition for PhaseDiagram.lle: use the mean z1 across all rows.
+    z1_global = float(np.mean(z_arr))
+
+    # --- Build cost function using PhaseDiagram.lle --------------------------
+    # n_phases active experimental columns
     n_phases = int(has_phase_I) + int(has_phase_II)
     n_resid = n_rows * n_phases * 2
 
     def fun(coeffs: np.ndarray) -> np.ndarray:
-        resids = np.empty(n_resid)
+        resids = np.ones(n_resid)  # default penalty = 1.0
+
+        # For kij_order > 0 the kij varies with T; we run a separate diagram
+        # per unique kij.  For order=0 there is one diagram.
         kij_per_row = np.array(
             [_kij_at_T(coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)]
         )
-        unique_kijs = np.unique(kij_per_row)
-        eos_map: dict = {}
-        for kij_val in unique_kijs:
+        unique_kijs, inverse = np.unique(kij_per_row, return_inverse=True)
+
+        # Build one LLE diagram per unique kij
+        diag_cache: dict = {}
+        for uid, kij_val in enumerate(unique_kijs):
             try:
-                eos_map[kij_val] = _build_binary_eos(record1, record2, float(kij_val))
+                eos = _build_binary_eos(record1, record2, float(kij_val))
             except Exception:
-                eos_map[kij_val] = None
+                diag_cache[uid] = (None, None)
+                continue
+            x_I_pred, x_II_pred = _lle_diagram(eos, T_arr, z1_global)
+            diag_cache[uid] = (x_I_pred, x_II_pred)
 
-        # Iterate in ascending temperature order for warm-starting
-        prev = None
-        for k in range(n_rows):
-            i = sort_idx[k]
-            r = i * n_phases * 2  # stable residual position for row i
+        for i in range(n_rows):
+            r = i * n_phases * 2
+            uid = int(inverse[i])
+            x_I_pred, x_II_pred = diag_cache[uid]
 
-            T_si = T_arr[i] * temperature_unit
-            z1 = z_arr[i]
-            z = np.array([z1, 1.0 - z1])
-            eos = eos_map[kij_per_row[i]]
+            x_pred_list: list = []
+            if has_phase_I and x_I_pred is not None:
+                x_pred_list.append(float(x_I_pred[i]))
+            if has_phase_II and x_II_pred is not None:
+                x_pred_list.append(float(x_II_pred[i]))
 
-            if eos is None:
-                resids[r : r + n_phases * 2] = 1.0
+            if not x_pred_list or any(np.isnan(v) for v in x_pred_list):
+                # diagram failed or out of range — keep penalty 1.0
                 continue
 
-            P_si = _bubble_P(eos, T_si, z1)
-            P_si = P_si if P_si is not None else si.BAR
+            x_exp_list: list = []
+            if has_phase_I:
+                v = float(x1_I_arr[i])
+                if not np.isnan(v):
+                    x_exp_list.append(v)
+            if has_phase_II:
+                v = float(x1_II_arr[i])
+                if not np.isnan(v):
+                    x_exp_list.append(v)
 
-            flash = _tp_flash_robust(eos, T_si, P_si, z * si.MOL, prev)
-
-            if flash is not None:
-                if _is_lle(flash):
-                    prev = flash  # only seed warm-start from confirmed LLE results
-                x_pred = sorted(
-                    [float(flash.liquid.molefracs[0]), float(flash.vapor.molefracs[0])]
-                )
-                x_exp = []
-                if has_phase_I:
-                    v = float(x1_I_arr[i])
-                    if not np.isnan(v):
-                        x_exp.append(v)
-                if has_phase_II:
-                    v = float(x1_II_arr[i])
-                    if not np.isnan(v):
-                        x_exp.append(v)
-                j = 0
-                for x_e in sorted(x_exp):
-                    xp = x_pred[j]
-                    resids[r + j * 2] = (xp - x_e) / max(x_e, 1e-10)
-                    resids[r + j * 2 + 1] = ((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10)
-                    j += 1
-                for jj in range(j * 2, n_phases * 2):
-                    resids[r + jj] = 0.0
-            else:
-                resids[r : r + n_phases * 2] = 1.0
+            j = 0
+            for xp, x_e in zip(x_pred_list, x_exp_list):
+                resids[r + j * 2] = (xp - x_e) / max(x_e, 1e-10)
+                resids[r + j * 2 + 1] = ((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10)
+                j += 1
+            for jj in range(j * 2, n_phases * 2):
+                resids[r + jj] = 0.0
 
         return resids
 
     # --- Optimize ------------------------------------------------------------
     n_coeffs = kij_order + 1
-    jac = _make_binary_jac_fn(fun, n_coeffs)
-
-    x0 = np.zeros(n_coeffs)
     lb = [kij_bounds[0]] + [-0.01] * kij_order
     ub = [kij_bounds[1]] + [0.01] * kij_order
 
     ls_kwargs = {
         "method": "trf",
+        "jac": "3-point",
+        "diff_step": 0.01,
         "bounds": (lb, ub),
-        "ftol": 1e-8,
-        "xtol": 1e-8,
-        "gtol": 1e-8,
+        "ftol": 1e-6,
+        "xtol": 1e-6,
+        "gtol": 1e-6,
         "max_nfev": 2000,
     }
     if scipy_kwargs:
         ls_kwargs.update(scipy_kwargs)
 
+    # Coarse scan: evaluate fun at _N_KIJ_SCAN evenly-spaced kij0 values and
+    # pick the starting point with the lowest initial cost.
+    kij0_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
+    best_x0 = np.zeros(n_coeffs)
+    best_scan_cost = np.inf
+    for kij0 in kij0_scan:
+        x0 = np.zeros(n_coeffs)
+        x0[0] = kij0
+        cost = 0.5 * np.sum(fun(x0) ** 2)
+        if cost < best_scan_cost:
+            best_scan_cost = cost
+            best_x0 = x0.copy()
+
     t0 = time.perf_counter()
-    result = least_squares(fun, x0, jac=jac, **ls_kwargs)
+    result = least_squares(fun, best_x0, **ls_kwargs)
     time_elapsed = time.perf_counter() - t0
 
     kij_coeffs = result.x
@@ -335,40 +385,37 @@ def fit_kij_lle(
 
     # --- ARD -----------------------------------------------------------------
     abs_devs: list[float] = []
-    prev_ard = None
-    for k in range(n_rows):
-        i = sort_idx[k]
-        T_i = float(T_arr[i])
-        T_si = T_i * temperature_unit
-        z1 = z_arr[i]
-        z = np.array([z1, 1.0 - z1])
-        kij = _kij_at_T(kij_coeffs, T_i, kij_t_ref)
+    kij_at_row = [_kij_at_T(kij_coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)]
+    unique_kijs_ard = np.unique(kij_at_row)
+    diag_ard: dict = {}
+    for kij_val in unique_kijs_ard:
         try:
-            eos = _build_binary_eos(record1, record2, kij)
-            P_si = _bubble_P(eos, T_si, z1)
-            P_si = P_si if P_si is not None else si.BAR
-            flash = _tp_flash_robust(eos, T_si, P_si, z * si.MOL, prev_ard)
-            if flash is None or not _is_lle(flash):
-                continue
-            prev_ard = flash
-            x_pred = sorted(
-                [float(flash.liquid.molefracs[0]), float(flash.vapor.molefracs[0])]
-            )
-            x_exp = []
-            if has_phase_I:
-                v = float(x1_I_arr[i])
-                if not np.isnan(v):
-                    x_exp.append(v)
-            if has_phase_II:
-                v = float(x1_II_arr[i])
-                if not np.isnan(v):
-                    x_exp.append(v)
-            for j, x_e in enumerate(sorted(x_exp)):
-                xp = x_pred[j]
-                abs_devs.append(abs(xp - x_e) / max(x_e, 1e-10))
-                abs_devs.append(abs((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10))
+            eos = _build_binary_eos(record1, record2, float(kij_val))
+            x_I_pred, x_II_pred = _lle_diagram(eos, T_arr, z1_global)
+            diag_ard[float(kij_val)] = (x_I_pred, x_II_pred)
         except Exception:
-            pass
+            diag_ard[float(kij_val)] = (None, None)
+
+    for i in range(n_rows):
+        kij = _kij_at_T(kij_coeffs, float(T_arr[i]), kij_t_ref)
+        x_I_pred_arr, x_II_pred_arr = diag_ard.get(float(kij), (None, None))
+        if x_I_pred_arr is None:
+            continue
+        x_I_pred = float(x_I_pred_arr[i])
+        x_II_pred = float(x_II_pred_arr[i])
+        if np.isnan(x_I_pred) or np.isnan(x_II_pred):
+            continue
+
+        if has_phase_I:
+            x_e = float(x1_I_arr[i])
+            xp = x_I_pred
+            abs_devs.append(abs(xp - x_e) / max(x_e, 1e-10))
+            abs_devs.append(abs((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10))
+        if has_phase_II:
+            x_e = float(x1_II_arr[i])
+            xp = x_II_pred
+            abs_devs.append(abs(xp - x_e) / max(x_e, 1e-10))
+            abs_devs.append(abs((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10))
 
     ard = 100.0 * float(np.mean(abs_devs)) if abs_devs else float("nan")
 
