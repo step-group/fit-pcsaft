@@ -85,6 +85,27 @@ def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si
 # VLE
 # ---------------------------------------------------------------------------
 
+def _lle_feed_z1(result) -> float:
+    """Estimate a representative feed composition z1 from experimental LLE data.
+
+    If both tieline compositions are available, z1 is the mean midpoint.
+    If only one phase is known, z1 is the mean of that phase.
+    Falls back to 0.5 if neither is present.
+    """
+    df = result.data_full
+    x_I = df["x1_I"].astype(float) if "x1_I" in df else None
+    x_II = df["x1_II"].astype(float) if "x1_II" in df else None
+    if x_I is not None and x_II is not None:
+        z1 = float(np.mean(0.5 * (x_I + x_II)))
+    elif x_I is not None:
+        z1 = float(np.mean(x_I))
+    elif x_II is not None:
+        z1 = float(np.mean(x_II))
+    else:
+        z1 = 0.5
+    return float(np.clip(z1, 0.05, 0.95))
+
+
 def _build_eos_kij0(result):
     """Return a new EOS with k_ij=0.0, or None if the parameters are unavailable."""
     import feos
@@ -267,11 +288,14 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
     hi = fit_max_K if not np.isnan(fit_max_K) else np.inf
     unused_mask = (T_full < lo) | (T_full > hi)
 
+    z1 = _lle_feed_z1(result)
+    feed_si = np.array([z1, 1.0 - z1]) * si.MOL
+
     try:
         lle_pd = feos.PhaseDiagram.lle(
             result.eos,
             1.0 * si.BAR,
-            feed=np.array([0.5, 0.5]) * si.MOL,
+            feed=feed_si,
             min_tp=curve_T_min * si.KELVIN,
             max_tp=curve_T_max * si.KELVIN,
             npoints=200,
@@ -294,7 +318,7 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
                 lle_u = feos.PhaseDiagram.lle(
                     eos_u,
                     1.0 * si.BAR,
-                    feed=np.array([0.5, 0.5]) * si.MOL,
+                    feed=feed_si,
                     min_tp=curve_T_min * si.KELVIN,
                     max_tp=curve_T_max * si.KELVIN,
                     npoints=200,
