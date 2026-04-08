@@ -96,11 +96,11 @@ def _lle_feed_z1(result) -> float:
     x_I = df["x1_I"].astype(float) if "x1_I" in df else None
     x_II = df["x1_II"].astype(float) if "x1_II" in df else None
     if x_I is not None and x_II is not None:
-        z1 = float(np.mean(0.5 * (x_I + x_II)))
+        z1 = float(np.nanmean(0.5 * (x_I + x_II)))
     elif x_I is not None:
-        z1 = float(np.mean(x_I))
+        z1 = float(np.nanmean(x_I))
     elif x_II is not None:
-        z1 = float(np.mean(x_II))
+        z1 = float(np.nanmean(x_II))
     else:
         z1 = 0.5
     return float(np.clip(z1, 0.05, 0.95))
@@ -301,12 +301,14 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
             npoints=200,
         )
         T_curve = lle_pd.liquid.temperature / si.KELVIN
-        x_liq = lle_pd.liquid.molefracs[:, 0]
-        x_vap = lle_pd.vapor.molefracs[:, 0]
-        if len(T_curve) > 0 and np.max(np.abs(x_liq - x_vap)) > 1e-3:
-            _curve_plot(ax, _log_odds(x_vap), T_curve, fit_min_K, fit_max_K, y_is_T=True,
+        x_a = lle_pd.vapor.molefracs[:, 0]
+        x_b = lle_pd.liquid.molefracs[:, 0]
+        x_I_curve = x_a if np.mean(x_a) <= np.mean(x_b) else x_b
+        x_II_curve = x_b if np.mean(x_a) <= np.mean(x_b) else x_a
+        if len(T_curve) > 0 and np.max(np.abs(x_I_curve - x_II_curve)) > 1e-3:
+            _curve_plot(ax, _log_odds(x_I_curve), T_curve, fit_min_K, fit_max_K, y_is_T=True,
                         color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (phase I)")
-            _curve_plot(ax, _log_odds(x_liq), T_curve, fit_min_K, fit_max_K, y_is_T=True,
+            _curve_plot(ax, _log_odds(x_II_curve), T_curve, fit_min_K, fit_max_K, y_is_T=True,
                         color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (phase II)")
     except BaseException:
         pass
@@ -324,12 +326,14 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
                     npoints=200,
                 )
                 T_u = lle_u.liquid.temperature / si.KELVIN
-                x_liq_u = lle_u.liquid.molefracs[:, 0]
-                x_vap_u = lle_u.vapor.molefracs[:, 0]
-                if len(T_u) > 0 and np.max(np.abs(x_liq_u - x_vap_u)) > 1e-3:
-                    ax.plot(_log_odds(x_vap_u), T_u,
+                x_ua = lle_u.vapor.molefracs[:, 0]
+                x_ub = lle_u.liquid.molefracs[:, 0]
+                x_I_u = x_ua if np.mean(x_ua) <= np.mean(x_ub) else x_ub
+                x_II_u = x_ub if np.mean(x_ua) <= np.mean(x_ub) else x_ua
+                if len(T_u) > 0 and np.max(np.abs(x_I_u - x_II_u)) > 1e-3:
+                    ax.plot(_log_odds(x_I_u), T_u,
                             color=_PRED_COLOR, linestyle="--", label="Predictive (k_ij = 0)")
-                    ax.plot(_log_odds(x_liq_u), T_u,
+                    ax.plot(_log_odds(x_II_u), T_u,
                             color=_PRED_COLOR, linestyle="--")
             except BaseException:
                 pass
@@ -361,6 +365,56 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
+    return fig, ax
+
+
+# ---------------------------------------------------------------------------
+# k_ij vs T diagnostic (LLE point-wise)
+# ---------------------------------------------------------------------------
+
+def _plot_kij_vs_T(T_pw, kij_pw, kij_coeffs, kij_t_ref, id1, id2,
+                   ard_pw=None, path=None):
+    """Scatter pointwise k_ij values and the fitted polynomial k_ij(T).
+
+    Points are colored by per-point ARD% when ard_pw is provided.
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    sns.set_context("talk")
+    sns.set_style("ticks")
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    if ard_pw is not None:
+        sc = ax.scatter(T_pw, kij_pw, c=ard_pw, cmap="RdYlGn_r",
+                        vmin=0, vmax=max(float(np.max(ard_pw)), 20.0),
+                        zorder=3, label="Point-wise $k_{ij}$", s=60)
+        cb = fig.colorbar(sc, ax=ax, pad=0.02)
+        cb.set_label("ARD %", fontsize="small")
+    else:
+        ax.scatter(T_pw, kij_pw, color=_EXP_COLOR_1, zorder=3,
+                   label="Point-wise $k_{ij}$")
+
+    T_lo = float(T_pw.min()) - 5.0
+    T_hi = float(T_pw.max()) + 5.0
+    T_curve = np.linspace(T_lo, T_hi, 300)
+    kij_curve = sum(c * (T_curve - kij_t_ref) ** i for i, c in enumerate(kij_coeffs))
+    order = len(kij_coeffs) - 1
+    ax.plot(T_curve, kij_curve, color=_LINE_COLOR, linestyle="-",
+            label=f"Poly fit (order {order})")
+
+    ax.axhline(0, color=_GRAY, linewidth=0.7, linestyle=":")
+    ax.set_xlabel("$T$ / K")
+    ax.set_ylabel("$k_{ij}$")
+    ax.set_title(f"$k_{{ij}}(T)$: {id1} + {id2} (LLE)")
+    ax.legend(fontsize="small")
+    sns.despine(offset=10)
+    plt.tight_layout()
+
+    if path is not None:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
     return fig, ax
 
 

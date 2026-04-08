@@ -1,12 +1,14 @@
-"""Example: fit k_ij from LLE data, screening all water models.
+"""Example: fit k_ij from LLE data for 1-hexanol + water, screening all water models.
 
 Loops over every water model in water_models.json, fits k_ij against the
-water + toluene LLE data, and saves the best result (lowest ARD) to JSON.
+1-hexanol + water LLE data, and saves the best result (lowest ARD) to JSON.
 
-CSV schema (examples/data/lle/):
+CSV schema (examples/data/lle/1-hexanol_water.csv):
     temperature_K  — temperature [K]
-    x1_I           — mole fraction of component 1 in phase I  (water-lean)
-    x1_II          — mole fraction of component 1 in phase II (water-rich)
+    x1_I           — mole fraction of 1-hexanol in phase I  (water-rich)
+    x1_II          — mole fraction of 1-hexanol in phase II (hexanol-rich)
+
+PC-SAFT parameters for 1-hexanol: Gross & Sadowski (2001), 2B association scheme.
 """
 
 import json
@@ -19,32 +21,47 @@ from fit_pcsaft import fit_kij_lle
 
 EXAMPLES_DIR = Path(__file__).parent.parent
 
-lle_path = EXAMPLES_DIR / "data" / "lle" / "toluene_water.csv"
+lle_path = EXAMPLES_DIR / "data" / "lle" / "1-hexanol_water.csv"
 water_models_path = EXAMPLES_DIR / "data" / "parameters" / "water_models.json"
-binary_params_path = EXAMPLES_DIR / "data" / "parameters" / "binary_params.json"
+
+# PC-SAFT parameters for 1-hexanol (Gross & Sadowski, Ind. Eng. Chem. Res. 2001)
+# 2B association scheme: 1 donor site, 1 acceptor site
+HEXANOL_RECORD = {
+    "identifier": {
+        "cas": "111-27-3",
+        "name": "1-hexanol",
+        "iupac_name": "hexan-1-ol",
+        "smiles": "CCCCCCO",
+        "formula": "C6H14O",
+    },
+    "molarweight": 102.177,
+    "m": 3.3312,
+    "sigma": 3.7483,
+    "epsilon_k": 270.86,
+    "association_sites": [
+        {
+            "na": 1.0,
+            "nb": 1.0,
+            "kappa_ab": 0.002566,
+            "epsilon_k_ab": 2778.9,
+        }
+    ],
+}
 
 
 def main() -> None:
     water_models = json.loads(water_models_path.read_text())
-    binary_params = json.loads(binary_params_path.read_text())
-
-    # Extract toluene record from binary_params
-    toluene_record = next(
-        r for r in binary_params if r["identifier"]["name"] == "toluene"
-    )
 
     best_result = None
     best_ard = float("inf")
     best_model_name = None
-
-    import math
 
     print(f"{'Model':<35} {'N':>4}  {'avg ARD%':>9}  {'min ARD%':>9}  {'max ARD%':>9}")
     print("-" * 75)
 
     for water in water_models:
         model_name = water["identifier"]["name"]
-        combined = [water, toluene_record]
+        combined = [HEXANOL_RECORD, water]
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
             json.dump(combined, tmp)
@@ -52,18 +69,20 @@ def main() -> None:
 
         try:
             result = fit_kij_lle(
-                id1="toluene",
+                id1="1-hexanol",
                 id2=model_name,
                 lle_path=lle_path,
                 params_path=tmp_path,
                 kij_order=1,
                 kij_t_ref=298.15,
-                kij_bounds=(-0.3, 0.3),
+                kij_bounds=(-0.8, 0.8),
                 temperature_unit=si.KELVIN,
             )
+            import math
+
             n_pts = len(result.data["T_kij"])
             ard_pw = result.data["ard_pointwise"]
-            meaningful = ard_pw[ard_pw > 0.01]
+            meaningful = ard_pw[ard_pw > 0.01]  # exclude machine-precision near-zeros
             avg_ard = float(meaningful.mean()) if len(meaningful) > 0 else float("nan")
             min_ard = float(meaningful.min()) if len(meaningful) > 0 else float("nan")
             max_ard = float(meaningful.max()) if len(meaningful) > 0 else float("nan")
@@ -71,9 +90,11 @@ def main() -> None:
             print(
                 f"{model_name:<35} {n_pts:>4}  {fmt(avg_ard)}  {fmt(min_ard)}  {fmt(max_ard)}"
             )
-            plots_dir = EXAMPLES_DIR / "out" / "water_toluene_models"
+            plots_dir = EXAMPLES_DIR / "out" / "water_hexanol_models"
             plots_dir.mkdir(parents=True, exist_ok=True)
-            result.plot_kij(path=plots_dir / f"{model_name}.png")
+            result.plot_kij(
+                path=plots_dir / f"{model_name}.png",
+            )
             if not math.isnan(avg_ard) and avg_ard < best_ard:
                 best_ard = avg_ard
                 best_result = result
@@ -91,7 +112,9 @@ def main() -> None:
     best_result.to_json(out_json)
     print(f"\nSaved to {out_json}")
 
-    best_result.plot_kij(path=EXAMPLES_DIR / "out" / "water_toluene_lle.png")
+    best_result.plot_kij(
+        path=EXAMPLES_DIR / "out" / "water_hexanol_lle.png",
+    )
 
 
 if __name__ == "__main__":

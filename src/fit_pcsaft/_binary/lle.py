@@ -1,6 +1,8 @@
 """LLE k_ij fitting from liquid-liquid equilibrium data."""
+
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import feos
 import numpy as np
@@ -10,414 +12,223 @@ from scipy.optimize import least_squares
 from fit_pcsaft._binary._utils import (
     _build_binary_eos,
     _kij_at_T,
-    _load_lle_csv,
+    _load_binary_csv,
     _load_pure_records,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
 
-# 5 evenly-spaced global-composition candidates for one-sided tieline rows
-_Z_CANDIDATES = np.linspace(0.1, 0.9, 5)
+# 51 feed compositions, sigmoid-spaced to sample densely near x1=0 and x1=1.
+# s(i) = 0.05*i + 6e-5*i^3,  r(i) = exp(s(i)),  x1(i) = 1/(1+r(i))
+# i in {-50, -48, ..., 48, 50}  →  x1 from ~0.9999 down to ~0.0001
+_i = np.arange(-50, 51, 2, dtype=float)
+_s = 0.05 * _i + 6e-5 * _i**3
+_LLE_FEEDS: list[float] = (1.0 / (1.0 + np.exp(_s))).tolist()
+del _i, _s
 
-# Number of kij0 scan points for choosing the initial guess
-_N_KIJ_SCAN = 9
-
-# Pressure used for LLE diagram computations
-_LLE_P = 1.0 * si.BAR
-
-
-def _bubble_P(eos, T_si, z1: float):
-    """Bubble-point pressure at mole fraction z1. Returns None on failure."""
-    try:
-        z = np.array([z1, 1.0 - z1])
-        bp = feos.PhaseEquilibrium.bubble_point(eos, T_si, z)
-        return bp.liquid.pressure()
-    except Exception:
-        return None
-
-
-def _is_lle(flash) -> bool:
-    """True when both phases of a tp_flash result are liquid-like (density > 50 kg/m³)."""
-    try:
-        rho_a = flash.liquid.mass_density() / (si.KILOGRAM / si.METER**3)
-        rho_b = flash.vapor.mass_density() / (si.KILOGRAM / si.METER**3)
-        return min(rho_a, rho_b) > 50.0
-    except Exception:
-        return False
-
-
-def _tp_flash_robust(eos, T_si, P_si, feed, prev_flash=None):
-    """Attempt tp_flash with warm-start, falling back to cold start.
-
-    Returns a PhaseEquilibrium on success, or None on failure.
-    """
-    attempts = [prev_flash, None] if prev_flash is not None else [None]
-    for attempt_state in attempts:
-        try:
-            if attempt_state is not None:
-                flash = feos.PhaseEquilibrium.tp_flash(
-                    eos, T_si, P_si, feed, initial_state=attempt_state
-                )
-            else:
-                flash = feos.PhaseEquilibrium.tp_flash(eos, T_si, P_si, feed)
-            return flash
-        except Exception:
-            continue
-    return None
-
-
-def _lle_diagram(eos, T_arr_K, z1: float):
-    """Compute an LLE phase diagram and return (x_I, x_II) interpolated at T_arr_K.
-
-    Uses ``PhaseDiagram.lle`` (continuation method) which does not require a
-    cold-start initial guess.  Returns (x_I, x_II) arrays of length len(T_arr_K)
-    with NaN where interpolation fails, or (None, None) if the diagram call fails.
-
-    x_I  = component-1 mole fraction in the lean (low x1) phase.
-    x_II = component-1 mole fraction in the rich (high x1) phase.
-    """
-    T_min_K = float(T_arr_K.min())
-    T_max_K = float(T_arr_K.max())
-    # Expand range slightly so the diagram covers all data points.
-    margin = max(1.0, 0.01 * (T_max_K - T_min_K))
-    try:
-        feed = np.array([z1, 1.0 - z1]) * si.MOL
-        diag = feos.PhaseDiagram.lle(
-            eos,
-            _LLE_P,
-            feed=feed,
-            min_tp=(T_min_K - margin) * si.KELVIN,
-            max_tp=(T_max_K + margin) * si.KELVIN,
-            npoints=max(50, 4 * len(T_arr_K)),
-        )
-        T_diag = diag.liquid.temperature / si.KELVIN  # shape (npoints,)
-        if len(T_diag) == 0:
-            return None, None
-        # liquid = denser phase (water-rich), vapor = lighter phase (toluene-rich)
-        x_I_diag = diag.vapor.molefracs[:, 0]   # lean phase, comp-1
-        x_II_diag = diag.liquid.molefracs[:, 0]  # rich phase, comp-1
-
-        # Interpolate at experimental temperatures.
-        x_I = np.interp(T_arr_K, T_diag, x_I_diag)
-        x_II = np.interp(T_arr_K, T_diag, x_II_diag)
-        return x_I, x_II
-    except BaseException:
-        return None, None
-
-
-def _find_z(
-    eos0, T_si, xi_I: float, xi_II: "float | None",
-    prev_flash=None,
-) -> "tuple[float, object | None]":
-    """Pre-compute the global composition z1 for one data point.
-
-    Full tieline (both phases known): z1 = midpoint; also attempts a flash to
-    produce a warm-start hint for the next temperature point.
-    One-sided (xi_II is None or NaN): try 5 evenly-spaced candidates; falls
-    back to 0.5 if none yield a valid LLE flash.
-
-    Returns (z1, flash_result) where flash_result can be passed as prev_flash
-    to the next call for warm-starting.
-    """
-    if xi_II is not None and not np.isnan(xi_II):
-        z1 = 0.5 * (xi_I + xi_II)
-        P = _bubble_P(eos0, T_si, z1)
-        if P is not None:
-            z = np.array([z1, 1.0 - z1])
-            flash = _tp_flash_robust(eos0, T_si, P, z * si.MOL, prev_flash)
-            if flash is not None and _is_lle(flash):
-                return z1, flash
-        return z1, prev_flash  # keep propagating even if this flash failed
-
-    for z1 in _Z_CANDIDATES:
-        P = _bubble_P(eos0, T_si, z1)
-        if P is None:
-            continue
-        z = np.array([z1, 1.0 - z1])
-        flash = _tp_flash_robust(eos0, T_si, P, z * si.MOL, prev_flash)
-        if flash is not None and _is_lle(flash):
-            return float(z1), flash
-
-    return 0.5, prev_flash  # fallback
+# Number of coarse k_ij scan points used to pick the initial guess for each temperature
+_N_KIJ_SCAN = 13
 
 
 def fit_kij_lle(
     id1: str,
     id2: str,
     lle_path: "Path | str",
-    params_path: "Path | str",
+    params_path: "Path | str | list[Path | str]",
     kij_order: int = 0,
-    kij_t_ref: float = 293.15,
+    kij_t_ref: float = 298.15,
     kij_bounds: tuple = (-0.5, 0.5),
     temperature_unit=si.KELVIN,
-    temperature_offset: float = 0.0,
-    phases: "tuple[str, ...] | None" = None,
-    composition: str = "molefrac",
     t_min: "si.SIObject | None" = None,
     t_max: "si.SIObject | None" = None,
-    scipy_kwargs: "dict | None" = None,
+    pressure: "si.SIObject" = 1.01325 * si.BAR,
 ) -> BinaryFitResult:
-    """Fit binary interaction parameter k_ij from LLE data.
+    """Fit binary interaction parameter k_ij from LLE tieline data.
 
-    The CSV is read **by column position** (header names are ignored)::
-
-        2 columns  →  (T, x1_I)            one-sided tieline
-        3+ columns →  (T, x1_I, x1_II)     full tieline
-
-    For each candidate k_ij the LLE phase diagram is computed via
-    ``PhaseDiagram.lle`` (continuation method), which is robust to the
-    cold-start convergence issues of plain ``tp_flash``.  The predicted
-    compositions are interpolated at each experimental temperature and
-    compared to the data.
+    Uses a two-stage approach:
+    1. For each experimental temperature, solve an independent 1D least-squares
+       problem to find the k_ij that best reproduces the tieline compositions.
+    2. Fit a polynomial k_ij(T) to the collected (T, k_ij) pairs.
 
     Parameters
     ----------
     id1, id2 : str
         Component identifiers matching names in the params JSON file.
     lle_path : Path | str
-        CSV file — column order determines meaning, not header names.
-    params_path : Path | str
-        Feos-compatible JSON parameter file.
+        CSV file with columns: T, x1_I (phase I mole fraction); x1_II optional.
+    params_path : Path | str | list
+        Feos-compatible JSON parameter file(s).
     kij_order : int
-        Polynomial order for k_ij(T): 0=constant, 1=linear, 2=quadratic, 3=cubic.
+        Polynomial order for k_ij(T): 0=constant, 1=linear, 2=quadratic.
     kij_t_ref : float
-        Reference temperature for the k_ij polynomial [K]. Default: 293.15 K.
+        Reference temperature for the k_ij polynomial [K].
     kij_bounds : tuple
-        (lower, upper) bounds for the constant term k_ij0.
+        (lower, upper) bounds for k_ij at each temperature.
     temperature_unit : si.SIObject
-        Unit of the first CSV column (default: ``si.KELVIN``).
-    temperature_offset : float
-        Added to every T value before applying ``temperature_unit`` (default: 0.0).
-        Use ``273.15`` to convert °C → K when ``temperature_unit=si.KELVIN``.
-    phases : tuple[str, ...] | None
-        Restrict which phases contribute to the residuals.  Pass ``("I",)`` or
-        ``("II",)`` to use only one phase; ``None`` (default) uses all available.
-    composition : str
-        ``"molefrac"`` (default) or ``"massfrac"``.  When ``"massfrac"``, columns
-        2 and 3 are treated as mass fractions and converted to mole fractions
-        using the molar masses from the params JSON.
+        Unit of T column in CSV (default: K).
     t_min : si.SIObject | None
-        Lower temperature bound. Rows with T < t_min are excluded.
+        Lower temperature bound for fitting.
     t_max : si.SIObject | None
-        Upper temperature bound. Rows with T > t_max are excluded.
-    scipy_kwargs : dict | None
-        Overrides for ``scipy.optimize.least_squares`` keyword arguments.
+        Upper temperature bound for fitting.
+    pressure : si.SIObject
+        Pressure for tp_flash calculations (default: 1 bar).
 
     Returns
     -------
     BinaryFitResult
     """
     record1, record2 = _load_pure_records(params_path, id1, id2)
+    data = _load_binary_csv(lle_path)
+    data_full = {k: v.copy() for k, v in data.items()}
 
-    # --- Load CSV by column position -----------------------------------------
-    T_raw, x1_I_raw, x1_II_raw = _load_lle_csv(lle_path)
-
-    # Massfrac → molefrac conversion
-    if composition == "massfrac":
-        M1 = float(record1.molarweight)
-        M2 = float(record2.molarweight)
-
-        def w2x(w: np.ndarray) -> np.ndarray:
-            return (w / M1) / (w / M1 + (1.0 - w) / M2)
-
-        x1_I_raw = w2x(x1_I_raw)
-        if x1_II_raw is not None:
-            x1_II_raw = w2x(x1_II_raw)
-    elif composition != "molefrac":
-        raise ValueError(f"composition must be 'molefrac' or 'massfrac', got {composition!r}")
-
-    T_arr = T_raw + temperature_offset
-
-    # Capture full data (after massfrac conversion, before filtering)
-    T_arr_full = T_arr.copy()
-    x1_I_raw_full = x1_I_raw.copy()
-    x1_II_raw_full = x1_II_raw.copy() if x1_II_raw is not None else None
-
-    # --- Temperature filter --------------------------------------------------
+    # Temperature filter
     if t_min is not None or t_max is not None:
-        mask = np.ones(len(T_arr), dtype=bool)
+        mask = np.ones(len(data["T"]), dtype=bool)
         if t_min is not None:
-            mask &= T_arr >= float(t_min / temperature_unit)
+            mask &= data["T"] >= float(t_min / temperature_unit)
         if t_max is not None:
-            mask &= T_arr <= float(t_max / temperature_unit)
-        T_raw = T_raw[mask]
-        T_arr = T_arr[mask]
-        x1_I_raw = x1_I_raw[mask]
-        if x1_II_raw is not None:
-            x1_II_raw = x1_II_raw[mask]
+            mask &= data["T"] <= float(t_max / temperature_unit)
+        data = {k: v[mask] for k, v in data.items()}
 
-    n_rows = len(T_arr)
+    T_arr = data["T"].astype(float)
+    t_scale = float(temperature_unit / si.KELVIN)
+    has_I = "x1_I" in data
+    has_II = "x1_II" in data
 
-    has_phase_I = True
-    has_phase_II = x1_II_raw is not None
+    x1_I_arr = data["x1_I"].astype(float) if has_I else None
+    x1_II_arr = data["x1_II"].astype(float) if has_II else None
 
-    if phases is not None:
-        has_phase_I = has_phase_I and "I" in phases
-        has_phase_II = has_phase_II and "II" in phases
-        if not has_phase_I and not has_phase_II:
-            raise ValueError(f"phases={phases!r} excluded all available phases from the CSV")
-
-    x1_I_arr = x1_I_raw if has_phase_I else None
-    x1_II_arr = x1_II_raw if has_phase_II else None
-
-    data: dict = {"T": T_raw}
-    if x1_I_arr is not None:
-        data["x1_I"] = x1_I_arr
-    if x1_II_arr is not None:
-        data["x1_II"] = x1_II_arr
-
-    data_full: dict = {"T": T_arr_full, "x1_I": x1_I_raw_full}
-    if x1_II_raw_full is not None:
-        data_full["x1_II"] = x1_II_raw_full
-
-    # --- Pre-compute global compositions z1, sorted by temperature -----------
-    eos0 = _build_binary_eos(record1, record2, 0.0)
-    z_arr = np.empty(n_rows)
-    sort_idx = np.argsort(T_arr)  # ascending temperature order
-
-    prev_flash = None
-    for idx in sort_idx:
-        T_si = T_arr[idx] * temperature_unit
-        xi_I = float(x1_I_arr[idx]) if x1_I_arr is not None else 0.5
-        xi_II = float(x1_II_arr[idx]) if x1_II_arr is not None else None
-        z_arr[idx], prev_flash = _find_z(eos0, T_si, xi_I, xi_II, prev_flash)
-
-    # Global feed composition for PhaseDiagram.lle: use the mean z1 across all rows.
-    z1_global = float(np.mean(z_arr))
-
-    # --- Build cost function using PhaseDiagram.lle --------------------------
-    # n_phases active experimental columns
-    n_phases = int(has_phase_I) + int(has_phase_II)
-    n_resid = n_rows * n_phases * 2
-
-    def fun(coeffs: np.ndarray) -> np.ndarray:
-        resids = np.ones(n_resid)  # default penalty = 1.0
-
-        # For kij_order > 0 the kij varies with T; we run a separate diagram
-        # per unique kij.  For order=0 there is one diagram.
-        kij_per_row = np.array(
-            [_kij_at_T(coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)]
-        )
-        unique_kijs, inverse = np.unique(kij_per_row, return_inverse=True)
-
-        # Build one LLE diagram per unique kij
-        diag_cache: dict = {}
-        for uid, kij_val in enumerate(unique_kijs):
-            try:
-                eos = _build_binary_eos(record1, record2, float(kij_val))
-            except Exception:
-                diag_cache[uid] = (None, None)
-                continue
-            x_I_pred, x_II_pred = _lle_diagram(eos, T_arr, z1_global)
-            diag_cache[uid] = (x_I_pred, x_II_pred)
-
-        for i in range(n_rows):
-            r = i * n_phases * 2
-            uid = int(inverse[i])
-            x_I_pred, x_II_pred = diag_cache[uid]
-
-            x_pred_list: list = []
-            if has_phase_I and x_I_pred is not None:
-                x_pred_list.append(float(x_I_pred[i]))
-            if has_phase_II and x_II_pred is not None:
-                x_pred_list.append(float(x_II_pred[i]))
-
-            if not x_pred_list or any(np.isnan(v) for v in x_pred_list):
-                # diagram failed or out of range — keep penalty 1.0
-                continue
-
-            x_exp_list: list = []
-            if has_phase_I:
-                v = float(x1_I_arr[i])
-                if not np.isnan(v):
-                    x_exp_list.append(v)
-            if has_phase_II:
-                v = float(x1_II_arr[i])
-                if not np.isnan(v):
-                    x_exp_list.append(v)
-
-            j = 0
-            for xp, x_e in zip(x_pred_list, x_exp_list):
-                resids[r + j * 2] = (xp - x_e) / max(x_e, 1e-10)
-                resids[r + j * 2 + 1] = ((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10)
-                j += 1
-            for jj in range(j * 2, n_phases * 2):
-                resids[r + jj] = 0.0
-
-        return resids
-
-    # --- Optimize ------------------------------------------------------------
-    n_coeffs = kij_order + 1
-    lb = [kij_bounds[0]] + [-0.01] * kij_order
-    ub = [kij_bounds[1]] + [0.01] * kij_order
-
-    ls_kwargs = {
-        "method": "trf",
-        "jac": "3-point",
-        "diff_step": 0.01,
-        "bounds": (lb, ub),
-        "ftol": 1e-6,
-        "xtol": 1e-6,
-        "gtol": 1e-6,
-        "max_nfev": 2000,
-    }
-    if scipy_kwargs:
-        ls_kwargs.update(scipy_kwargs)
-
-    # Coarse scan: evaluate fun at _N_KIJ_SCAN evenly-spaced kij0 values and
-    # pick the starting point with the lowest initial cost.
-    kij0_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
-    best_x0 = np.zeros(n_coeffs)
-    best_scan_cost = np.inf
-    for kij0 in kij0_scan:
-        x0 = np.zeros(n_coeffs)
-        x0[0] = kij0
-        cost = 0.5 * np.sum(fun(x0) ** 2)
-        if cost < best_scan_cost:
-            best_scan_cost = cost
-            best_x0 = x0.copy()
-
+    # Stage 1: point-wise k_ij fitting
     t0 = time.perf_counter()
-    result = least_squares(fun, best_x0, **ls_kwargs)
-    time_elapsed = time.perf_counter() - t0
+    aggregated = _aggregate_lle_data(T_arr, x1_I_arr, x1_II_arr, t_scale)
 
-    kij_coeffs = result.x
-    eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
+    T_fitted = []
+    kij_fitted = []
+    cost_fitted = []
+    total_nfev = 0
 
-    # --- ARD -----------------------------------------------------------------
-    abs_devs: list[float] = []
-    kij_at_row = [_kij_at_T(kij_coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)]
-    unique_kijs_ard = np.unique(kij_at_row)
-    diag_ard: dict = {}
-    for kij_val in unique_kijs_ard:
+    for T_K, exp_I, exp_II in aggregated:
+        feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS
+        n_phases = (1 if exp_I is not None else 0) + (1 if exp_II is not None else 0)
+        # Penalty cost = 0.5 * n_phases * 1.0^2; accept anything below that
+        penalty_cost = 0.5 * n_phases * 0.99
+
+        def residuals(kij_arr, T_K=T_K, exp_I=exp_I, exp_II=exp_II, feeds=feeds):
+            return _residuals_at_T(
+                kij_arr,
+                T_K,
+                exp_I,
+                exp_II,
+                record1,
+                record2,
+                pressure,
+                feeds,
+            )
+
+        # Coarse scan to find best initial k_ij guess (avoids getting trapped in
+        # the flat penalty region when the EOS only shows LLE at large k_ij values).
+        kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
+        best_x0 = 0.0
+        best_scan_cost = np.inf
+        for kij_val in kij_scan:
+            try:
+                c = 0.5 * float(np.sum(residuals([kij_val]) ** 2))
+                if c < best_scan_cost:
+                    best_scan_cost = c
+                    best_x0 = kij_val
+            except Exception:
+                pass
+
         try:
-            eos = _build_binary_eos(record1, record2, float(kij_val))
-            x_I_pred, x_II_pred = _lle_diagram(eos, T_arr, z1_global)
-            diag_ard[float(kij_val)] = (x_I_pred, x_II_pred)
+            res = least_squares(
+                residuals,
+                x0=[best_x0],
+                bounds=([kij_bounds[0]], [kij_bounds[1]]),
+                method="trf",
+                ftol=1e-8,
+                xtol=1e-8,
+                gtol=1e-8,
+                max_nfev=1000,
+            )
+            total_nfev += res.nfev
+            # Accept if optimizer found a real two-phase solution (cost below penalty)
+            if res.cost < penalty_cost:
+                T_fitted.append(T_K)
+                kij_fitted.append(float(res.x[0]))
+                # ARD% = 100 * mean(|relative residuals|)
+                cost_fitted.append(100.0 * float(np.mean(np.abs(res.fun))))
         except Exception:
-            diag_ard[float(kij_val)] = (None, None)
-
-    for i in range(n_rows):
-        kij = _kij_at_T(kij_coeffs, float(T_arr[i]), kij_t_ref)
-        x_I_pred_arr, x_II_pred_arr = diag_ard.get(float(kij), (None, None))
-        if x_I_pred_arr is None:
-            continue
-        x_I_pred = float(x_I_pred_arr[i])
-        x_II_pred = float(x_II_pred_arr[i])
-        if np.isnan(x_I_pred) or np.isnan(x_II_pred):
             continue
 
-        if has_phase_I:
-            x_e = float(x1_I_arr[i])
-            xp = x_I_pred
-            abs_devs.append(abs(xp - x_e) / max(x_e, 1e-10))
-            abs_devs.append(abs((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10))
-        if has_phase_II:
-            x_e = float(x1_II_arr[i])
-            xp = x_II_pred
-            abs_devs.append(abs(xp - x_e) / max(x_e, 1e-10))
-            abs_devs.append(abs((1 - xp) - (1 - x_e)) / max(1 - x_e, 1e-10))
+    if len(T_fitted) == 0:
+        raise RuntimeError("No temperatures converged. Try relaxing kij_bounds.")
+    effective_order = min(kij_order, len(T_fitted) - 1)
 
-    ard = 100.0 * float(np.mean(abs_devs)) if abs_devs else float("nan")
+    # Stage 2: robust Cauchy polynomial fit to k_ij(T) trend
+    T_fitted_arr = np.array(T_fitted)
+    kij_fitted_arr = np.array(kij_fitted)
+    dT = T_fitted_arr - kij_t_ref
+
+    # Warm-start from OLS, then refine with Cauchy loss
+    ols_rev = np.polyfit(dT, kij_fitted_arr, effective_order)
+    x0 = ols_rev[::-1]  # lowest-order first
+
+    if effective_order == 0 or len(T_fitted) == 1:
+        kij_coeffs = x0
+    else:
+
+        def _poly_resid(coeffs):
+            pred = sum(c * dT**i for i, c in enumerate(coeffs))
+            return pred - kij_fitted_arr
+
+        rob = least_squares(
+            _poly_resid,
+            x0,
+            loss="cauchy",
+            f_scale=0.01,
+            ftol=1e-08,
+            xtol=1e-08,
+            gtol=1e-08,
+        )
+        kij_coeffs = rob.x
+
+    # Store pointwise data for diagnostic plotting
+    data["T_kij"] = T_fitted_arr
+    data["kij_pointwise"] = kij_fitted_arr
+    data["ard_pointwise"] = np.array(cost_fitted)
+
+    # Final ARD using polynomial k_ij
+    ard_errors = []
+    final_residuals_list = []
+    for T_K, exp_I, exp_II in aggregated:
+        kij_val = _kij_at_T(kij_coeffs, T_K, kij_t_ref)
+        feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS
+        r = _residuals_at_T(
+            [kij_val],
+            T_K,
+            exp_I,
+            exp_II,
+            record1,
+            record2,
+            pressure,
+            feeds,
+        )
+        final_residuals_list.extend(r.tolist())
+        valid = np.abs(r) < 0.99
+        ard_errors.extend(np.abs(r[valid]).tolist())
+
+    ard = 100.0 * float(np.mean(ard_errors)) if ard_errors else float("nan")
+    final_residuals = np.array(final_residuals_list)
+
+    poly_result = SimpleNamespace(
+        x=kij_coeffs,
+        fun=final_residuals,
+        cost=float(np.sum(final_residuals**2)) / 2.0,
+        success=True,
+        nfev=total_nfev,
+        message="Point-wise LLE fitting completed",
+    )
+
+    eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
 
     return BinaryFitResult(
         kij_coeffs=kij_coeffs,
@@ -429,8 +240,102 @@ def fit_kij_lle(
         data=data,
         data_full=data_full,
         ard=ard,
-        scipy_result=result,
-        time_elapsed=time_elapsed,
+        scipy_result=poly_result,
+        time_elapsed=time.perf_counter() - t0,
         t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
         t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
     )
+
+
+def _aggregate_lle_data(
+    T_arr: np.ndarray,
+    x1_I_arr: "np.ndarray | None",
+    x1_II_arr: "np.ndarray | None",
+    t_scale: float,
+) -> "list[tuple[float, float | None, float | None]]":
+    """Group rows by unique temperature, averaging available compositions.
+
+    Returns list of (T_K, mean_x1_I_or_None, mean_x1_II_or_None).
+    """
+    T_K_arr = T_arr * t_scale
+    unique_T = np.unique(np.round(T_K_arr, 4))
+    result = []
+    for T_K in unique_T:
+        mask = np.abs(T_K_arr - T_K) < 1e-3
+        exp_I = None
+        exp_II = None
+        if x1_I_arr is not None:
+            vals = x1_I_arr[mask]
+            valid = vals[~np.isnan(vals)]
+            if len(valid) > 0:
+                exp_I = float(np.mean(valid))
+        if x1_II_arr is not None:
+            vals = x1_II_arr[mask]
+            valid = vals[~np.isnan(vals)]
+            if len(valid) > 0:
+                exp_II = float(np.mean(valid))
+        if exp_I is not None or exp_II is not None:
+            result.append((float(T_K), exp_I, exp_II))
+    return result
+
+
+def _exp_feeds(exp_I: "float | None", exp_II: "float | None") -> "list[float]":
+    """Data-guided feed compositions to try first, before the 51-point grid."""
+    candidates = []
+    if exp_I is not None and exp_II is not None:
+        candidates.append((exp_I + exp_II) / 2.0)
+        candidates.append(0.3 * exp_I + 0.7 * exp_II)
+        candidates.append(0.7 * exp_I + 0.3 * exp_II)
+    elif exp_II is not None:
+        candidates.append(exp_II * 0.9)
+        candidates.append(exp_II * 0.5)
+    elif exp_I is not None:
+        candidates.append(min(exp_I + 0.1, 0.99))
+    return [float(np.clip(c, 0.01, 0.99)) for c in candidates]
+
+
+def _residuals_at_T(
+    kij_arr: "list[float]",
+    T_K: float,
+    exp_I: "float | None",
+    exp_II: "float | None",
+    record1,
+    record2,
+    pressure,
+    feeds: "list[float]",
+) -> np.ndarray:
+    """Residual vector for least_squares at a single temperature.
+
+    Returns relative composition errors on each available phase.
+    A penalty of [1.0, ...] is returned on tp_flash failure.
+    """
+    kij = float(kij_arr[0])
+    n_resid = (1 if exp_I is not None else 0) + (1 if exp_II is not None else 0)
+    penalty = np.ones(n_resid)
+
+    eos = _build_binary_eos(record1, record2, kij)
+
+    for z1 in feeds:
+        try:
+            feed = np.array([z1, 1.0 - z1]) * si.MOL
+            pe = feos.PhaseEquilibrium.tp_flash(eos, T_K * si.KELVIN, pressure, feed)
+            x_a = float(pe.liquid.molefracs[0])
+            x_b = float(pe.vapor.molefracs[0])
+            if abs(x_a - x_b) < 1e-4:
+                continue
+            # Skip VLE results: gas density is ~100x lower than liquid density
+            rho_a = float(pe.liquid.density / (si.MOL / si.METER**3))
+            rho_b = float(pe.vapor.density / (si.MOL / si.METER**3))
+            if min(rho_a, rho_b) / max(rho_a, rho_b) < 0.1:
+                continue
+            pred_I, pred_II = (min(x_a, x_b), max(x_a, x_b))
+            resids = []
+            if exp_I is not None:
+                resids.append((pred_I - exp_I) / max(exp_I, 1e-6))
+            if exp_II is not None:
+                resids.append((pred_II - exp_II) / max(exp_II, 1e-6))
+            return np.array(resids)
+        except Exception:
+            continue
+
+    return penalty

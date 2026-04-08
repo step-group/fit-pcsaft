@@ -46,7 +46,7 @@ def _build_binary_eos(
 ) -> "feos.EquationOfState":
     """Build a binary PC-SAFT EOS with the given k_ij."""
     params = feos.Parameters.new_binary([record1, record2], k_ij=kij)
-    return feos.EquationOfState.pcsaft(params)
+    return feos.EquationOfState.pcsaft(params, max_iter_cross_assoc=100)
 
 
 def _kij_at_T(coeffs: np.ndarray, T: float, t_ref: float) -> float:

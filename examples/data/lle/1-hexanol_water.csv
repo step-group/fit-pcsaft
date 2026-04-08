@@ -1,0 +1,90 @@
+temperature_K,x1_I,x1_II,source
+273.2,0.0014,,Erichsen
+273.2,0.00138,,Fühner
+273.2,,0.7172,Stephenson et al.
+278.7,0.001398,,Hill and White
+280,0.001358,,Hill and White
+281.8,0.001308,,Hill and White
+283.2,0.0012,,Erichsen
+283.2,0.00119,,Fühner
+283.2,,0.7205,Lin et al.
+283.4,0.00133,,Lin et al.
+283.4,,0.7106,Stephenson et al.
+284.2,0.001252,,Hill and White
+285.2,,0.697,Krasnov and Gartseva
+286.1,0.001209,,Hill and White
+287.8,0.001179,,Hill and White
+288.2,0.0012,,Vochten and Petre
+288.2,,0.697,Tokunaga et al.
+290.2,0.001139,,Hill and White
+293.2,0.0011,,Erichsen
+293.2,0.00105,,Fühner
+293.2,0.0012,0.7067,Stephenson et al.
+293.2,,0.6944,Galan et al.
+293.2,,0.691,Tokunaga et al.
+293.9,0.001085,,Hill and White
+296.1,0.00106,,Hill and White
+296.2,,0.717,Filippov et al.
+298.2,0.00111,,Butler et al.
+298.2,0.0011,0.69,Crittenden and Hixon
+298.2,0.001034,,Hill and White
+298.2,0.0011,,Huyskens et al.
+298.2,0.00106,,Kinoshita et al.
+298.2,0.0011,,Korenman et al.
+300.1,0.001021,,Hill and White
+302.1,0.00101,,Hill and White
+302.9,,0.696,Krasnov and Gartseva
+302.9,,0.6909,Stephenson
+302.9,0.001,0.7031,Stephenson et al.
+302.9,,0.689,Tokunaga et al.
+303.1,0.001,0.7,Sazonov et al.
+303.2,0.00096,,Fühner
+303.2,0.00103,,Ratouis and Dode
+303.2,,0.701,Chandy and Rao
+303.2,,0.687,Tokunaga et al.
+303.2,,0.71,Venkataratnam and Rao
+304.1,0.000999,,Hill and White
+306.2,0.000985,,Hill and White
+308,0.0009,,Fahim et al.
+308.2,,0.6948,Lin et al.
+308.2,,0.683,Tokunaga et al.
+313,0.0009,0.6878,Stephenson et al.
+313.1,0.001,,Sazonov et al.
+313.2,0.001,,Erichsen
+313.2,0.00092,,Fühner
+313.2,,0.695,Filippov et al.
+313.2,,0.691,Krasnov and Gartseva
+313.2,,0.701,Lavrova and Lesteva
+318,0.0009,,Fahim et al.
+323.2,0.0009,0.6898,Erichsen
+323.2,0.00091,,Fühner
+323.2,0.0009,0.6825,Lin et al.
+323.2,0.0009,0.6825,Stephenson et al.
+333.2,0.0009,0.6688,Erichsen
+333.2,0.00094,,Fühner
+333.2,0.0009,,Lavrova and Lesteva
+333.2,0.0009,0.6664,Stephenson et al.
+343.2,0.001,0.6464,Erichsen
+343.2,0.001,,Fühner
+343.5,0.001,0.6494,Stephenson et al.
+353.2,0.0011,0.6228,Erichsen
+353.2,0.0011,,Fühner
+353.5,0.0011,0.6353,Stephenson et al.
+363.2,0.0012,0.6018,Erichsen
+363.2,0.00121,,Fühner
+363.5,,0.6257,Stephenson et al.
+373.2,0.0014,0.5806,Erichsen
+373.2,0.00139,,Fühner
+383.2,0.0016,0.5582,Erichsen
+383.2,0.00158,,Fühner
+393.2,0.0019,0.5348,Erichsen
+403.2,0.0021,0.5098,Erichsen
+413.2,,0.4836,Erichsen
+423.2,,0.454,Erichsen
+433.2,,0.4237,Erichsen
+443.2,0.005,0.3917,Erichsen
+453.2,0.0066,0.3534,Erichsen
+463.2,0.009,0.3099,Erichsen
+473.2,0.0128,0.2602,Erichsen
+483.2,0.0189,0.2008,Erichsen
+493.2,0.0342,0.1245,Erichsen
