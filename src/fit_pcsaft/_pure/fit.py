@@ -16,7 +16,7 @@ from fit_pcsaft._fit_utils import (
 )
 from fit_pcsaft._pure.jacobian import _make_f_and_df
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
-from fit_pcsaft.result import FitResult
+from fit_pcsaft.result import EvalResult, FitResult
 
 _X0_NONASSOC: list[list[float]] = [
     [4.0, 3.7, 300],
@@ -565,3 +565,125 @@ def fit_pure_de(
     )
 
 
+def eval_pure(
+    id: str,
+    psat_path: "Path | str",
+    density_path: "Path | str",
+    params: dict,
+    hvap_path: Optional["Path | str"] = None,
+    q: float = 0.0,
+    na: Optional[int] = None,
+    nb: Optional[int] = None,
+    pressure_unit: "si.SIObject" = si.KILO * si.PASCAL,
+    temperature_unit: "si.SIObject" = si.KELVIN,
+    density_unit: "si.SIObject" = si.KILOGRAM / (si.METER**3),
+    enthalpy_unit: "si.SIObject" = si.KILO * si.JOULE / si.MOL,
+) -> EvalResult:
+    """Evaluate PC-SAFT parameters against experimental data and return ARD%.
+
+    Useful for benchmarking literature parameter sets without fitting.
+
+    Arguments
+    ---------
+        id : str
+            Compound identifier (name, SMILES, or InChI) for PubChem lookup
+        psat_path : Path | str
+            Path to vapor pressure CSV (T, Psat)
+        density_path : Path | str
+            Path to liquid density CSV (T, rhoL)
+        params : dict
+            PC-SAFT parameters. Required keys: ``m``, ``sigma``, ``epsilon_k``.
+            Optional: ``mu`` (Debye), ``kappa_ab``, ``epsilon_k_ab``.
+        hvap_path : Path | str or None
+            Path to enthalpy of vaporization CSV (T, Hvap). Optional.
+        q : float
+            Quadrupole moment (default: 0.0).
+        na : int or None
+            Number of association sites A. Required if ``kappa_ab`` is in params.
+            Defaults to 1 when ``kappa_ab`` is present and na/nb are unspecified.
+        nb : int or None
+            Number of association sites B. Defaults to 1 when ``kappa_ab`` is present.
+        pressure_unit : si.SIObject
+            Unit for pressure in CSV (default: kPa)
+        temperature_unit : si.SIObject
+            Unit for temperature in CSV (default: K)
+        density_unit : si.SIObject
+            Unit for density in CSV (default: kg/m³)
+        enthalpy_unit : si.SIObject
+            Unit for enthalpy of vaporization in CSV (default: kJ/mol)
+
+    Returns
+    -------
+        EvalResult: EOS, experimental data, and ARD% metrics
+
+    Example
+    -------
+    >>> result = eval_pure(
+    ...     "ethanol",
+    ...     psat_path="data/ethanol_psat.csv",
+    ...     density_path="data/ethanol_rho.csv",
+    ...     params={"m": 2.3827, "sigma": 3.1771, "epsilon_k": 198.24,
+    ...             "kappa_ab": 0.032384, "epsilon_k_ab": 2653.4},
+    ...     na=1, nb=1,
+    ... )
+    >>> print(result)
+    """
+    identifier, mw = _fetch_compound(id)
+
+    _t_psat, _p_psat = _load_csv(psat_path)
+    _t_rho, _d_rho = _load_csv(density_path)
+
+    if hvap_path is not None:
+        _t_hvap, _d_hvap = _load_csv(hvap_path)
+    else:
+        _t_hvap, _d_hvap = np.array([]), np.array([])
+
+    data = PureData(
+        T_psat=_t_psat,
+        p_psat=_p_psat,
+        T_rho=_t_rho,
+        rho=_d_rho,
+        T_hvap=_t_hvap,
+        hvap=_d_hvap,
+    )
+
+    # Infer association from params dict if na/nb not given
+    has_assoc_params = "kappa_ab" in params and "epsilon_k_ab" in params
+    if has_assoc_params and na is None:
+        na = 1
+    if has_assoc_params and nb is None:
+        nb = 1
+
+    mu_val = params.get("mu", 0.0)
+    compound = Compound(identifier=identifier, mw=float(mw))
+    spec = ModelSpec(mu=float(mu_val), na=na, nb=nb, q=q)
+    units = Units(
+        temperature=temperature_unit,
+        pressure=pressure_unit,
+        density=density_unit,
+        enthalpy=enthalpy_unit,
+    )
+
+    # Build params_vec: [m, sigma, epsilon_k, (kappa_ab, epsilon_k_ab if assoc)]
+    # mu is fixed via spec.mu, so it does NOT go into the vec
+    params_vec = [params["m"], params["sigma"], params["epsilon_k"]]
+    if has_assoc_params:
+        params_vec += [params["kappa_ab"], params["epsilon_k_ab"]]
+    params_vec = np.array(params_vec, dtype=float)
+
+    eos, ard_psat, ard_rho, ard_hvap = _compute_ard_metrics(
+        params_vec, data, compound, spec, units
+    )
+
+    return EvalResult(
+        params=dict(params),
+        eos=eos,
+        data=data,
+        compound=compound,
+        spec=spec,
+        units=units,
+        ard_psat=ard_psat,
+        ard_rho=ard_rho,
+        ard_hvap=ard_hvap,
+        input_name=id,
+    )

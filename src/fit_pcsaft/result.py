@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import feos
 import numpy as np
@@ -272,6 +273,112 @@ class FitResult:
             ]
         )
         lines.extend(quality_lines)
+
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class EvalResult:
+    """Result of evaluating PC-SAFT parameters against experimental data.
+
+    Attributes
+    ----------
+        params : dict
+            Parameters that were evaluated {"m", "sigma", "epsilon_k", ...}
+        eos : feos.EquationOfState
+            Constructed EOS object
+        data : PureData
+            Experimental data used for evaluation
+        compound : Compound
+            Compound identifier and molar weight
+        spec : ModelSpec
+            Model specification (mu, q, na, nb)
+        units : Units
+            Units for experimental data
+        ard_psat : float
+            Average relative deviation for vapor pressure (%)
+        ard_rho : float
+            Average relative deviation for liquid density (%)
+        ard_hvap : float
+            Average relative deviation for enthalpy of vaporization (%). nan if no data.
+        input_name : str
+            Compound name as supplied by the user
+    """
+
+    params: dict
+    eos: feos.EquationOfState
+    data: PureData
+    compound: Compound
+    spec: ModelSpec
+    units: Units
+    ard_psat: float
+    ard_rho: float
+    ard_hvap: float
+    input_name: str = ""
+
+    def plot(
+        self,
+        path=None,
+        color: str = "red",
+        line_color: str = "black",
+        linestyle: str = "-",
+        scatter_kw: Optional[dict] = None,
+        line_kw: Optional[dict] = None,
+    ):
+        """Two-panel phase diagram with experimental data overlay."""
+        from fit_pcsaft._plot import _plot_pure
+
+        return _plot_pure(
+            self,
+            path=path,
+            color=color,
+            line_color=line_color,
+            linestyle=linestyle,
+            scatter_kw=scatter_kw,
+            line_kw=line_kw,
+        )
+
+    def __str__(self) -> str:
+        mu = self.params.get("mu", self.spec.mu or 0.0)
+        q = self.spec.q
+        na = self.spec.na
+        nb = self.spec.nb
+        n_psat = len(self.data.T_psat)
+        n_rho = len(self.data.T_rho)
+        n_hvap = len(self.data.T_hvap)
+
+        lines = [
+            "Parameters:",
+            f"  m (segments):            {self.params['m']:.4f}",
+            f"  σ (diameter):            {self.params['sigma']:.4f} Å",
+            f"  ε/k (energy):            {self.params['epsilon_k']:.2f} K",
+        ]
+        if mu != 0.0:
+            lines.append(f"  μ (dipole):              {mu:.4f} D")
+        if q != 0.0:
+            lines.append(f"  q (quadrupole):          {q:.4f} DÅ")
+        if "kappa_ab" in self.params:
+            lines.append(f"  κ_ab (assoc. volume):    {self.params['kappa_ab']:.6f}")
+        if "epsilon_k_ab" in self.params:
+            lines.append(
+                f"  ε_ab/k (assoc. energy):  {self.params['epsilon_k_ab']:.2f} K"
+            )
+        if na is not None:
+            scheme = _assoc_scheme_name(na, nb)
+            lines.append(f"\nAssociation scheme:        {scheme} (na={na}, nb={nb})")
+
+        ard_total = sum(
+            v for v in [self.ard_psat, self.ard_rho, self.ard_hvap] if not np.isnan(v)
+        )
+        lines += [
+            "",
+            "ARD% vs experimental data:",
+            f"  ARD vapor pressure:      {self.ard_psat:.2f}%  (n={n_psat})",
+            f"  ARD liquid density:      {self.ard_rho:.2f}%  (n={n_rho})",
+        ]
+        if n_hvap > 0:
+            lines.append(f"  ARD enthalpy of vap.:    {self.ard_hvap:.2f}%  (n={n_hvap})")
+        lines.append(f"  ARD total:               {ard_total:.2f}%")
 
         return "\n".join(lines)
 
