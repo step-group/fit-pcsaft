@@ -12,6 +12,7 @@ PC-SAFT parameters for 1-hexanol: Gross & Sadowski (2001), 2B association scheme
 """
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -32,24 +33,29 @@ HEXANOL_RECORD = {
         "name": "1-hexanol",
         "iupac_name": "hexan-1-ol",
         "smiles": "CCCCCCO",
+        "inchi": "InChI=1S/C6H14O/c1-2-3-4-5-6-7/h7H,2-6H2,1H3",
         "formula": "C6H14O",
     },
-    "molarweight": 102.177,
-    "m": 3.3312,
-    "sigma": 3.7483,
-    "epsilon_k": 270.86,
+    "molarweight": 102.17,
+    "m": 2.6895,
+    "sigma": 4.0593,
+    "epsilon_k": 294.85,
     "association_sites": [
         {
             "na": 1.0,
             "nb": 1.0,
-            "kappa_ab": 0.002566,
-            "epsilon_k_ab": 2778.9,
+            "kappa_ab": 0.002417,
+            "epsilon_k_ab": 2942.29,
         }
     ],
 }
 
 
 def main() -> None:
+    plots_dir = EXAMPLES_DIR / "out" / "water_hexanol_models"
+    shutil.rmtree(plots_dir, ignore_errors=True)
+    plots_dir.mkdir(parents=True)
+
     water_models = json.loads(water_models_path.read_text())
 
     best_result = None
@@ -73,9 +79,9 @@ def main() -> None:
                 id2=model_name,
                 lle_path=lle_path,
                 params_path=tmp_path,
-                kij_order=1,
+                kij_order=2,
                 kij_t_ref=298.15,
-                kij_bounds=(-0.8, 0.8),
+                kij_bounds=(-0.2, 0.2),
                 temperature_unit=si.KELVIN,
             )
             import math
@@ -90,11 +96,8 @@ def main() -> None:
             print(
                 f"{model_name:<35} {n_pts:>4}  {fmt(avg_ard)}  {fmt(min_ard)}  {fmt(max_ard)}"
             )
-            plots_dir = EXAMPLES_DIR / "out" / "water_hexanol_models"
-            plots_dir.mkdir(parents=True, exist_ok=True)
-            result.plot_kij(
-                path=plots_dir / f"{model_name}.png",
-            )
+            result.plot_kij(path=plots_dir / f"{model_name}_kij.png")
+            result.plot(path=plots_dir / f"{model_name}_lle.png")
             if not math.isnan(avg_ard) and avg_ard < best_ard:
                 best_ard = avg_ard
                 best_result = result
@@ -112,9 +115,8 @@ def main() -> None:
     best_result.to_json(out_json)
     print(f"\nSaved to {out_json}")
 
-    best_result.plot_kij(
-        path=EXAMPLES_DIR / "out" / "water_hexanol_lle.png",
-    )
+    best_result.plot_kij(path=EXAMPLES_DIR / "out" / "water_hexanol_kij.png")
+    best_result.plot(path=EXAMPLES_DIR / "out" / "water_hexanol_lle.png")
 
 
 if __name__ == "__main__":

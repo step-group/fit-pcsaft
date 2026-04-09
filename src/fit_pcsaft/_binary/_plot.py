@@ -4,10 +4,10 @@ import numpy as np
 import si_units as si
 
 _LINE_COLOR = "#000000"
-_EXP_COLOR_1 = "#E32F2F"   # liquid / phase I
-_EXP_COLOR_2 = "#1F77B4"   # vapor / phase II
-_GRAY = "#AAAAAA"           # filtered-out (unused) data points
-_PRED_COLOR = "#888888"     # unfitted / predictive (k_ij = 0) curves
+_EXP_COLOR_1 = "#E32F2F"  # liquid / phase I
+_EXP_COLOR_2 = "#1F77B4"  # vapor / phase II
+_GRAY = "#AAAAAA"  # filtered-out (unused) data points
+_PRED_COLOR = "#888888"  # unfitted / predictive (k_ij = 0) curves
 
 _R = si.RGAS / (si.JOULE / (si.MOL * si.KELVIN))
 
@@ -67,10 +67,19 @@ def _curve_plot(ax, x_arr, y_arr, fit_min_K, fit_max_K, y_is_T: bool, **line_kw)
         ax.plot(x_arr[in_range], y_arr[in_range], **line_kw)
 
 
-def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si.KILO * si.PASCAL, henry_unit=si.MEGA * si.PASCAL, plot_unfitted: bool = False):
+def _plot_binary(
+    result,
+    path=None,
+    temperature_unit=si.KELVIN,
+    pressure_unit=si.KILO * si.PASCAL,
+    henry_unit=si.MEGA * si.PASCAL,
+    plot_unfitted: bool = False,
+):
     eq = result.equilibrium_type
     if eq == "vle":
-        return _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted=plot_unfitted)
+        return _plot_vle(
+            result, path, temperature_unit, pressure_unit, plot_unfitted=plot_unfitted
+        )
     elif eq == "lle":
         return _plot_lle(result, path, temperature_unit, plot_unfitted=plot_unfitted)
     elif eq == "sle":
@@ -84,6 +93,7 @@ def _plot_binary(result, path=None, temperature_unit=si.KELVIN, pressure_unit=si
 # ---------------------------------------------------------------------------
 # VLE
 # ---------------------------------------------------------------------------
+
 
 def _lle_feed_z1(result) -> float:
     """Estimate a representative feed composition z1 from experimental LLE data.
@@ -109,6 +119,7 @@ def _lle_feed_z1(result) -> float:
 def _build_eos_kij0(result):
     """Return a new EOS with k_ij=0.0, or None if the parameters are unavailable."""
     import feos
+
     try:
         pure_records = result.eos.parameters.pure_records
         params = feos.Parameters.new_binary(pure_records, k_ij=0.0)
@@ -117,7 +128,9 @@ def _build_eos_kij0(result):
         return None
 
 
-def _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted: bool = False):
+def _plot_vle(
+    result, path, temperature_unit, pressure_unit, plot_unfitted: bool = False
+):
     import feos
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -127,7 +140,7 @@ def _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted: bool
 
     data = result.data
     t_scale = float(temperature_unit / si.KELVIN)
-    T_data = data["T"].astype(float) * t_scale          # → K
+    T_data = data["T"].astype(float) * t_scale  # → K
     P_data = data["P"].astype(float)
     x1_data = data["x1"].astype(float)
     has_y1 = "y1" in data
@@ -155,12 +168,28 @@ def _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted: bool
                 result.eos, P_mean * pressure_unit, npoints=200
             )
             T_curve = vle_pd.liquid.temperature / si.KELVIN
-            _curve_plot(ax, vle_pd.liquid.molefracs[:, 0], T_curve,
-                        fit_min_K, fit_max_K, y_is_T=True,
-                        color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (bubble)")
-            _curve_plot(ax, vle_pd.vapor.molefracs[:, 0], T_curve,
-                        fit_min_K, fit_max_K, y_is_T=True,
-                        color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (dew)")
+            _curve_plot(
+                ax,
+                vle_pd.liquid.molefracs[:, 0],
+                T_curve,
+                fit_min_K,
+                fit_max_K,
+                y_is_T=True,
+                color=_EXP_COLOR_1,
+                linestyle="-",
+                label="PC-SAFT (bubble)",
+            )
+            _curve_plot(
+                ax,
+                vle_pd.vapor.molefracs[:, 0],
+                T_curve,
+                fit_min_K,
+                fit_max_K,
+                y_is_T=True,
+                color=_EXP_COLOR_2,
+                linestyle="-",
+                label="PC-SAFT (dew)",
+            )
         except Exception:
             pass
 
@@ -172,25 +201,42 @@ def _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted: bool
                         eos_u, P_mean * pressure_unit, npoints=200
                     )
                     T_u = vle_u.liquid.temperature / si.KELVIN
-                    ax.plot(vle_u.liquid.molefracs[:, 0], T_u,
-                            color=_PRED_COLOR, linestyle="--", label="Predictive (k_ij = 0)")
-                    ax.plot(vle_u.vapor.molefracs[:, 0], T_u,
-                            color=_PRED_COLOR, linestyle="--")
+                    ax.plot(
+                        vle_u.liquid.molefracs[:, 0],
+                        T_u,
+                        color=_PRED_COLOR,
+                        linestyle="--",
+                        label="Predictive (k_ij = 0)",
+                    )
+                    ax.plot(
+                        vle_u.vapor.molefracs[:, 0],
+                        T_u,
+                        color=_PRED_COLOR,
+                        linestyle="--",
+                    )
                 except Exception:
                     pass
 
         if unused_mask.any():
             x1_full = result.data_full["x1"].astype(float)
-            ax.scatter(x1_full[unused_mask], T_data_full[unused_mask],
-                       **_scatter_kw(_GRAY))
+            ax.scatter(
+                x1_full[unused_mask], T_data_full[unused_mask], **_scatter_kw(_GRAY)
+            )
             if "y1" in result.data_full:
-                ax.scatter(result.data_full["y1"].astype(float)[unused_mask],
-                           T_data_full[unused_mask], **_scatter_kw(_GRAY, "^"))
+                ax.scatter(
+                    result.data_full["y1"].astype(float)[unused_mask],
+                    T_data_full[unused_mask],
+                    **_scatter_kw(_GRAY, "^"),
+                )
 
         ax.scatter(x1_data, T_data, label=r"Exp. $x_1$", **_scatter_kw(_EXP_COLOR_1))
         if has_y1:
-            ax.scatter(data["y1"].astype(float), T_data,
-                       label=r"Exp. $y_1$", **_scatter_kw(_EXP_COLOR_2, "^"))
+            ax.scatter(
+                data["y1"].astype(float),
+                T_data,
+                label=r"Exp. $y_1$",
+                **_scatter_kw(_EXP_COLOR_2, "^"),
+            )
         ax.set_xlabel(rf"$x_1,\,y_1$ ({result.id1})")
         ax.set_ylabel("$T$ / K")
         ax.set_xlim(0, 1)
@@ -205,7 +251,9 @@ def _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted: bool
 
         x1_full = result.data_full["x1"].astype(float)
         P_full = result.data_full["P"].astype(float)
-        y1_full = result.data_full["y1"].astype(float) if "y1" in result.data_full else None
+        y1_full = (
+            result.data_full["y1"].astype(float) if "y1" in result.data_full else None
+        )
 
         for k, T_iso in enumerate(unique_Ts):
             color = colors[k]
@@ -218,20 +266,36 @@ def _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted: bool
                     result.eos, T_iso * si.KELVIN, npoints=200
                 )
                 P_curve = vle_iso.liquid.pressure / pressure_unit
-                ax.plot(vle_iso.liquid.molefracs[:, 0], P_curve,
-                        color=color, linestyle=ls, alpha=alpha)
-                ax.plot(vle_iso.vapor.molefracs[:, 0], P_curve,
-                        color=color, linestyle=ls, alpha=alpha)
+                ax.plot(
+                    vle_iso.liquid.molefracs[:, 0],
+                    P_curve,
+                    color=color,
+                    linestyle=ls,
+                    alpha=alpha,
+                )
+                ax.plot(
+                    vle_iso.vapor.molefracs[:, 0],
+                    P_curve,
+                    color=color,
+                    linestyle=ls,
+                    alpha=alpha,
+                )
             except Exception:
                 pass
 
             iso_mask_full = np.abs(T_data_full - T_iso) < 0.6
-            ax.scatter(x1_full[iso_mask_full], P_full[iso_mask_full],
-                       label=f"{T_iso:.0f} K" if iso_in_range else None,
-                       **_scatter_kw(scatter_color))
+            ax.scatter(
+                x1_full[iso_mask_full],
+                P_full[iso_mask_full],
+                label=f"{T_iso:.0f} K" if iso_in_range else None,
+                **_scatter_kw(scatter_color),
+            )
             if y1_full is not None:
-                ax.scatter(y1_full[iso_mask_full], P_full[iso_mask_full],
-                           **_scatter_kw(scatter_color, "^"))
+                ax.scatter(
+                    y1_full[iso_mask_full],
+                    P_full[iso_mask_full],
+                    **_scatter_kw(scatter_color, "^"),
+                )
 
         ax.set_xlabel(rf"$x_1,\,y_1$ ({result.id1})")
         ax.set_ylabel(f"$p$ / {p_lbl}")
@@ -253,6 +317,87 @@ def _plot_vle(result, path, temperature_unit, pressure_unit, plot_unfitted: bool
 # LLE
 # ---------------------------------------------------------------------------
 
+
+def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int = 200):
+    """Compute LLE phase-boundary curve with temperature-dependent k_ij(T).
+
+    For each T, builds a fresh EOS from k_ij(T) and flashes with liquid
+    initialization + warm-start from the previous temperature's PE.
+
+    Returns (T_arr, x_I_list, x_II_list) — lists of successfully converged points.
+    """
+    import feos
+
+    from fit_pcsaft._binary._utils import _build_binary_eos, _kij_at_T
+
+    if result._record1 is None or result._record2 is None:
+        return np.array([]), [], []
+
+    from fit_pcsaft._binary.lle import _LLE_FEEDS
+
+    dT = (T_max - T_min) / npoints  # step size from data range
+    T_anchor_K = T_min
+    pressure = 1.0 * si.BAR
+    # Primary feed + sigmoid grid as fallback (mirrors fitting routine)
+    feeds = [z1] + _LLE_FEEDS
+
+    T_out, x_I_out, x_II_out = [], [], []
+    n_consec_fail = 0
+
+    T_K = T_min
+    while T_K <= T_max + 500.0:  # extend up to 500 K past data range
+        kij_T = _kij_at_T(result.kij_coeffs, T_K, result.kij_t_ref)
+        eos_T = _build_binary_eos(result._record1, result._record2, kij_T)
+
+        # Build anchor PE at T_min with the *same* EOS (same k_ij) — EOS-compatible
+        # warm start, identical to the fitting routine's T_anchor_K approach.
+        anchor_pe = None
+        if T_K > T_anchor_K + 0.5:
+            try:
+                moles_a = np.array([feeds[0], 1.0 - feeds[0]]) * si.MOL
+                s_a = feos.State(
+                    eos_T, T_anchor_K * si.KELVIN, pressure=pressure,
+                    moles=moles_a, density_initialization="liquid",
+                )
+                anchor_pe = s_a.tp_flash(max_iter=500)
+            except Exception:
+                pass
+
+        pe = None
+        for z in feeds:
+            try:
+                moles = np.array([z, 1.0 - z]) * si.MOL
+                s = feos.State(
+                    eos_T, T_K * si.KELVIN, pressure=pressure,
+                    moles=moles, density_initialization="liquid",
+                )
+                candidate = s.tp_flash(initial_state=anchor_pe, max_iter=1000)
+                x_a = float(candidate.liquid.molefracs[0])
+                x_b = float(candidate.vapor.molefracs[0])
+                # Accept if phases are distinct (not near-critical phantoms)
+                if max(x_a, x_b) - min(x_a, x_b) > 0.05:
+                    pe = candidate
+                    break
+            except Exception:
+                pass
+
+        if pe is not None:
+            x_a = float(pe.liquid.molefracs[0])
+            x_b = float(pe.vapor.molefracs[0])
+            T_out.append(T_K)
+            x_I_out.append(min(x_a, x_b))   # Phase I  = id1-lean
+            x_II_out.append(max(x_a, x_b))  # Phase II = id1-rich
+            n_consec_fail = 0
+        else:
+            n_consec_fail += 1
+            if n_consec_fail >= 10:
+                break  # envelope has closed
+
+        T_K += dT
+
+    return np.array(T_out), x_I_out, x_II_out
+
+
 def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
     import feos
     import matplotlib.pyplot as plt
@@ -267,8 +412,6 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
     has_I = "x1_I" in data
     has_II = "x1_II" in data
 
-    T_min = float(T_data.min())
-    T_max = float(T_data.max())
     T_full = result.data_full["T"].astype(float) * t_scale
     T_pad = max((T_full.max() - T_full.min()) * 0.05, 1.0)
 
@@ -291,69 +434,97 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
     z1 = _lle_feed_z1(result)
     feed_si = np.array([z1, 1.0 - z1]) * si.MOL
 
-    try:
-        lle_pd = feos.PhaseDiagram.lle(
-            result.eos,
-            1.0 * si.BAR,
-            feed=feed_si,
-            min_tp=curve_T_min * si.KELVIN,
-            max_tp=curve_T_max * si.KELVIN,
-            npoints=200,
+    # Compute LLE curve with temperature-dependent k_ij(T) + warm-start continuation.
+    # Each T gets its own EOS built with kij(T); initial_state from the previous T
+    # steers the flash toward LLE rather than VLE.
+    T_curve_arr, x_I_curve_list, x_II_curve_list = _lle_curve_kij_T(
+        result, z1, curve_T_min, curve_T_max, npoints=200
+    )
+    if (
+        len(T_curve_arr) > 0
+        and np.max(np.abs(np.array(x_I_curve_list) - np.array(x_II_curve_list))) > 1e-3
+    ):
+        _curve_plot(
+            ax,
+            _log_odds(x_I_curve_list),
+            T_curve_arr,
+            fit_min_K,
+            fit_max_K,
+            y_is_T=True,
+            color=_EXP_COLOR_1,
+            linestyle="-",
+            label="PC-SAFT (phase I)",
         )
-        T_curve = lle_pd.liquid.temperature / si.KELVIN
-        x_a = lle_pd.vapor.molefracs[:, 0]
-        x_b = lle_pd.liquid.molefracs[:, 0]
-        x_I_curve = x_a if np.mean(x_a) <= np.mean(x_b) else x_b
-        x_II_curve = x_b if np.mean(x_a) <= np.mean(x_b) else x_a
-        if len(T_curve) > 0 and np.max(np.abs(x_I_curve - x_II_curve)) > 1e-3:
-            _curve_plot(ax, _log_odds(x_I_curve), T_curve, fit_min_K, fit_max_K, y_is_T=True,
-                        color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (phase I)")
-            _curve_plot(ax, _log_odds(x_II_curve), T_curve, fit_min_K, fit_max_K, y_is_T=True,
-                        color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (phase II)")
-    except BaseException:
-        pass
+        _curve_plot(
+            ax,
+            _log_odds(x_II_curve_list),
+            T_curve_arr,
+            fit_min_K,
+            fit_max_K,
+            y_is_T=True,
+            color=_EXP_COLOR_2,
+            linestyle="-",
+            label="PC-SAFT (phase II)",
+        )
 
     if plot_unfitted:
         eos_u = _build_eos_kij0(result)
         if eos_u is not None:
-            try:
-                lle_u = feos.PhaseDiagram.lle(
-                    eos_u,
-                    1.0 * si.BAR,
-                    feed=feed_si,
-                    min_tp=curve_T_min * si.KELVIN,
-                    max_tp=curve_T_max * si.KELVIN,
-                    npoints=200,
+            # Build a mock result with kij=0 records to reuse _lle_curve_kij_T
+            from types import SimpleNamespace
+
+            mock = SimpleNamespace(
+                _record1=result._record1,
+                _record2=result._record2,
+                kij_coeffs=np.array([0.0]),
+                kij_t_ref=result.kij_t_ref,
+            )
+            T_u, x_I_u, x_II_u = _lle_curve_kij_T(
+                mock, z1, curve_T_min, curve_T_max, npoints=200
+            )
+            if (
+                len(T_u) > 0
+                and np.max(np.abs(np.array(x_I_u) - np.array(x_II_u))) > 1e-3
+            ):
+                ax.plot(
+                    _log_odds(x_I_u),
+                    T_u,
+                    color=_PRED_COLOR,
+                    linestyle="--",
+                    label="Predictive (k_ij = 0)",
                 )
-                T_u = lle_u.liquid.temperature / si.KELVIN
-                x_ua = lle_u.vapor.molefracs[:, 0]
-                x_ub = lle_u.liquid.molefracs[:, 0]
-                x_I_u = x_ua if np.mean(x_ua) <= np.mean(x_ub) else x_ub
-                x_II_u = x_ub if np.mean(x_ua) <= np.mean(x_ub) else x_ua
-                if len(T_u) > 0 and np.max(np.abs(x_I_u - x_II_u)) > 1e-3:
-                    ax.plot(_log_odds(x_I_u), T_u,
-                            color=_PRED_COLOR, linestyle="--", label="Predictive (k_ij = 0)")
-                    ax.plot(_log_odds(x_II_u), T_u,
-                            color=_PRED_COLOR, linestyle="--")
-            except BaseException:
-                pass
+                ax.plot(_log_odds(x_II_u), T_u, color=_PRED_COLOR, linestyle="--")
 
     # Unused experimental points (gray, drawn first so used points sit on top)
     if unused_mask.any():
         T_unused = T_full[unused_mask]
         if "x1_I" in result.data_full:
-            ax.scatter(_log_odds(result.data_full["x1_I"].astype(float)[unused_mask]),
-                       T_unused, **_scatter_kw(_GRAY))
+            ax.scatter(
+                _log_odds(result.data_full["x1_I"].astype(float)[unused_mask]),
+                T_unused,
+                **_scatter_kw(_GRAY),
+            )
         if "x1_II" in result.data_full:
-            ax.scatter(_log_odds(result.data_full["x1_II"].astype(float)[unused_mask]),
-                       T_unused, **_scatter_kw(_GRAY, "^"))
+            ax.scatter(
+                _log_odds(result.data_full["x1_II"].astype(float)[unused_mask]),
+                T_unused,
+                **_scatter_kw(_GRAY, "^"),
+            )
 
     if has_I:
-        ax.scatter(_log_odds(data["x1_I"].astype(float)), T_data,
-                   label="Exp. phase I", **_scatter_kw(_EXP_COLOR_1))
+        ax.scatter(
+            _log_odds(data["x1_I"].astype(float)),
+            T_data,
+            label="Exp. phase I",
+            **_scatter_kw(_EXP_COLOR_1),
+        )
     if has_II:
-        ax.scatter(_log_odds(data["x1_II"].astype(float)), T_data,
-                   label="Exp. phase II", **_scatter_kw(_EXP_COLOR_2, "^"))
+        ax.scatter(
+            _log_odds(data["x1_II"].astype(float)),
+            T_data,
+            label="Exp. phase II",
+            **_scatter_kw(_EXP_COLOR_2, "^"),
+        )
 
     ax.set_xlabel(rf"$\log_{{10}}(x_1/x_2)$  ({result.id1} / {result.id2})")
     ax.set_ylabel("$T$ / K")
@@ -365,6 +536,7 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
     return fig, ax
 
 
@@ -372,8 +544,10 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
 # k_ij vs T diagnostic (LLE point-wise)
 # ---------------------------------------------------------------------------
 
-def _plot_kij_vs_T(T_pw, kij_pw, kij_coeffs, kij_t_ref, id1, id2,
-                   ard_pw=None, path=None):
+
+def _plot_kij_vs_T(
+    T_pw, kij_pw, kij_coeffs, kij_t_ref, id1, id2, ard_pw=None, path=None
+):
     """Scatter pointwise k_ij values and the fitted polynomial k_ij(T).
 
     Points are colored by per-point ARD% when ard_pw is provided.
@@ -387,22 +561,36 @@ def _plot_kij_vs_T(T_pw, kij_pw, kij_coeffs, kij_t_ref, id1, id2,
     fig, ax = plt.subplots(figsize=(7, 5))
 
     if ard_pw is not None:
-        sc = ax.scatter(T_pw, kij_pw, c=ard_pw, cmap="RdYlGn_r",
-                        vmin=0, vmax=max(float(np.max(ard_pw)), 20.0),
-                        zorder=3, label="Point-wise $k_{ij}$", s=60)
+        sc = ax.scatter(
+            T_pw,
+            kij_pw,
+            c=ard_pw,
+            cmap="RdYlGn_r",
+            vmin=0,
+            vmax=max(float(np.max(ard_pw)), 20.0),
+            zorder=3,
+            label="Point-wise $k_{ij}$",
+            s=60,
+        )
         cb = fig.colorbar(sc, ax=ax, pad=0.02)
         cb.set_label("ARD %", fontsize="small")
     else:
-        ax.scatter(T_pw, kij_pw, color=_EXP_COLOR_1, zorder=3,
-                   label="Point-wise $k_{ij}$")
+        ax.scatter(
+            T_pw, kij_pw, color=_EXP_COLOR_1, zorder=3, label="Point-wise $k_{ij}$"
+        )
 
     T_lo = float(T_pw.min()) - 5.0
     T_hi = float(T_pw.max()) + 5.0
     T_curve = np.linspace(T_lo, T_hi, 300)
     kij_curve = sum(c * (T_curve - kij_t_ref) ** i for i, c in enumerate(kij_coeffs))
     order = len(kij_coeffs) - 1
-    ax.plot(T_curve, kij_curve, color=_LINE_COLOR, linestyle="-",
-            label=f"Poly fit (order {order})")
+    ax.plot(
+        T_curve,
+        kij_curve,
+        color=_LINE_COLOR,
+        linestyle="-",
+        label=f"Poly fit (order {order})",
+    )
 
     ax.axhline(0, color=_GRAY, linewidth=0.7, linestyle=":")
     ax.set_xlabel("$T$ / K")
@@ -421,6 +609,7 @@ def _plot_kij_vs_T(T_pw, kij_pw, kij_coeffs, kij_t_ref, id1, id2,
 # ---------------------------------------------------------------------------
 # SLE
 # ---------------------------------------------------------------------------
+
 
 def _find_eutectic(eos, Tm1, dHfus1, si_idx1, Tm2, dHfus2, si_idx2):
     """Find eutectic (T, x1) where both SvL branches cross.
@@ -442,7 +631,11 @@ def _find_eutectic(eos, Tm1, dHfus1, si_idx1, Tm2, dHfus2, si_idx2):
         diffs = [diff(t) for t in T_test]
         bracket = None
         for i in range(len(diffs) - 1):
-            if np.isfinite(diffs[i]) and np.isfinite(diffs[i + 1]) and diffs[i] * diffs[i + 1] < 0:
+            if (
+                np.isfinite(diffs[i])
+                and np.isfinite(diffs[i + 1])
+                and diffs[i] * diffs[i + 1] < 0
+            ):
                 bracket = (T_test[i], T_test[i + 1])
                 break
         if bracket is None:
@@ -488,8 +681,12 @@ def _plot_sle(result, path, temperature_unit):
         # Find eutectic point to properly clip each branch
         T_eut, x1_eut = _find_eutectic(
             result.eos,
-            Tm_K, dHfus_J, solid_index,
-            Tm2_K, dHfus2_J, solid_index2,
+            Tm_K,
+            dHfus_J,
+            solid_index,
+            Tm2_K,
+            dHfus2_J,
+            solid_index2,
         )
         T_start = T_eut if not np.isnan(T_eut) else curve_T_min * 0.995
 
@@ -507,9 +704,17 @@ def _plot_sle(result, path, temperature_unit):
                 except Exception:
                     pass
             if x1_curve:
-                _curve_plot(ax, np.array(x1_curve), np.array(T_curve),
-                            fit_min_K, fit_max_K, y_is_T=True,
-                            color=_LINE_COLOR, linestyle="-", label=label)
+                _curve_plot(
+                    ax,
+                    np.array(x1_curve),
+                    np.array(T_curve),
+                    fit_min_K,
+                    fit_max_K,
+                    y_is_T=True,
+                    color=_LINE_COLOR,
+                    linestyle="-",
+                    label=label,
+                )
 
         solid_name = result.id2 if solid_index == 1 else result.id1
         solid_name2 = result.id1 if solid_index == 1 else result.id2
@@ -519,8 +724,12 @@ def _plot_sle(result, path, temperature_unit):
 
         if not np.isnan(T_eut):
             ax.scatter(
-                [x1_eut], [T_eut],
-                marker="D", s=60, color=_LINE_COLOR, zorder=6,
+                [x1_eut],
+                [T_eut],
+                marker="D",
+                s=60,
+                color=_LINE_COLOR,
+                zorder=6,
                 label=f"Eutectic ({x1_eut:.3f}, {T_eut:.1f} K)",
             )
 
@@ -540,9 +749,17 @@ def _plot_sle(result, path, temperature_unit):
             except Exception:
                 pass
         if x1_curve:
-            _curve_plot(ax, np.array(x1_curve), np.array(T_curve),
-                        fit_min_K, fit_max_K, y_is_T=True,
-                        color=_LINE_COLOR, linestyle="-", label="PC-SAFT")
+            _curve_plot(
+                ax,
+                np.array(x1_curve),
+                np.array(T_curve),
+                fit_min_K,
+                fit_max_K,
+                y_is_T=True,
+                color=_LINE_COLOR,
+                linestyle="-",
+                label="PC-SAFT",
+            )
         title = f"SLE: {result.id1} + {result.id2}  (solid: {solid_name})"
 
     # Unused experimental points (gray, behind used ones)
@@ -551,8 +768,7 @@ def _plot_sle(result, path, temperature_unit):
     unused_mask = (T_full < lo_f) | (T_full > hi_f)
     if unused_mask.any():
         x1_full = result.data_full["x1"].astype(float)
-        ax.scatter(x1_full[unused_mask], T_full[unused_mask],
-                   **_scatter_kw(_GRAY))
+        ax.scatter(x1_full[unused_mask], T_full[unused_mask], **_scatter_kw(_GRAY))
 
     ax.scatter(x1_data, T_data, label="Exp.", **_scatter_kw(_EXP_COLOR_1))
 
@@ -573,6 +789,7 @@ def _plot_sle(result, path, temperature_unit):
 # ---------------------------------------------------------------------------
 # Henry
 # ---------------------------------------------------------------------------
+
 
 def _henry_label(hu) -> str:
     if hu == "molfrac":
@@ -608,20 +825,24 @@ def _plot_henry(result, path, temperature_unit, henry_unit):
     eos_solvent = None
     if use_molfrac and result._solvent_record is not None:
         eos_solvent = feos.EquationOfState.pcsaft(
-            feos.Parameters.new_pure(result._solvent_record)
+            feos.Parameters.new_pure(result._solvent_record), max_iter_cross_assoc=100
         )
 
     def _h_pred(T_K: float) -> "float | None":
         try:
-            H_pa = feos.State.henrys_law_constant_binary(
-                result.eos, T_K * si.KELVIN
-            ) / si.PASCAL
+            H_pa = (
+                feos.State.henrys_law_constant_binary(result.eos, T_K * si.KELVIN)
+                / si.PASCAL
+            )
             if use_molfrac:
                 if eos_solvent is None:
                     return None
-                pvap = feos.PhaseEquilibrium.vapor_pressure(
-                    eos_solvent, T_K * si.KELVIN
-                )[0] / si.PASCAL
+                pvap = (
+                    feos.PhaseEquilibrium.vapor_pressure(eos_solvent, T_K * si.KELVIN)[
+                        0
+                    ]
+                    / si.PASCAL
+                )
                 return H_pa / pvap
             else:
                 return H_pa / (henry_unit / si.PASCAL)

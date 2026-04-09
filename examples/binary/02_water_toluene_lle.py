@@ -10,6 +10,7 @@ CSV schema (examples/data/lle/):
 """
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -25,6 +26,10 @@ binary_params_path = EXAMPLES_DIR / "data" / "parameters" / "binary_params.json"
 
 
 def main() -> None:
+    plots_dir = EXAMPLES_DIR / "out" / "water_toluene_models"
+    shutil.rmtree(plots_dir, ignore_errors=True)
+    plots_dir.mkdir(parents=True)
+
     water_models = json.loads(water_models_path.read_text())
     binary_params = json.loads(binary_params_path.read_text())
 
@@ -56,10 +61,11 @@ def main() -> None:
                 id2=model_name,
                 lle_path=lle_path,
                 params_path=tmp_path,
-                kij_order=1,
+                kij_order=2,
                 kij_t_ref=298.15,
                 kij_bounds=(-0.3, 0.3),
                 temperature_unit=si.KELVIN,
+                t_min=300 * si.KELVIN,
             )
             n_pts = len(result.data["T_kij"])
             ard_pw = result.data["ard_pointwise"]
@@ -71,9 +77,8 @@ def main() -> None:
             print(
                 f"{model_name:<35} {n_pts:>4}  {fmt(avg_ard)}  {fmt(min_ard)}  {fmt(max_ard)}"
             )
-            plots_dir = EXAMPLES_DIR / "out" / "water_toluene_models"
-            plots_dir.mkdir(parents=True, exist_ok=True)
-            result.plot_kij(path=plots_dir / f"{model_name}.png")
+            result.plot_kij(path=plots_dir / f"{model_name}_kij.png")
+            result.plot(path=plots_dir / f"{model_name}_lle.png")
             if not math.isnan(avg_ard) and avg_ard < best_ard:
                 best_ard = avg_ard
                 best_result = result
@@ -91,7 +96,8 @@ def main() -> None:
     best_result.to_json(out_json)
     print(f"\nSaved to {out_json}")
 
-    best_result.plot_kij(path=EXAMPLES_DIR / "out" / "water_toluene_lle.png")
+    best_result.plot_kij(path=EXAMPLES_DIR / "out" / "water_toluene_kij.png")
+    best_result.plot(path=EXAMPLES_DIR / "out" / "water_toluene_lle.png")
 
 
 if __name__ == "__main__":

@@ -41,6 +41,7 @@ def fit_kij_lle(
     t_min: "si.SIObject | None" = None,
     t_max: "si.SIObject | None" = None,
     pressure: "si.SIObject" = 1.01325 * si.BAR,
+    require_both_phases: bool = True,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE tieline data.
 
@@ -71,6 +72,10 @@ def fit_kij_lle(
         Upper temperature bound for fitting.
     pressure : si.SIObject
         Pressure for tp_flash calculations (default: 1 bar).
+    require_both_phases : bool
+        If True (default), skip temperatures where only one phase composition
+        is available. Single-phase-only points produce off-trend k_ij values
+        because the 1D problem is under-constrained.
 
     Returns
     -------
@@ -101,10 +106,15 @@ def fit_kij_lle(
     t0 = time.perf_counter()
     aggregated = _aggregate_lle_data(T_arr, x1_I_arr, x1_II_arr, t_scale)
 
+    if require_both_phases:
+        aggregated = [(T, xi, xii) for T, xi, xii in aggregated
+                      if xi is not None and xii is not None]
+
     T_fitted = []
     kij_fitted = []
     cost_fitted = []
     total_nfev = 0
+    T_anchor_K = aggregated[0][0]  # lowest T — always converges, used as warm-start seed
 
     for T_K, exp_I, exp_II in aggregated:
         feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS
@@ -122,6 +132,7 @@ def fit_kij_lle(
                 record2,
                 pressure,
                 feeds,
+                T_anchor_K=T_anchor_K,
             )
 
         # Coarse scan to find best initial k_ij guess (avoids getting trapped in
@@ -156,6 +167,8 @@ def fit_kij_lle(
                 kij_fitted.append(float(res.x[0]))
                 # ARD% = 100 * mean(|relative residuals|)
                 cost_fitted.append(100.0 * float(np.mean(np.abs(res.fun))))
+                if last_pe[0] is not None:
+                    prev_pe = last_pe[0]
         except Exception:
             continue
 
@@ -244,6 +257,8 @@ def fit_kij_lle(
         time_elapsed=time.perf_counter() - t0,
         t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
         t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
+        _record1=record1,
+        _record2=record2,
     )
 
 
@@ -303,11 +318,17 @@ def _residuals_at_T(
     record2,
     pressure,
     feeds: "list[float]",
+    T_anchor_K: "float | None" = None,
 ) -> np.ndarray:
     """Residual vector for least_squares at a single temperature.
 
     Returns relative composition errors on each available phase.
     A penalty of [1.0, ...] is returned on tp_flash failure.
+
+    When T_anchor_K is provided and T_K > T_anchor_K, a warm-start PE is built
+    at T_anchor_K using the *same* EOS (same k_ij) and passed as initial_state.
+    This steers the flash toward LLE at higher temperatures without EOS-
+    incompatibility issues or Jacobian flattening.
     """
     kij = float(kij_arr[0])
     n_resid = (1 if exp_I is not None else 0) + (1 if exp_II is not None else 0)
@@ -315,20 +336,38 @@ def _residuals_at_T(
 
     eos = _build_binary_eos(record1, record2, kij)
 
+    # Build anchor PE at T_anchor using the same EOS — EOS-compatible warm start
+    anchor_pe = None
+    if T_anchor_K is not None and T_K > T_anchor_K + 0.5 and len(feeds) > 0:
+        try:
+            feed_a = np.array([feeds[0], 1.0 - feeds[0]]) * si.MOL
+            s_a = feos.State(
+                eos,
+                T_anchor_K * si.KELVIN,
+                pressure=pressure,
+                moles=feed_a,
+                density_initialization="liquid",
+            )
+            anchor_pe = s_a.tp_flash(max_iter=500)
+        except Exception:
+            pass
+
     for z1 in feeds:
         try:
             feed = np.array([z1, 1.0 - z1]) * si.MOL
-            pe = feos.PhaseEquilibrium.tp_flash(eos, T_K * si.KELVIN, pressure, feed)
+            feed_state = feos.State(
+                eos,
+                T_K * si.KELVIN,
+                pressure=pressure,
+                moles=feed,
+                density_initialization="liquid",
+            )
+            pe = feed_state.tp_flash(initial_state=anchor_pe, max_iter=1000)
             x_a = float(pe.liquid.molefracs[0])
             x_b = float(pe.vapor.molefracs[0])
             if abs(x_a - x_b) < 1e-4:
                 continue
-            # Skip VLE results: gas density is ~100x lower than liquid density
-            rho_a = float(pe.liquid.density / (si.MOL / si.METER**3))
-            rho_b = float(pe.vapor.density / (si.MOL / si.METER**3))
-            if min(rho_a, rho_b) / max(rho_a, rho_b) < 0.1:
-                continue
-            pred_I, pred_II = (min(x_a, x_b), max(x_a, x_b))
+            pred_I, pred_II = min(x_a, x_b), max(x_a, x_b)
             resids = []
             if exp_I is not None:
                 resids.append((pred_I - exp_I) / max(exp_I, 1e-6))

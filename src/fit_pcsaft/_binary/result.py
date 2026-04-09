@@ -50,6 +50,9 @@ class BinaryFitResult:
     time_elapsed: float
     # Henry-specific: pure solvent record (needed for molfrac plot)
     _solvent_record: object = None
+    # LLE-specific: pure records needed to rebuild EOS at each T with k_ij(T)
+    _record1: object = None
+    _record2: object = None
     # SLE-specific (NaN / 0 for VLE/LLE)
     tm_K: float = float("nan")
     delta_hfus_J: float = float("nan")
