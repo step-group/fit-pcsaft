@@ -395,6 +395,24 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
 
         T_K += dT
 
+    # Remove outlier points where composition jumps discontinuously from the
+    # last accepted point (VLE solutions sneaking through the gap filter).
+    if len(T_out) > 2:
+        xI_arr = np.array(x_I_out)
+        xII_arr = np.array(x_II_out)
+        good = [True]
+        last = 0
+        for i in range(1, len(xI_arr)):
+            if abs(xI_arr[i] - xI_arr[last]) < 0.15 and abs(xII_arr[i] - xII_arr[last]) < 0.15:
+                good.append(True)
+                last = i
+            else:
+                good.append(False)
+        good = np.array(good)
+        T_out = np.array(T_out)[good].tolist()
+        x_I_out = xI_arr[good].tolist()
+        x_II_out = xII_arr[good].tolist()
+
     return np.array(T_out), x_I_out, x_II_out
 
 
@@ -467,33 +485,30 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
             label="PC-SAFT (phase II)",
         )
 
-    if plot_unfitted:
-        eos_u = _build_eos_kij0(result)
-        if eos_u is not None:
-            # Build a mock result with kij=0 records to reuse _lle_curve_kij_T
-            from types import SimpleNamespace
+    if plot_unfitted and result._record1 is not None and result._record2 is not None:
+        from types import SimpleNamespace
 
-            mock = SimpleNamespace(
-                _record1=result._record1,
-                _record2=result._record2,
-                kij_coeffs=np.array([0.0]),
-                kij_t_ref=result.kij_t_ref,
+        mock = SimpleNamespace(
+            _record1=result._record1,
+            _record2=result._record2,
+            kij_coeffs=np.array([0.0]),
+            kij_t_ref=result.kij_t_ref,
+        )
+        T_u, x_I_u, x_II_u = _lle_curve_kij_T(
+            mock, z1, curve_T_min, curve_T_max, npoints=200
+        )
+        if (
+            len(T_u) > 0
+            and np.max(np.abs(np.array(x_I_u) - np.array(x_II_u))) > 1e-3
+        ):
+            ax.plot(
+                _log_odds(x_I_u),
+                T_u,
+                color=_PRED_COLOR,
+                linestyle="--",
+                label="Predictive (k_ij = 0)",
             )
-            T_u, x_I_u, x_II_u = _lle_curve_kij_T(
-                mock, z1, curve_T_min, curve_T_max, npoints=200
-            )
-            if (
-                len(T_u) > 0
-                and np.max(np.abs(np.array(x_I_u) - np.array(x_II_u))) > 1e-3
-            ):
-                ax.plot(
-                    _log_odds(x_I_u),
-                    T_u,
-                    color=_PRED_COLOR,
-                    linestyle="--",
-                    label="Predictive (k_ij = 0)",
-                )
-                ax.plot(_log_odds(x_II_u), T_u, color=_PRED_COLOR, linestyle="--")
+            ax.plot(_log_odds(x_II_u), T_u, color=_PRED_COLOR, linestyle="--")
 
     # Unused experimental points (gray, drawn first so used points sit on top)
     if unused_mask.any():

@@ -342,7 +342,7 @@
         "na": 1.0,
         "nb": 2.0,
         "kappa_ab": 0.068277,
-        "epsilon_k_ab": 1558.40
+        "epsilon_k_ab": 1558.4
       }
     ]
   },
@@ -361,7 +361,7 @@
         "na": 2.0,
         "nb": 2.0,
         "kappa_ab": 0.4287,
-        "epsilon_k_ab": 1259.00
+        "epsilon_k_ab": 1259.0
       }
     ]
   },
@@ -387,6 +387,25 @@
   {
     "identifier": {
       "cas": "7732-18-5",
+      "name": "water4C_ninoamezquita2012",
+      "formula": "H2O"
+    },
+    "molarweight": 18.015,
+    "m": 1.0656,
+    "sigma": 3.0007,
+    "epsilon_k": 366.51,
+    "association_sites": [
+      {
+        "na": 2.0,
+        "nb": 2.0,
+        "kappa_ab": 0.01,
+        "epsilon_k_ab": 1800.0
+      }
+    ]
+  },
+  {
+    "identifier": {
+      "cas": "7732-18-5",
       "name": "water4C_2_vonsolms2006",
       "formula": "H2O"
     },
@@ -400,6 +419,104 @@
         "nb": 2.0,
         "kappa_ab": 0.3374,
         "epsilon_k_ab": 1354.1
+      }
+    ]
+  },
+  {
+    "identifier": {
+      "cas": "7732-18-5",
+      "name": "water_M4C_forte2017",
+      "formula": "H2O"
+    },
+    "molarweight": 18.015,
+    "m": 2.5000,
+    "sigma": 2.1201,
+    "epsilon_k": 147.917,
+    "association_sites": [
+      {
+        "na": 2.0,
+        "nb": 2.0,
+        "kappa_ab": 0.3939,
+        "epsilon_k_ab": 1581.945
+      }
+    ]
+  },
+  {
+    "identifier": {
+      "cas": "7732-18-5",
+      "name": "water_M2B_forte2017",
+      "formula": "H2O"
+    },
+    "molarweight": 18.015,
+    "m": 1.7854,
+    "sigma": 2.3609,
+    "epsilon_k": 233.787,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.2637,
+        "epsilon_k_ab": 2506.794
+      }
+    ]
+  },
+  {
+    "identifier": {
+      "cas": "7732-18-5",
+      "name": "water_MP2B_forte2017",
+      "formula": "H2O"
+    },
+    "molarweight": 18.015,
+    "m": 2.2159,
+    "sigma": 2.2396,
+    "epsilon_k": 214.485,
+    "mu": 1.8550,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.5000,
+        "epsilon_k_ab": 1543.672
+      }
+    ]
+  },
+  {
+    "identifier": {
+      "cas": "7732-18-5",
+      "name": "water_MP2Bu_forte2017",
+      "formula": "H2O"
+    },
+    "molarweight": 18.015,
+    "m": 1.2256,
+    "sigma": 2.8249,
+    "epsilon_k": 292.990,
+    "mu": 2.1870,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.0171,
+        "epsilon_k_ab": 1760.237
+      }
+    ]
+  },
+  {
+    "identifier": {
+      "cas": "7732-18-5",
+      "name": "water_MP4Cu_forte2017",
+      "formula": "H2O"
+    },
+    "molarweight": 18.015,
+    "m": 1.1990,
+    "sigma": 2.8792,
+    "epsilon_k": 285.368,
+    "mu": 2.2088,
+    "association_sites": [
+      {
+        "na": 2.0,
+        "nb": 2.0,
+        "kappa_ab": 0.0144,
+        "epsilon_k_ab": 1117.327
       }
     ]
   }

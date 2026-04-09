@@ -97,7 +97,7 @@ def main() -> None:
                 f"{model_name:<35} {n_pts:>4}  {fmt(avg_ard)}  {fmt(min_ard)}  {fmt(max_ard)}"
             )
             result.plot_kij(path=plots_dir / f"{model_name}_kij.png")
-            result.plot(path=plots_dir / f"{model_name}_lle.png")
+            result.plot(path=plots_dir / f"{model_name}_lle.png", plot_unfitted=True)
             if not math.isnan(avg_ard) and avg_ard < best_ard:
                 best_ard = avg_ard
                 best_result = result
@@ -116,7 +116,7 @@ def main() -> None:
     print(f"\nSaved to {out_json}")
 
     best_result.plot_kij(path=EXAMPLES_DIR / "out" / "water_hexanol_kij.png")
-    best_result.plot(path=EXAMPLES_DIR / "out" / "water_hexanol_lle.png")
+    best_result.plot(path=EXAMPLES_DIR / "out" / "water_hexanol_lle.png", plot_unfitted=True)
 
 
 if __name__ == "__main__":

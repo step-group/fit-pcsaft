@@ -167,8 +167,6 @@ def fit_kij_lle(
                 kij_fitted.append(float(res.x[0]))
                 # ARD% = 100 * mean(|relative residuals|)
                 cost_fitted.append(100.0 * float(np.mean(np.abs(res.fun))))
-                if last_pe[0] is not None:
-                    prev_pe = last_pe[0]
         except Exception:
             continue
 
@@ -209,28 +207,16 @@ def fit_kij_lle(
     data["kij_pointwise"] = kij_fitted_arr
     data["ard_pointwise"] = np.array(cost_fitted)
 
-    # Final ARD using polynomial k_ij
-    ard_errors = []
-    final_residuals_list = []
-    for T_K, exp_I, exp_II in aggregated:
-        kij_val = _kij_at_T(kij_coeffs, T_K, kij_t_ref)
-        feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS
-        r = _residuals_at_T(
-            [kij_val],
-            T_K,
-            exp_I,
-            exp_II,
-            record1,
-            record2,
-            pressure,
-            feeds,
-        )
-        final_residuals_list.extend(r.tolist())
-        valid = np.abs(r) < 0.99
-        ard_errors.extend(np.abs(r[valid]).tolist())
+    # ARD: mean of point-wise optimal ARDs (exclude machine-precision near-zeros)
+    ard_pw = np.array(cost_fitted)
+    meaningful = ard_pw[ard_pw > 0.01]
+    ard = float(meaningful.mean()) if len(meaningful) > 0 else float(np.mean(ard_pw))
 
-    ard = 100.0 * float(np.mean(ard_errors)) if ard_errors else float("nan")
-    final_residuals = np.array(final_residuals_list)
+    # Residuals for the polynomial fit (k_ij poly vs point-wise k_ij values)
+    poly_resid_vals = kij_fitted_arr - np.array(
+        [_kij_at_T(kij_coeffs, T, kij_t_ref) for T in T_fitted_arr]
+    )
+    final_residuals = poly_resid_vals
 
     poly_result = SimpleNamespace(
         x=kij_coeffs,

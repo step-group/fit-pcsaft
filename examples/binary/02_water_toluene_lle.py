@@ -65,7 +65,6 @@ def main() -> None:
                 kij_t_ref=298.15,
                 kij_bounds=(-0.3, 0.3),
                 temperature_unit=si.KELVIN,
-                t_min=300 * si.KELVIN,
             )
             n_pts = len(result.data["T_kij"])
             ard_pw = result.data["ard_pointwise"]
@@ -78,7 +77,7 @@ def main() -> None:
                 f"{model_name:<35} {n_pts:>4}  {fmt(avg_ard)}  {fmt(min_ard)}  {fmt(max_ard)}"
             )
             result.plot_kij(path=plots_dir / f"{model_name}_kij.png")
-            result.plot(path=plots_dir / f"{model_name}_lle.png")
+            result.plot(path=plots_dir / f"{model_name}_lle.png", plot_unfitted=True)
             if not math.isnan(avg_ard) and avg_ard < best_ard:
                 best_ard = avg_ard
                 best_result = result
@@ -97,7 +96,9 @@ def main() -> None:
     print(f"\nSaved to {out_json}")
 
     best_result.plot_kij(path=EXAMPLES_DIR / "out" / "water_toluene_kij.png")
-    best_result.plot(path=EXAMPLES_DIR / "out" / "water_toluene_lle.png")
+    best_result.plot(
+        path=EXAMPLES_DIR / "out" / "water_toluene_lle.png", plot_unfitted=True
+    )
 
 
 if __name__ == "__main__":
