@@ -11,10 +11,10 @@ from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
     _kij_at_T,
-    _load_binary_csv,
     _load_pure_records,
     _make_binary_jac_fn,
 )
+from fit_pcsaft._csv import SCHEMA_VLE, load_csv
 from fit_pcsaft._binary.result import BinaryFitResult
 
 _N_KIJ_SCAN = 13
@@ -83,7 +83,7 @@ def fit_kij_vle(
     record1, record2 = _load_pure_records(params_path, id1, id2)
     if induced_assoc:
         record1, record2 = _apply_induced_association(record1, record2)
-    data = _load_binary_csv(vle_path)
+    data = load_csv(vle_path, SCHEMA_VLE)
     data_full = {k: v.copy() for k, v in data.items()}
 
     # --- Temperature filter --------------------------------------------------

@@ -4,7 +4,6 @@ from pathlib import Path
 
 import feos
 import numpy as np
-import polars as pl
 import si_units as si
 
 
@@ -106,83 +105,6 @@ def _kij_at_T(coeffs: np.ndarray, T: float, t_ref: float) -> float:
         result += c * dT**i
     return result
 
-
-_COL_ALIASES: dict[str, str] = {
-    # Temperature
-    "temperature_K": "T",
-    "temperature": "T",
-    "T_K": "T",
-    "t": "T",
-    # Pressure
-    "pressure_kPa": "P",
-    "pressure": "P",
-    "P_kPa": "P",
-    # Liquid mole fraction (VLE / SLE solubility)
-    "x": "x1",
-    "x_1": "x1",
-    # Vapor mole fraction (VLE)
-    "y": "y1",
-    "y_1": "y1",
-    # LLE phase mole fractions (already standard; listed for completeness)
-    "x1_I": "x1_I",
-    "x1_II": "x1_II",
-    "xI": "x1_I",
-    "xII": "x1_II",
-    "x_I": "x1_I",
-    "x_II": "x1_II",
-    # LLE phase mass fractions
-    "w1_I": "w1_I",
-    "w1_II": "w1_II",
-    "w_I": "w1_I",
-    "w_II": "w1_II",
-    "wI": "w1_I",
-    "wII": "w1_II",
-    # Henry's law constant
-    "henry": "H",
-    "henry_constant": "H",
-    "H_MPa": "H",
-    "H_kPa": "H",
-    "H_bar": "H",
-    "H_Pa": "H",
-}
-
-
-def _load_binary_csv(path: "Path | str") -> "dict[str, np.ndarray]":
-    """Load a multi-column CSV and return {normalized_column_name: array}.
-
-    Column names are normalized via _COL_ALIASES so callers always see
-    standard keys regardless of the source CSV naming style.
-    """
-    df = pl.read_csv(Path(path), infer_schema_length=9999, truncate_ragged_lines=True)
-    result: dict[str, np.ndarray] = {}
-    for col in df.columns:
-        key = _COL_ALIASES.get(col, col)
-        result[key] = df[col].to_numpy()
-    return result
-
-
-def _load_lle_csv(
-    path: "Path | str",
-) -> "tuple[np.ndarray, np.ndarray, np.ndarray | None]":
-    """Load LLE data CSV by **column position** (header names are ignored).
-
-    Layout::
-
-        2 columns  →  (T, x1_I)            one-sided tieline
-        3+ columns →  (T, x1_I, x1_II)     full tieline
-
-    Returns
-    -------
-    T_arr  : (n,) temperatures in CSV units
-    x1_I   : (n,) mole/mass fraction in the first phase column
-    x1_II  : (n,) or None
-    """
-    df = pl.read_csv(Path(path), infer_schema_length=9999, truncate_ragged_lines=True)
-    cols = df.columns
-    T_arr = df[cols[0]].to_numpy().astype(float)
-    x1_I = df[cols[1]].to_numpy().astype(float)
-    x1_II = df[cols[2]].to_numpy().astype(float) if len(cols) >= 3 else None
-    return T_arr, x1_I, x1_II
 
 
 def _make_binary_jac_fn(fun, n_params: int, h: float = 1e-012):

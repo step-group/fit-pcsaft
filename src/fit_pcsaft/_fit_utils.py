@@ -7,6 +7,7 @@ import numpy as np
 import polars as pl
 import pubchempy as pcp
 
+from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
 
 
@@ -82,13 +83,6 @@ def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
 
     return identifier, compound.molecular_weight
 
-
-def _load_csv(path: Path | str) -> Tuple[np.ndarray, np.ndarray]:
-    """Load two-column CSV as (temperature, property) numpy arrays."""
-
-    df = pl.read_csv(Path(path), infer_schema_length=9999, truncate_ragged_lines=True)
-
-    return df[df.columns[0]].to_numpy(), df[df.columns[1]].to_numpy()
 
 
 def _build_eos(

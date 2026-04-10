@@ -13,9 +13,9 @@ from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
     _kij_at_T,
-    _load_lle_csv,
     _load_pure_records,
 )
+from fit_pcsaft._csv import SCHEMA_LLE, load_csv
 from fit_pcsaft._binary.result import BinaryFitResult
 
 # 51 feed compositions, sigmoid-spaced to sample densely near x1=0 and x1=1.
@@ -97,12 +97,12 @@ def fit_kij_lle(
     record1, record2 = _load_pure_records(params_path, id1, id2)
     if induced_assoc:
         record1, record2 = _apply_induced_association(record1, record2)
-    T_raw, x1_I_raw, x1_II_raw = _load_lle_csv(lle_path)
-    data: dict[str, np.ndarray] = {"T": T_raw}
-    if x1_I_raw is not None:
-        data["x1_I"] = x1_I_raw
-    if x1_II_raw is not None:
-        data["x1_II"] = x1_II_raw
+    _lle_raw = load_csv(lle_path, SCHEMA_LLE)
+    data: dict[str, np.ndarray] = {"T": _lle_raw["T"]}
+    if "x1_I" in _lle_raw:
+        data["x1_I"] = _lle_raw["x1_I"]
+    if "x1_II" in _lle_raw:
+        data["x1_II"] = _lle_raw["x1_II"]
     data_full = {k: v.copy() for k, v in data.items()}
 
     # Temperature filter

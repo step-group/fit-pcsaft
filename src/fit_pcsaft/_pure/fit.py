@@ -8,10 +8,10 @@ import numpy as np
 import si_units as si
 from scipy.optimize import differential_evolution, least_squares
 
+from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv
 from fit_pcsaft._fit_utils import (
     _build_eos,
     _fetch_compound,
-    _load_csv,
     _make_f_and_df_numerical,
 )
 from fit_pcsaft._pure.jacobian import _make_f_and_df
@@ -195,11 +195,11 @@ def _setup_pure_fit(
 
     identifier, mw = _fetch_compound(id)
 
-    _t_psat, _p_psat = _load_csv(psat_path)
-    _t_rhoL, _d_rhoLsat = _load_csv(density_path)
+    _t_psat, _p_psat = load_psat_csv(psat_path)
+    _t_rhoL, _d_rhoLsat = load_density_csv(density_path)
 
     if hvap_path is not None:
-        _t_hvap, _d_hvap = _load_csv(hvap_path)
+        _t_hvap, _d_hvap = load_hvap_csv(hvap_path)
     else:
         _t_hvap, _d_hvap = np.array([]), np.array([])
 
@@ -630,11 +630,11 @@ def eval_pure(
     """
     identifier, mw = _fetch_compound(id)
 
-    _t_psat, _p_psat = _load_csv(psat_path)
-    _t_rho, _d_rho = _load_csv(density_path)
+    _t_psat, _p_psat = load_psat_csv(psat_path)
+    _t_rho, _d_rho = load_density_csv(density_path)
 
     if hvap_path is not None:
-        _t_hvap, _d_hvap = _load_csv(hvap_path)
+        _t_hvap, _d_hvap = load_hvap_csv(hvap_path)
     else:
         _t_hvap, _d_hvap = np.array([]), np.array([])
 

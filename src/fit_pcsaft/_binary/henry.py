@@ -14,6 +14,7 @@ from fit_pcsaft._binary._utils import (
     _make_binary_jac_fn,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
+from fit_pcsaft._csv import SCHEMA_HENRY, load_csv
 
 
 def fit_kij_henry(
@@ -71,15 +72,12 @@ def fit_kij_henry(
     """
     import feos
 
-    import polars as pl
-
     record1, record2 = _load_pure_records(params_path, id1, id2)
     if induced_assoc:
         record1, record2 = _apply_induced_association(record1, record2)
-    df = pl.read_csv(Path(henry_path), infer_schema_length=9999, truncate_ragged_lines=True)
-    T_arr = df[:, 0].to_numpy()
-    H_arr = df[:, 1].to_numpy()
-    data = {"T": T_arr, "H": H_arr}
+    data = load_csv(henry_path, SCHEMA_HENRY)
+    T_arr = data["T"]
+    H_arr = data["H"]
     n_rows = len(T_arr)
 
     use_molfrac = henry_unit == "molfrac"
