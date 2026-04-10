@@ -1,6 +1,7 @@
 """VLE k_ij fitting from bubble-point data."""
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import si_units as si
@@ -14,6 +15,8 @@ from fit_pcsaft._binary._utils import (
     _make_binary_jac_fn,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
+
+_N_KIJ_SCAN = 13
 
 
 def fit_kij_vle(
@@ -29,6 +32,7 @@ def fit_kij_vle(
     t_min: "si.SIObject | None" = None,
     t_max: "si.SIObject | None" = None,
     scipy_kwargs: "dict | None" = None,
+    kij_per_point: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from VLE bubble-point data.
 
@@ -57,6 +61,12 @@ def fit_kij_vle(
         Upper temperature bound. Rows with T > t_max are excluded.
     scipy_kwargs : dict | None
         Overrides for scipy.optimize.least_squares keyword arguments.
+    kij_per_point : bool
+        If False (default), fit a single k_ij polynomial to all data simultaneously.
+        If True, use a two-stage approach: fit one k_ij per data point (considering
+        both bubble-P and dew-y1 residuals when y1 is present), then fit a polynomial
+        to the collected (T, k_ij) pairs. Stores diagnostic arrays T_kij,
+        kij_pointwise, ard_pointwise, and ard_pointwise_poly in the result.
 
     Returns
     -------
@@ -81,6 +91,133 @@ def fit_kij_vle(
     has_y1 = "y1" in data
     y1_arr = data["y1"] if has_y1 else None
 
+    t0 = time.perf_counter()
+    t_scale = float(temperature_unit / si.KELVIN)
+
+    # --- Per-point two-stage fitting -----------------------------------------
+    if kij_per_point:
+        n_rows = len(T_arr)
+        T_fitted, kij_fitted, cost_fitted, fitted_point_meta = [], [], [], []
+        total_nfev = 0
+
+        for i in range(n_rows):
+            T_csv_i = float(T_arr[i])
+            P_i = float(P_arr[i])
+            x1_i = float(x1_arr[i])
+            y1_i = float(y1_arr[i]) if has_y1 else None
+            T_K_i = T_csv_i * t_scale
+
+            def resid_fn(kij_arr, T_csv=T_csv_i, P=P_i, x1=x1_i, y1=y1_i):
+                return _residuals_vle_point(
+                    kij_arr, T_csv, P, x1, y1,
+                    record1, record2, temperature_unit, pressure_unit,
+                )
+
+            kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
+            best_x0, best_scan_cost = 0.0, np.inf
+            for kij_val in kij_scan:
+                try:
+                    c = 0.5 * float(np.sum(resid_fn([kij_val]) ** 2))
+                    if c < best_scan_cost:
+                        best_scan_cost, best_x0 = c, kij_val
+                except Exception:
+                    pass
+
+            n_r = 2 if has_y1 else 1
+            penalty_cost = 0.5 * n_r * 0.99
+            try:
+                res = least_squares(
+                    resid_fn,
+                    x0=[best_x0],
+                    bounds=([kij_bounds[0]], [kij_bounds[1]]),
+                    method="trf",
+                    ftol=1e-8, xtol=1e-8, gtol=1e-8, max_nfev=500,
+                )
+                total_nfev += res.nfev
+                if res.cost < penalty_cost:
+                    T_fitted.append(T_K_i)
+                    kij_fitted.append(float(res.x[0]))
+                    cost_fitted.append(100.0 * float(np.mean(np.abs(res.fun))))
+                    fitted_point_meta.append((T_csv_i, P_i, x1_i, y1_i))
+            except Exception:
+                continue
+
+        if len(T_fitted) == 0:
+            raise RuntimeError("No points converged. Try relaxing kij_bounds.")
+
+        effective_order = min(kij_order, len(T_fitted) - 1)
+        T_fitted_arr = np.array(T_fitted)
+        kij_fitted_arr = np.array(kij_fitted)
+        dT = T_fitted_arr - kij_t_ref
+
+        ols_rev = np.polyfit(dT, kij_fitted_arr, effective_order)
+        x0_poly = ols_rev[::-1]
+
+        if effective_order == 0 or len(T_fitted) == 1:
+            kij_coeffs = x0_poly
+        else:
+            def _poly_resid(coeffs):
+                pred = sum(c * dT**j for j, c in enumerate(coeffs))
+                return pred - kij_fitted_arr
+
+            rob = least_squares(
+                _poly_resid, x0_poly,
+                loss="cauchy", f_scale=0.01,
+                ftol=1e-8, xtol=1e-8, gtol=1e-8,
+            )
+            kij_coeffs = rob.x
+
+        # Post-poly ARD: re-evaluate at polynomial k_ij
+        ard_poly = []
+        for (T_csv_i, P_i, x1_i, y1_i), T_K_i in zip(fitted_point_meta, T_fitted_arr):
+            kij_poly = _kij_at_T(kij_coeffs, float(T_K_i), kij_t_ref)
+            try:
+                r = _residuals_vle_point(
+                    [kij_poly], T_csv_i, P_i, x1_i, y1_i,
+                    record1, record2, temperature_unit, pressure_unit,
+                )
+                ard_poly.append(100.0 * float(np.mean(np.abs(r))))
+            except Exception:
+                pass
+        ard_poly_arr = np.array(ard_poly)
+
+        data["T_kij"] = T_fitted_arr
+        data["kij_pointwise"] = kij_fitted_arr
+        data["ard_pointwise"] = np.array(cost_fitted)
+        data["ard_pointwise_poly"] = ard_poly_arr
+
+        meaningful = ard_poly_arr[ard_poly_arr > 0.01]
+        ard = float(meaningful.mean()) if len(meaningful) > 0 else float(np.mean(ard_poly_arr))
+
+        poly_resid_vals = kij_fitted_arr - np.array(
+            [_kij_at_T(kij_coeffs, T, kij_t_ref) for T in T_fitted_arr]
+        )
+        poly_result = SimpleNamespace(
+            x=kij_coeffs,
+            fun=poly_resid_vals,
+            cost=float(np.sum(poly_resid_vals**2)) / 2.0,
+            success=True,
+            nfev=total_nfev,
+            message="Point-wise VLE fitting completed",
+        )
+        eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
+        return BinaryFitResult(
+            kij_coeffs=kij_coeffs,
+            kij_t_ref=kij_t_ref,
+            id1=id1,
+            id2=id2,
+            equilibrium_type="vle",
+            eos=eos_ref,
+            data=data,
+            data_full=data_full,
+            ard=ard,
+            scipy_result=poly_result,
+            time_elapsed=time.perf_counter() - t0,
+            t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
+            t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
+        )
+
+    # --- Global polynomial fit (default) -------------------------------------
     n_rows = len(T_arr)
     n_resid = n_rows * (2 if has_y1 else 1)
 
@@ -136,7 +273,6 @@ def fit_kij_vle(
     if scipy_kwargs:
         ls_kwargs.update(scipy_kwargs)
 
-    t0 = time.perf_counter()
     result = least_squares(fun, x0, jac=jac, **ls_kwargs)
     time_elapsed = time.perf_counter() - t0
 
@@ -182,3 +318,26 @@ def _bubble_point(eos, T_K: float, x1: float, P_guess: float, temperature_unit, 
         np.array([x1, 1.0 - x1]),
         tp_init=P_guess * pressure_unit,
     )
+
+
+def _residuals_vle_point(
+    kij_arr, T_csv: float, P_i: float, x1_i: float, y1_i: "float | None",
+    record1, record2, temperature_unit, pressure_unit,
+) -> np.ndarray:
+    """Residual vector for a single VLE data point.
+
+    Returns [rel_P_error] when y1 is absent, [rel_P_error, abs_y1_error] when
+    y1 is present. Returns a penalty vector of ones on any failure.
+    """
+    n_r = 2 if y1_i is not None else 1
+    penalty = np.ones(n_r)
+    try:
+        eos = _build_binary_eos(record1, record2, float(kij_arr[0]))
+        bp = _bubble_point(eos, T_csv, x1_i, P_i, temperature_unit, pressure_unit)
+        P_pred = bp.liquid.pressure() / pressure_unit
+        resids = [(P_pred - P_i) / P_i]
+        if y1_i is not None:
+            resids.append(float(bp.vapor.molefracs[0]) - y1_i)
+        return np.array(resids)
+    except Exception:
+        return penalty

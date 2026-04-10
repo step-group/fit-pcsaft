@@ -585,7 +585,8 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
 
 
 def _plot_kij_vs_T(
-    T_pw, kij_pw, kij_coeffs, kij_t_ref, id1, id2, ard_pw=None, path=None
+    T_pw, kij_pw, kij_coeffs, kij_t_ref, id1, id2,
+    equilibrium_type="lle", ard_pw=None, path=None,
 ):
     """Scatter pointwise k_ij values and the fitted polynomial k_ij(T).
 
@@ -634,7 +635,7 @@ def _plot_kij_vs_T(
     ax.axhline(0, color=_GRAY, linewidth=0.7, linestyle=":")
     ax.set_xlabel("$T$ / K")
     ax.set_ylabel("$k_{ij}$")
-    ax.set_title(f"$k_{{ij}}(T)$: {id1} + {id2} (LLE)")
+    ax.set_title(f"$k_{{ij}}(T)$: {id1} + {id2} ({equilibrium_type.upper()})")
     ax.legend(fontsize="small")
     sns.despine(offset=10)
     plt.tight_layout()

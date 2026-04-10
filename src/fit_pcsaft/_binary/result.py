@@ -133,17 +133,19 @@ class BinaryFitResult:
         )
 
     def plot_kij(self, path=None):
-        """Plot point-wise k_ij vs T and the polynomial fit (LLE only).
+        """Plot point-wise k_ij vs T and the polynomial fit.
+
+        Available when kij_per_point=True was used (LLE or VLE).
 
         Parameters
         ----------
         path : str or Path, optional
             Save path for the figure.
         """
-        if self.equilibrium_type != "lle":
-            raise ValueError("plot_kij is only available for LLE fits")
         if "T_kij" not in self.data or "kij_pointwise" not in self.data:
-            raise ValueError("No point-wise k_ij data available in this result")
+            raise ValueError(
+                "No point-wise k_ij data available. Re-run with kij_per_point=True."
+            )
         from fit_pcsaft._binary._plot import _plot_kij_vs_T
 
         return _plot_kij_vs_T(
@@ -153,6 +155,7 @@ class BinaryFitResult:
             self.kij_t_ref,
             self.id1,
             self.id2,
+            equilibrium_type=self.equilibrium_type,
             ard_pw=self.data.get("ard_pointwise"),
             path=path,
         )
