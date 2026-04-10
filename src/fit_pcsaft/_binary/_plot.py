@@ -105,12 +105,16 @@ def _lle_feed_z1(result) -> float:
     df = result.data_full
     x_I = df["x1_I"].astype(float) if "x1_I" in df else None
     x_II = df["x1_II"].astype(float) if "x1_II" in df else None
-    if x_I is not None and x_II is not None:
-        z1 = float(np.nanmean(0.5 * (x_I + x_II)))
-    elif x_I is not None:
-        z1 = float(np.nanmean(x_I))
-    elif x_II is not None:
-        z1 = float(np.nanmean(x_II))
+    # Use per-column nanmean so that non-overlapping rows (different T per phase)
+    # don't produce an all-NaN element-wise sum.
+    mean_I = float(np.nanmean(x_I)) if x_I is not None else float("nan")
+    mean_II = float(np.nanmean(x_II)) if x_II is not None else float("nan")
+    if not np.isnan(mean_I) and not np.isnan(mean_II):
+        z1 = 0.5 * (mean_I + mean_II)
+    elif not np.isnan(mean_I):
+        z1 = mean_I
+    elif not np.isnan(mean_II):
+        z1 = mean_II
     else:
         z1 = 0.5
     return float(np.clip(z1, 0.05, 0.95))
