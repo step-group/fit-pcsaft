@@ -127,6 +127,7 @@ def fit_kij_lle(
     T_fitted = []
     kij_fitted = []
     cost_fitted = []
+    fitted_point_meta = []  # (exp_I, exp_II, feeds) for post-poly ARD re-evaluation
     total_nfev = 0
     T_anchor_K = min(t for t, _, __ in aggregated)  # lowest T — always converges, used as warm-start seed
 
@@ -181,6 +182,7 @@ def fit_kij_lle(
                 kij_fitted.append(float(res.x[0]))
                 # ARD% = 100 * mean(|relative residuals|)
                 cost_fitted.append(100.0 * float(np.mean(np.abs(res.fun))))
+                fitted_point_meta.append((exp_I, exp_II, feeds))
         except Exception:
             continue
 
@@ -216,15 +218,36 @@ def fit_kij_lle(
         )
         kij_coeffs = rob.x
 
+    # Post-poly ARD: re-evaluate residuals at the polynomial k_ij for each point
+    ard_poly = []
+    for T_K, (exp_I, exp_II, feeds) in zip(T_fitted_arr, fitted_point_meta):
+        kij_poly = _kij_at_T(kij_coeffs, float(T_K), kij_t_ref)
+        try:
+            r = _residuals_at_T(
+                [kij_poly],
+                float(T_K),
+                exp_I,
+                exp_II,
+                record1,
+                record2,
+                pressure,
+                feeds,
+                T_anchor_K=T_anchor_K,
+            )
+            ard_poly.append(100.0 * float(np.mean(np.abs(r))))
+        except Exception:
+            pass
+    ard_poly_arr = np.array(ard_poly)
+
     # Store pointwise data for diagnostic plotting
     data["T_kij"] = T_fitted_arr
     data["kij_pointwise"] = kij_fitted_arr
-    data["ard_pointwise"] = np.array(cost_fitted)
+    data["ard_pointwise"] = np.array(cost_fitted)       # per-point optimal (stage 1)
+    data["ard_pointwise_poly"] = ard_poly_arr            # at polynomial k_ij (stage 2)
 
-    # ARD: mean of point-wise optimal ARDs (exclude machine-precision near-zeros)
-    ard_pw = np.array(cost_fitted)
-    meaningful = ard_pw[ard_pw > 0.01]
-    ard = float(meaningful.mean()) if len(meaningful) > 0 else float(np.mean(ard_pw))
+    # Reported ARD: post-polynomial, excluding machine-precision near-zeros
+    meaningful = ard_poly_arr[ard_poly_arr > 0.01]
+    ard = float(meaningful.mean()) if len(meaningful) > 0 else float(np.mean(ard_poly_arr))
 
     # Residuals for the polynomial fit (k_ij poly vs point-wise k_ij values)
     poly_resid_vals = kij_fitted_arr - np.array(
