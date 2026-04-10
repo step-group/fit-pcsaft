@@ -42,12 +42,14 @@ def fit_kij_lle(
     t_max: "si.SIObject | None" = None,
     pressure: "si.SIObject" = 1.01325 * si.BAR,
     require_both_phases: bool = True,
+    kij_per_point: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE tieline data.
 
     Uses a two-stage approach:
-    1. For each experimental temperature, solve an independent 1D least-squares
-       problem to find the k_ij that best reproduces the tieline compositions.
+    1. For each experimental temperature (or each individual data point when
+       kij_per_point=True), solve an independent 1D least-squares problem to
+       find the k_ij that best reproduces the tieline compositions.
     2. Fit a polynomial k_ij(T) to the collected (T, k_ij) pairs.
 
     Parameters
@@ -76,6 +78,10 @@ def fit_kij_lle(
         If True (default), skip temperatures where only one phase composition
         is available. Single-phase-only points produce off-trend k_ij values
         because the 1D problem is under-constrained.
+    kij_per_point : bool
+        If False (default), aggregate rows at the same temperature and fit one
+        k_ij per unique temperature (per tie line). If True, fit one k_ij per
+        individual CSV row without any averaging across rows at the same T.
 
     Returns
     -------
@@ -109,7 +115,10 @@ def fit_kij_lle(
 
     # Stage 1: point-wise k_ij fitting
     t0 = time.perf_counter()
-    aggregated = _aggregate_lle_data(T_arr, x1_I_arr, x1_II_arr, t_scale)
+    if kij_per_point:
+        aggregated = _individual_lle_points(T_arr, x1_I_arr, x1_II_arr, t_scale)
+    else:
+        aggregated = _aggregate_lle_data(T_arr, x1_I_arr, x1_II_arr, t_scale)
 
     if require_both_phases:
         aggregated = [(T, xi, xii) for T, xi, xii in aggregated
@@ -119,7 +128,7 @@ def fit_kij_lle(
     kij_fitted = []
     cost_fitted = []
     total_nfev = 0
-    T_anchor_K = aggregated[0][0]  # lowest T — always converges, used as warm-start seed
+    T_anchor_K = min(t for t, _, __ in aggregated)  # lowest T — always converges, used as warm-start seed
 
     for T_K, exp_I, exp_II in aggregated:
         feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS
@@ -251,6 +260,30 @@ def fit_kij_lle(
         _record1=record1,
         _record2=record2,
     )
+
+
+def _individual_lle_points(
+    T_arr: np.ndarray,
+    x1_I_arr: "np.ndarray | None",
+    x1_II_arr: "np.ndarray | None",
+    t_scale: float,
+) -> "list[tuple[float, float | None, float | None]]":
+    """Return one entry per CSV row without averaging.
+
+    Returns list of (T_K, x1_I_or_None, x1_II_or_None), preserving row order.
+    """
+    T_K_arr = T_arr * t_scale
+    result = []
+    for i in range(len(T_K_arr)):
+        exp_I = None
+        exp_II = None
+        if x1_I_arr is not None and not np.isnan(x1_I_arr[i]):
+            exp_I = float(x1_I_arr[i])
+        if x1_II_arr is not None and not np.isnan(x1_II_arr[i]):
+            exp_II = float(x1_II_arr[i])
+        if exp_I is not None or exp_II is not None:
+            result.append((float(T_K_arr[i]), exp_I, exp_II))
+    return result
 
 
 def _aggregate_lle_data(
