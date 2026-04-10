@@ -7,6 +7,7 @@ import si_units as si
 from scipy.optimize import least_squares
 
 from fit_pcsaft._binary._utils import (
+    _apply_induced_association,
     _build_binary_eos,
     _kij_at_T,
     _load_pure_records,
@@ -26,6 +27,7 @@ def fit_kij_henry(
     temperature_unit=si.KELVIN,
     henry_unit=si.MEGA * si.PASCAL,
     scipy_kwargs: "dict | None" = None,
+    induced_assoc: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from Henry's law constant data.
 
@@ -57,6 +59,11 @@ def fit_kij_henry(
         K = H_feos / P_vap_solvent(T).
     scipy_kwargs : dict | None
         Overrides for scipy.optimize.least_squares keyword arguments.
+    induced_assoc : bool
+        If True, apply the induced-association mixing rule. Requires exactly one
+        self-associating component (with epsilon_k_ab > 0). The non-associating
+        component is assigned epsilon_k_ab = 0 and kappa_ab copied from the
+        self-associating component, with na = nb = 1 (2B scheme).
 
     Returns
     -------
@@ -67,6 +74,8 @@ def fit_kij_henry(
     import polars as pl
 
     record1, record2 = _load_pure_records(params_path, id1, id2)
+    if induced_assoc:
+        record1, record2 = _apply_induced_association(record1, record2)
     df = pl.read_csv(Path(henry_path), infer_schema_length=9999, truncate_ragged_lines=True)
     T_arr = df[:, 0].to_numpy()
     H_arr = df[:, 1].to_numpy()

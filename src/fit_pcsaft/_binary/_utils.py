@@ -49,6 +49,55 @@ def _build_binary_eos(
     return feos.EquationOfState.pcsaft(params, max_iter_cross_assoc=100)
 
 
+def _is_self_associating(record: "feos.PureRecord") -> bool:
+    """Return True if the record has at least one full association site with kappa_ab and epsilon_k_ab > 0."""
+    for site in record.association_sites:
+        if "kappa_ab" in site and "epsilon_k_ab" in site and float(site["epsilon_k_ab"]) > 0.0:
+            return True
+    return False
+
+
+def _apply_induced_association(
+    record1: "feos.PureRecord", record2: "feos.PureRecord"
+) -> "tuple[feos.PureRecord, feos.PureRecord]":
+    """Apply the induced-association mixing rule to a self-associating / non-associating pair.
+
+    The non-associating component receives:
+      - epsilon_k_ab = 0.0
+      - kappa_ab     = kappa_ab of the self-associating component (first full site)
+      - na = 1.0, nb = 1.0  (2B scheme)
+
+    Raises ValueError if both or neither component is self-associating.
+    """
+    import json
+
+    assoc1 = _is_self_associating(record1)
+    assoc2 = _is_self_associating(record2)
+
+    if assoc1 and assoc2:
+        raise ValueError(
+            "induced_assoc=True requires exactly one self-associating component, "
+            "but both components have association sites with epsilon_k_ab > 0."
+        )
+    if not assoc1 and not assoc2:
+        raise ValueError(
+            "induced_assoc=True requires exactly one self-associating component, "
+            "but neither component has association sites with epsilon_k_ab > 0."
+        )
+
+    assoc_record, solvating_record = (record1, record2) if assoc1 else (record2, record1)
+
+    # Pick kappa_ab from the first full site of the self-associating component
+    kappa_ab = float(assoc_record.association_sites[0]["kappa_ab"])
+
+    # Rebuild the solvating record with induced-association site
+    d = solvating_record.to_dict()
+    d["association_sites"] = [{"na": 1.0, "nb": 1.0, "kappa_ab": kappa_ab, "epsilon_k_ab": 0.0}]
+    solvating_mod = feos.PureRecord.from_json_str(json.dumps(d))
+
+    return (record1, solvating_mod) if assoc1 else (solvating_mod, record2)
+
+
 def _kij_at_T(coeffs: np.ndarray, T: float, t_ref: float) -> float:
     """Evaluate the k_ij polynomial at temperature T."""
     dT = T - t_ref

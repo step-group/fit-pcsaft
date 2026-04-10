@@ -8,6 +8,7 @@ import si_units as si
 from scipy.optimize import least_squares
 
 from fit_pcsaft._binary._utils import (
+    _apply_induced_association,
     _build_binary_eos,
     _kij_at_T,
     _load_binary_csv,
@@ -33,6 +34,7 @@ def fit_kij_vle(
     t_max: "si.SIObject | None" = None,
     scipy_kwargs: "dict | None" = None,
     kij_per_point: bool = False,
+    induced_assoc: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from VLE bubble-point data.
 
@@ -67,12 +69,20 @@ def fit_kij_vle(
         both bubble-P and dew-y1 residuals when y1 is present), then fit a polynomial
         to the collected (T, k_ij) pairs. Stores diagnostic arrays T_kij,
         kij_pointwise, ard_pointwise, and ard_pointwise_poly in the result.
+    induced_assoc : bool
+        If True, apply the induced-association mixing rule. Requires exactly one
+        self-associating component (with epsilon_k_ab > 0). The non-associating
+        component is assigned epsilon_k_ab = 0 and kappa_ab copied from the
+        self-associating component, with na = nb = 1 (2B scheme). Typical use:
+        water (self-associating) + polar non-associating solvent (e.g. MIBK, acetone).
 
     Returns
     -------
     BinaryFitResult
     """
     record1, record2 = _load_pure_records(params_path, id1, id2)
+    if induced_assoc:
+        record1, record2 = _apply_induced_association(record1, record2)
     data = _load_binary_csv(vle_path)
     data_full = {k: v.copy() for k, v in data.items()}
 

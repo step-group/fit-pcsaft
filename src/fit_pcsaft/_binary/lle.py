@@ -10,6 +10,7 @@ import si_units as si
 from scipy.optimize import least_squares
 
 from fit_pcsaft._binary._utils import (
+    _apply_induced_association,
     _build_binary_eos,
     _kij_at_T,
     _load_lle_csv,
@@ -43,6 +44,7 @@ def fit_kij_lle(
     pressure: "si.SIObject" = 1.01325 * si.BAR,
     require_both_phases: bool = True,
     kij_per_point: bool = False,
+    induced_assoc: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE tieline data.
 
@@ -82,12 +84,19 @@ def fit_kij_lle(
         If False (default), aggregate rows at the same temperature and fit one
         k_ij per unique temperature (per tie line). If True, fit one k_ij per
         individual CSV row without any averaging across rows at the same T.
+    induced_assoc : bool
+        If True, apply the induced-association mixing rule. Requires exactly one
+        self-associating component (with epsilon_k_ab > 0). The non-associating
+        component is assigned epsilon_k_ab = 0 and kappa_ab copied from the
+        self-associating component, with na = nb = 1 (2B scheme).
 
     Returns
     -------
     BinaryFitResult
     """
     record1, record2 = _load_pure_records(params_path, id1, id2)
+    if induced_assoc:
+        record1, record2 = _apply_induced_association(record1, record2)
     T_raw, x1_I_raw, x1_II_raw = _load_lle_csv(lle_path)
     data: dict[str, np.ndarray] = {"T": T_raw}
     if x1_I_raw is not None:
