@@ -12,7 +12,7 @@ from scipy.optimize import least_squares
 from fit_pcsaft._binary._utils import (
     _build_binary_eos,
     _kij_at_T,
-    _load_binary_csv,
+    _load_lle_csv,
     _load_pure_records,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
@@ -82,7 +82,12 @@ def fit_kij_lle(
     BinaryFitResult
     """
     record1, record2 = _load_pure_records(params_path, id1, id2)
-    data = _load_binary_csv(lle_path)
+    T_raw, x1_I_raw, x1_II_raw = _load_lle_csv(lle_path)
+    data: dict[str, np.ndarray] = {"T": T_raw}
+    if x1_I_raw is not None:
+        data["x1_I"] = x1_I_raw
+    if x1_II_raw is not None:
+        data["x1_II"] = x1_II_raw
     data_full = {k: v.copy() for k, v in data.items()}
 
     # Temperature filter

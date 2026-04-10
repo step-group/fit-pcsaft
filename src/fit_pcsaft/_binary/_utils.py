@@ -64,8 +64,6 @@ _COL_ALIASES: dict[str, str] = {
     "temperature": "T",
     "T_K": "T",
     "t": "T",
-    "t_C": "T",
-    "T_C": "T",
     # Pressure
     "pressure_kPa": "P",
     "pressure": "P",
