@@ -322,11 +322,11 @@ def _plot_vle(
 # ---------------------------------------------------------------------------
 
 
-def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int = 200):
+def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int = 301):
     """Compute LLE phase-boundary curve with temperature-dependent k_ij(T).
 
     For each T, builds a fresh EOS from k_ij(T) and flashes with liquid
-    initialization + warm-start from the previous temperature's PE.
+    initialization + warm-start chained from the previous step's PE.
 
     Returns (T_arr, x_I_list, x_II_list) — lists of successfully converged points.
     """
@@ -340,28 +340,48 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
     from fit_pcsaft._binary.lle import _LLE_FEEDS
 
     dT = (T_max - T_min) / npoints  # step size from data range
-    T_anchor_K = T_min
     pressure = 1.0 * si.BAR
     # Primary feed + sigmoid grid as fallback (mirrors fitting routine)
-    feeds = [z1] + _LLE_FEEDS
+    base_feeds = [z1] + _LLE_FEEDS
 
     T_out, x_I_out, x_II_out = [], [], []
     n_consec_fail = 0
+    # Fixed anchor at T_min: always deep in the LLE region, so the warm-start
+    # PE is reliable throughout the march (including near the UCST).
+    T_anchor_K = T_min
 
     T_K = T_min
     while T_K <= T_max + 500.0:  # extend up to 500 K past data range
         kij_T = _kij_at_T(result.kij_coeffs, T_K, result.kij_t_ref)
         eos_T = _build_binary_eos(result._record1, result._record2, kij_T)
 
-        # Build anchor PE at T_min with the *same* EOS (same k_ij) — EOS-compatible
-        # warm start, identical to the fitting routine's T_anchor_K approach.
+        # Prepend a targeted feed at the midpoint of the converging phases so
+        # the flash stays on the LLE branch near the UCST.
+        if len(x_I_out) >= 1:
+            mid = 0.5 * (x_I_out[-1] + x_II_out[-1])
+            feeds = [float(np.clip(mid, 0.01, 0.99))] + base_feeds
+        else:
+            feeds = base_feeds
+
+        # Acceptance threshold: relax as the phases converge toward the UCST.
+        if len(x_I_out) >= 2:
+            last_split = x_II_out[-1] - x_I_out[-1]
+            min_split = max(0.01, last_split * 0.05)
+        else:
+            min_split = 0.025
+
+        # Warm-start anchor: same eos_T at T_min — EOS-compatible, and always
+        # within the LLE region, giving a reliable initial guess for the flash.
         anchor_pe = None
         if T_K > T_anchor_K + 0.5:
             try:
                 moles_a = np.array([feeds[0], 1.0 - feeds[0]]) * si.MOL
                 s_a = feos.State(
-                    eos_T, T_anchor_K * si.KELVIN, pressure=pressure,
-                    moles=moles_a, density_initialization="liquid",
+                    eos_T,
+                    T_anchor_K * si.KELVIN,
+                    pressure=pressure,
+                    moles=moles_a,
+                    density_initialization="liquid",
                 )
                 anchor_pe = s_a.tp_flash(max_iter=500)
             except Exception:
@@ -372,14 +392,16 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
             try:
                 moles = np.array([z, 1.0 - z]) * si.MOL
                 s = feos.State(
-                    eos_T, T_K * si.KELVIN, pressure=pressure,
-                    moles=moles, density_initialization="liquid",
+                    eos_T,
+                    T_K * si.KELVIN,
+                    pressure=pressure,
+                    moles=moles,
+                    density_initialization="liquid",
                 )
-                candidate = s.tp_flash(initial_state=anchor_pe, max_iter=1000)
+                candidate = s.tp_flash(initial_state=anchor_pe)
                 x_a = float(candidate.liquid.molefracs[0])
                 x_b = float(candidate.vapor.molefracs[0])
-                # Accept if phases are distinct (not near-critical phantoms)
-                if max(x_a, x_b) - min(x_a, x_b) > 0.05:
+                if max(x_a, x_b) - min(x_a, x_b) > min_split:
                     pe = candidate
                     break
             except Exception:
@@ -389,7 +411,7 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
             x_a = float(pe.liquid.molefracs[0])
             x_b = float(pe.vapor.molefracs[0])
             T_out.append(T_K)
-            x_I_out.append(min(x_a, x_b))   # Phase I  = id1-lean
+            x_I_out.append(min(x_a, x_b))  # Phase I  = id1-lean
             x_II_out.append(max(x_a, x_b))  # Phase II = id1-rich
             n_consec_fail = 0
         else:
@@ -407,7 +429,10 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
         good = [True]
         last = 0
         for i in range(1, len(xI_arr)):
-            if abs(xI_arr[i] - xI_arr[last]) < 0.15 and abs(xII_arr[i] - xII_arr[last]) < 0.15:
+            if (
+                abs(xI_arr[i] - xI_arr[last]) < 0.15
+                and abs(xII_arr[i] - xII_arr[last]) < 0.15
+            ):
                 good.append(True)
                 last = i
             else:
@@ -421,7 +446,6 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
 
 
 def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
-    import feos
     import matplotlib.pyplot as plt
     import seaborn as sns
 
@@ -454,17 +478,16 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
     unused_mask = (T_full < lo) | (T_full > hi)
 
     z1 = _lle_feed_z1(result)
-    feed_si = np.array([z1, 1.0 - z1]) * si.MOL
 
     # Compute LLE curve with temperature-dependent k_ij(T) + warm-start continuation.
     # Each T gets its own EOS built with kij(T); initial_state from the previous T
     # steers the flash toward LLE rather than VLE.
     T_curve_arr, x_I_curve_list, x_II_curve_list = _lle_curve_kij_T(
-        result, z1, curve_T_min, curve_T_max, npoints=200
+        result, z1, curve_T_min, curve_T_max, npoints=301
     )
     if (
         len(T_curve_arr) > 0
-        and np.max(np.abs(np.array(x_I_curve_list) - np.array(x_II_curve_list))) > 1e-3
+        and np.max(np.abs(np.array(x_I_curve_list) - np.array(x_II_curve_list))) > 1e-04
     ):
         _curve_plot(
             ax,
@@ -499,12 +522,9 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
             kij_t_ref=result.kij_t_ref,
         )
         T_u, x_I_u, x_II_u = _lle_curve_kij_T(
-            mock, z1, curve_T_min, curve_T_max, npoints=200
+            mock, z1, curve_T_min, curve_T_max, npoints=301
         )
-        if (
-            len(T_u) > 0
-            and np.max(np.abs(np.array(x_I_u) - np.array(x_II_u))) > 1e-3
-        ):
+        if len(T_u) > 0 and np.max(np.abs(np.array(x_I_u) - np.array(x_II_u))) > 1e-04:
             ax.plot(
                 _log_odds(x_I_u),
                 T_u,
