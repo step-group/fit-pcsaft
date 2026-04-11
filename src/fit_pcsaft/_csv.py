@@ -109,6 +109,7 @@ SCHEMA_HVAP    = CsvSchema(required=("T", "hvap"),           name="enthalpy of v
 SCHEMA_VLE     = CsvSchema(required=("T", "P", "x1"),        optional=("y1",),                   name="VLE")
 SCHEMA_SLE     = CsvSchema(required=("T", "x1"),             name="SLE")
 SCHEMA_LLE     = CsvSchema(required=("T",),                  optional=("x1_I", "x1_II", "w1_I", "w1_II"), name="LLE")
+SCHEMA_VLLE    = CsvSchema(required=("T", "P"),              optional=("x1_I", "x1_II", "y1"),   name="VLLE")
 SCHEMA_HENRY   = CsvSchema(required=("T", "H"),              name="Henry")
 
 

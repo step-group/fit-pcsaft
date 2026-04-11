@@ -1,6 +1,7 @@
 """SLE k_ij fitting from solid-liquid equilibrium (solubility) data."""
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import si_units as si
@@ -16,6 +17,7 @@ from fit_pcsaft._csv import SCHEMA_SLE, load_csv
 from fit_pcsaft._binary.result import BinaryFitResult
 
 _R = si.RGAS / (si.JOULE / (si.MOL * si.KELVIN))
+_N_KIJ_SCAN = 13
 
 
 def fit_kij_sle(
@@ -35,6 +37,7 @@ def fit_kij_sle(
     t_min: "si.SIObject | None" = None,
     t_max: "si.SIObject | None" = None,
     scipy_kwargs: "dict | None" = None,
+    kij_per_point: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from SLE solubility data.
 
@@ -188,6 +191,109 @@ def fit_kij_sle(
             resids[i] = resid
         return resids
 
+    t0 = time.perf_counter()
+
+    # --- Per-point two-stage fitting -----------------------------------------
+    if kij_per_point:
+        T_fitted, kij_fitted, ard_fitted = [], [], []
+        total_nfev = 0
+
+        for i in range(n_rows):
+            T_K_i = float(T_arr[i]) * t_scale
+            x1_i  = float(x1_arr[i])
+
+            def resid_fn(kij_arr, T_K=T_K_i, x1=x1_i):
+                try:
+                    eos = _build_binary_eos(record1, record2, float(kij_arr[0]))
+                    x1_pred = _predict_x1(eos, T_K, x1)
+                    resid = 1.0 if np.isnan(x1_pred) else (x1_pred - x1)
+                    if eutectic:
+                        x1_pred2 = _predict_x1_branch2(eos, T_K, x1)
+                        resid2 = 1.0 if np.isnan(x1_pred2) else (x1_pred2 - x1)
+                        resid = resid if abs(resid) <= abs(resid2) else resid2
+                    return np.array([resid])
+                except Exception:
+                    return np.array([1.0])
+
+            kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
+            best_x0, best_cost = 0.0, np.inf
+            for kv in kij_scan:
+                try:
+                    c = 0.5 * float(resid_fn([kv])[0] ** 2)
+                    if c < best_cost:
+                        best_cost, best_x0 = c, kv
+                except Exception:
+                    pass
+
+            try:
+                res = least_squares(
+                    resid_fn, x0=[best_x0],
+                    bounds=([kij_bounds[0]], [kij_bounds[1]]),
+                    method="trf",
+                    ftol=1e-8, xtol=1e-8, gtol=1e-8, max_nfev=500,
+                )
+                total_nfev += res.nfev
+                if res.cost < 0.5 * 0.99:
+                    T_fitted.append(T_K_i)
+                    kij_fitted.append(float(res.x[0]))
+                    ard_fitted.append(100.0 * abs(float(res.fun[0])))
+            except Exception:
+                continue
+
+        if not T_fitted:
+            raise RuntimeError("No SLE points converged. Try relaxing kij_bounds.")
+
+        effective_order = min(kij_order, len(T_fitted) - 1)
+        T_fitted_arr  = np.array(T_fitted)
+        kij_fitted_arr = np.array(kij_fitted)
+        dT = T_fitted_arr - kij_t_ref
+
+        ols_rev = np.polyfit(dT, kij_fitted_arr, effective_order)
+        x0_poly = ols_rev[::-1]
+
+        if effective_order == 0 or len(T_fitted) == 1:
+            kij_coeffs = x0_poly
+        else:
+            def _poly_resid(coeffs):
+                return sum(c * dT**j for j, c in enumerate(coeffs)) - kij_fitted_arr
+            rob = least_squares(_poly_resid, x0_poly, loss="cauchy", f_scale=0.01,
+                                ftol=1e-8, xtol=1e-8, gtol=1e-8)
+            kij_coeffs = rob.x
+
+        poly_resid = kij_fitted_arr - np.array(
+            [_kij_at_T(kij_coeffs, T, kij_t_ref) for T in T_fitted_arr]
+        )
+        eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
+        ard = float(np.mean(ard_fitted))
+
+        data["T_kij"]         = T_fitted_arr
+        data["kij_pointwise"] = kij_fitted_arr
+        data["ard_pointwise"] = np.array(ard_fitted)
+
+        return BinaryFitResult(
+            kij_coeffs=kij_coeffs,
+            kij_t_ref=kij_t_ref,
+            id1=id1,
+            id2=id2,
+            equilibrium_type="sle",
+            eos=eos_ref,
+            data=data,
+            ard=ard,
+            scipy_result=SimpleNamespace(
+                x=kij_coeffs, fun=poly_resid,
+                cost=float(np.sum(poly_resid**2)) / 2.0,
+                success=True, nfev=total_nfev,
+                message="Per-point SLE fitting completed",
+            ),
+            time_elapsed=time.perf_counter() - t0,
+            tm_K=Tm_K, delta_hfus_J=dHfus_J, solid_index=solid_index,
+            tm2_K=Tm2_K, delta_hfus2_J=dHfus2_J,
+            t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
+            t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
+            data_full=data_full,
+        )
+
+    # --- Global polynomial fit (default) -------------------------------------
     n_coeffs = kij_order + 1
     jac = _make_binary_jac_fn(fun, n_coeffs)
 
@@ -206,7 +312,6 @@ def fit_kij_sle(
     if scipy_kwargs:
         ls_kwargs.update(scipy_kwargs)
 
-    t0 = time.perf_counter()
     result = least_squares(fun, x0, jac=jac, **ls_kwargs)
     time_elapsed = time.perf_counter() - t0
 
