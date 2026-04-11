@@ -157,6 +157,7 @@ class BinaryFitResult:
             self.id2,
             equilibrium_type=self.equilibrium_type,
             ard_pw=self.data.get("ard_pointwise"),
+            source=self.data.get("source"),
             path=path,
         )
 
@@ -176,15 +177,17 @@ class BinaryFitResult:
             1, len(self.data)
         )
         rms = np.sqrt(2.0 * self.scipy_result.cost / max(1, len(self.scipy_result.fun)))
-        lines.extend(
-            [
-                "",
-                "Fitting quality:",
-                f"  ARD:                 {self.ard:.2f}%",
-                f"  RMS weighted resid.: {rms:.4f}",
-                f"  Converged:           {self.scipy_result.success}",
-                f"  Function evals:      {self.scipy_result.nfev}",
-                f"  Time elapsed:        {self.time_elapsed:.2f} s",
-            ]
-        )
+        lines.extend(["", "Fitting quality:"])
+        if "ard_vle" in self.data and "ard_lle" in self.data:
+            lines.append(f"  ARD VLE:             {float(self.data['ard_vle'][0]):.2f}%")
+            lines.append(f"  ARD LLE:             {float(self.data['ard_lle'][0]):.2f}%")
+            lines.append(f"  ARD combined:        {self.ard:.2f}%")
+        else:
+            lines.append(f"  ARD:                 {self.ard:.2f}%")
+        lines.extend([
+            f"  RMS weighted resid.: {rms:.4f}",
+            f"  Converged:           {self.scipy_result.success}",
+            f"  Function evals:      {self.scipy_result.nfev}",
+            f"  Time elapsed:        {self.time_elapsed:.2f} s",
+        ])
         return "\n".join(lines)

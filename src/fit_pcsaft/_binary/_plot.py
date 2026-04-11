@@ -586,11 +586,13 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
 
 def _plot_kij_vs_T(
     T_pw, kij_pw, kij_coeffs, kij_t_ref, id1, id2,
-    equilibrium_type="lle", ard_pw=None, path=None,
+    equilibrium_type="lle", ard_pw=None, source=None, path=None,
 ):
     """Scatter pointwise k_ij values and the fitted polynomial k_ij(T).
 
-    Points are colored by per-point ARD% when ard_pw is provided.
+    When *source* is provided (array of "vle"/"lle" strings), points are
+    colored by type. Otherwise points are colored by per-point ARD% when
+    ard_pw is provided, or in a single color.
     """
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -600,7 +602,19 @@ def _plot_kij_vs_T(
 
     fig, ax = plt.subplots(figsize=(7, 5))
 
-    if ard_pw is not None:
+    if source is not None:
+        # Color VLE and LLE points differently
+        mask_vle = source == "vle"
+        mask_lle = source == "lle"
+        ax.scatter(
+            T_pw[mask_vle], kij_pw[mask_vle],
+            color=_EXP_COLOR_2, zorder=3, label="VLE $k_{ij}$", s=60, marker="o",
+        )
+        ax.scatter(
+            T_pw[mask_lle], kij_pw[mask_lle],
+            color=_EXP_COLOR_1, zorder=3, label="LLE $k_{ij}$", s=60, marker="s",
+        )
+    elif ard_pw is not None:
         sc = ax.scatter(
             T_pw,
             kij_pw,
