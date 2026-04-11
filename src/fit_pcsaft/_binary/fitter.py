@@ -30,7 +30,6 @@ from scipy.optimize import least_squares
 from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
-    _kij_at_T,
     _load_pure_records,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
@@ -63,7 +62,7 @@ class BinaryKijFitter:
         *,
         kij_order: int = 0,
         kij_t_ref: float = 298.15,
-        kij_bounds: tuple = (-0.5, 0.5),
+        kij_bounds: tuple = (-0.3, 0.3),
         induced_assoc: bool = False,
     ):
         self.id1 = id1
@@ -89,11 +88,16 @@ class BinaryKijFitter:
         t_max=None,
     ) -> "BinaryKijFitter":
         """Register a VLE bubble-point dataset."""
-        self._sources.append(dict(
-            type="vle", path=path,
-            temperature_unit=temperature_unit, pressure_unit=pressure_unit,
-            t_min=t_min, t_max=t_max,
-        ))
+        self._sources.append(
+            dict(
+                type="vle",
+                path=path,
+                temperature_unit=temperature_unit,
+                pressure_unit=pressure_unit,
+                t_min=t_min,
+                t_max=t_max,
+            )
+        )
         return self
 
     def add_lle(
@@ -107,12 +111,17 @@ class BinaryKijFitter:
         require_both_phases: bool = True,
     ) -> "BinaryKijFitter":
         """Register an LLE tie-line dataset."""
-        self._sources.append(dict(
-            type="lle", path=path,
-            temperature_unit=temperature_unit, pressure=pressure,
-            t_min=t_min, t_max=t_max,
-            require_both_phases=require_both_phases,
-        ))
+        self._sources.append(
+            dict(
+                type="lle",
+                path=path,
+                temperature_unit=temperature_unit,
+                pressure=pressure,
+                t_min=t_min,
+                t_max=t_max,
+                require_both_phases=require_both_phases,
+            )
+        )
         return self
 
     def add_vlle(
@@ -125,11 +134,16 @@ class BinaryKijFitter:
         t_max=None,
     ) -> "BinaryKijFitter":
         """Register a VLLE heteroazeotrope dataset."""
-        self._sources.append(dict(
-            type="vlle", path=path,
-            temperature_unit=temperature_unit, pressure_unit=pressure_unit,
-            t_min=t_min, t_max=t_max,
-        ))
+        self._sources.append(
+            dict(
+                type="vlle",
+                path=path,
+                temperature_unit=temperature_unit,
+                pressure_unit=pressure_unit,
+                t_min=t_min,
+                t_max=t_max,
+            )
+        )
         return self
 
     def add_sle(
@@ -146,13 +160,20 @@ class BinaryKijFitter:
         t_max=None,
     ) -> "BinaryKijFitter":
         """Register an SLE solubility dataset."""
-        self._sources.append(dict(
-            type="sle", path=path,
-            tm=tm, delta_hfus=delta_hfus,
-            solid_index=solid_index, tm2=tm2, delta_hfus2=delta_hfus2,
-            temperature_unit=temperature_unit,
-            t_min=t_min, t_max=t_max,
-        ))
+        self._sources.append(
+            dict(
+                type="sle",
+                path=path,
+                tm=tm,
+                delta_hfus=delta_hfus,
+                solid_index=solid_index,
+                tm2=tm2,
+                delta_hfus2=delta_hfus2,
+                temperature_unit=temperature_unit,
+                t_min=t_min,
+                t_max=t_max,
+            )
+        )
         return self
 
     # ------------------------------------------------------------------
@@ -170,14 +191,16 @@ class BinaryKijFitter:
             e.g. ``"vle+lle"`` or ``"vle+lle+vlle"``.
         """
         if not self._sources:
-            raise ValueError("No data sources registered. Call add_vle(), add_lle(), etc.")
+            raise ValueError(
+                "No data sources registered. Call add_vle(), add_lle(), etc."
+            )
 
         t0 = time.perf_counter()
 
-        from fit_pcsaft._binary.vle import fit_kij_vle
         from fit_pcsaft._binary.lle import fit_kij_lle
-        from fit_pcsaft._binary.vlle import fit_kij_vlle
         from fit_pcsaft._binary.sle import fit_kij_sle
+        from fit_pcsaft._binary.vle import fit_kij_vle
+        from fit_pcsaft._binary.vlle import fit_kij_vlle
 
         T_all: list[np.ndarray] = []
         kij_all: list[np.ndarray] = []
@@ -196,12 +219,17 @@ class BinaryKijFitter:
 
             if stype == "vle":
                 res = fit_kij_vle(
-                    self.id1, self.id2, src["path"], self.params_path,
-                    kij_order=0, kij_t_ref=self.kij_t_ref,
+                    self.id1,
+                    self.id2,
+                    src["path"],
+                    self.params_path,
+                    kij_order=0,
+                    kij_t_ref=self.kij_t_ref,
                     kij_bounds=self.kij_bounds,
                     temperature_unit=src["temperature_unit"],
                     pressure_unit=src["pressure_unit"],
-                    t_min=src["t_min"], t_max=src["t_max"],
+                    t_min=src["t_min"],
+                    t_max=src["t_max"],
                     kij_per_point=True,
                     induced_assoc=self.induced_assoc,
                 )
@@ -211,12 +239,17 @@ class BinaryKijFitter:
 
             elif stype == "lle":
                 res = fit_kij_lle(
-                    self.id1, self.id2, src["path"], self.params_path,
-                    kij_order=0, kij_t_ref=self.kij_t_ref,
+                    self.id1,
+                    self.id2,
+                    src["path"],
+                    self.params_path,
+                    kij_order=0,
+                    kij_t_ref=self.kij_t_ref,
                     kij_bounds=self.kij_bounds,
                     temperature_unit=src["temperature_unit"],
                     pressure=src["pressure"],
-                    t_min=src["t_min"], t_max=src["t_max"],
+                    t_min=src["t_min"],
+                    t_max=src["t_max"],
                     require_both_phases=src["require_both_phases"],
                     kij_per_point=True,
                     induced_assoc=self.induced_assoc,
@@ -227,12 +260,17 @@ class BinaryKijFitter:
 
             elif stype == "vlle":
                 res = fit_kij_vlle(
-                    self.id1, self.id2, src["path"], self.params_path,
-                    kij_order=0, kij_t_ref=self.kij_t_ref,
+                    self.id1,
+                    self.id2,
+                    src["path"],
+                    self.params_path,
+                    kij_order=0,
+                    kij_t_ref=self.kij_t_ref,
                     kij_bounds=self.kij_bounds,
                     temperature_unit=src["temperature_unit"],
                     pressure_unit=src["pressure_unit"],
-                    t_min=src["t_min"], t_max=src["t_max"],
+                    t_min=src["t_min"],
+                    t_max=src["t_max"],
                     induced_assoc=self.induced_assoc,
                 )
                 for k in ("T", "P", "x1_I", "x1_II", "y1"):
@@ -241,14 +279,21 @@ class BinaryKijFitter:
 
             elif stype == "sle":
                 res = fit_kij_sle(
-                    self.id1, self.id2, src["path"], self.params_path,
-                    tm=src["tm"], delta_hfus=src["delta_hfus"],
+                    self.id1,
+                    self.id2,
+                    src["path"],
+                    self.params_path,
+                    tm=src["tm"],
+                    delta_hfus=src["delta_hfus"],
                     solid_index=src["solid_index"],
-                    tm2=src["tm2"], delta_hfus2=src["delta_hfus2"],
-                    kij_order=0, kij_t_ref=self.kij_t_ref,
+                    tm2=src["tm2"],
+                    delta_hfus2=src["delta_hfus2"],
+                    kij_order=0,
+                    kij_t_ref=self.kij_t_ref,
                     kij_bounds=self.kij_bounds,
                     temperature_unit=src["temperature_unit"],
-                    t_min=src["t_min"], t_max=src["t_max"],
+                    t_min=src["t_min"],
+                    t_max=src["t_max"],
                     kij_per_point=True,
                 )
                 for k in ("T", "x1"):
@@ -270,10 +315,10 @@ class BinaryKijFitter:
             total_nfev += res.scipy_result.nfev
 
         # --- combine and fit polynomial ---
-        T_combined   = np.concatenate(T_all)
+        T_combined = np.concatenate(T_all)
         kij_combined = np.concatenate(kij_all)
         ard_combined = np.concatenate(ard_all)
-        source       = np.concatenate(source_labels)
+        source = np.concatenate(source_labels)
 
         effective_order = min(self.kij_order, len(T_combined) - 1)
         dT = T_combined - self.kij_t_ref
@@ -283,29 +328,37 @@ class BinaryKijFitter:
 
         if effective_order == 0 or len(T_combined) == 1:
             kij_coeffs = x0_poly
-            poly_resid = kij_combined - sum(
-                c * dT**j for j, c in enumerate(kij_coeffs)
-            )
+            poly_resid = kij_combined - sum(c * dT**j for j, c in enumerate(kij_coeffs))
             scipy_result = SimpleNamespace(
-                x=kij_coeffs, fun=poly_resid,
+                x=kij_coeffs,
+                fun=poly_resid,
                 cost=float(np.sum(poly_resid**2)) / 2.0,
-                success=True, nfev=total_nfev,
+                success=True,
+                nfev=total_nfev,
                 message="Combined per-point fitting completed",
             )
         else:
+
             def _poly_resid(coeffs):
                 return sum(c * dT**j for j, c in enumerate(coeffs)) - kij_combined
 
             rob = least_squares(
-                _poly_resid, x0_poly,
-                loss="cauchy", f_scale=0.01,
-                ftol=1e-8, xtol=1e-8, gtol=1e-8,
+                _poly_resid,
+                x0_poly,
+                loss="cauchy",
+                f_scale=0.01,
+                ftol=1e-8,
+                xtol=1e-8,
+                gtol=1e-8,
             )
             total_nfev += rob.nfev
             kij_coeffs = rob.x
             scipy_result = SimpleNamespace(
-                x=kij_coeffs, fun=rob.fun, cost=rob.cost,
-                success=rob.success, nfev=total_nfev,
+                x=kij_coeffs,
+                fun=rob.fun,
+                cost=rob.cost,
+                success=rob.success,
+                nfev=total_nfev,
                 message="Combined per-point fitting completed",
             )
 
@@ -330,10 +383,10 @@ class BinaryKijFitter:
             equilibrium_type=eq_type,
             eos=eos_ref,
             data={
-                "T_kij":          T_combined,
-                "kij_pointwise":  kij_combined,
-                "source":         source,
-                "ard_pointwise":  ard_combined,
+                "T_kij": T_combined,
+                "kij_pointwise": kij_combined,
+                "source": source,
+                "ard_pointwise": ard_combined,
                 **{f"ard_{t}": np.array([ard_by_type[t]]) for t in types_seen},
                 **data_exp,
             },
