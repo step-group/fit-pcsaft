@@ -1,0 +1,52 @@
+temperature_K,x1_I,x1_II,source
+273.2,0.00538,0.912,Stephenson
+273.2,0.0055,,Gross et al.
+282.7,0.00405,0.903,Stephenson
+283.2,0.00414,,Gross et al.
+292.6,0.00351,,Stephenson
+293.2,0.00349,,Doolittle
+293.2,0.0033,0.8981,Ratkovics et al.
+293.2,0.00373,0.8792,Ginnings et al.
+295.2,0.00366,0.884,Othmer et al.
+298,0.0031,0.9009,Yang et al.
+298.2,0.00349,0.8948,Ginnings et al.
+298.2,,0.873,Arce et al.
+298.2,0.0036,0.8888,Bilgin
+298.2,0.0031,0.903,Conway and Philip
+298.2,0.0033,,Conway and Philip
+298.2,0.00323,,Lo et al.
+298.2,0.0035,0.893,Lozano
+298.2,0.0031,0.907,Regna and Bruins
+298.2,0.0033,0.9013,Sekine et al.
+298.2,,0.893,Sherwood et al.
+298.2,0.00321,0.9104,Solimo et al.
+298.2,0.0000312,0.9009,Yang et al.
+298.2,0.00314,,Yang et al.
+303.2,0.00325,0.8888,Ginnings et al.
+303.2,0.00298,,Gross et al.
+303.2,0.00327,0.8628,Barnes et al.
+303.2,0.0035,0.903,Croker and Bowrey
+303.2,0.0029,,Rajapakse et al.
+303.2,0.0028792,0.881991,Ramanarao et al.
+303.2,,0.8981,Sharma et al.
+303.2,,0.9014,Vakili-Nezhaad et al.
+304,0.00303,0.875,Stephenson
+308.2,,0.87,Arce et al.
+308.2,0.00286,0.897,Govindarajan and Sabarathinam
+312.8,0.00268,0.875,Stephenson
+313,0.0027,0.8779,Yang et al.
+313.2,0.00255,,Vakili-Nezhaad et al.
+318.2,,0.85,Arce et al.
+323,0.0025,0.8628,Yang et al.
+323.2,0.00253,,Gross et al.
+323.2,0.0031,,Rajapakse et al.
+323.2,0.00258,,Vakili-Nezhaad et al.
+323.3,0.00251,0.858,Stephenson
+326.2,,0.8496,Rawat and Krishna
+328.2,,0.844,Arce et al.
+333.6,0.00235,0.858,Stephenson
+343.2,,0.812,Lozano
+343.4,0.00225,0.841,Stephenson
+348.2,0.00246,,Gross et al.
+353.3,0.00214,0.841,Stephenson
+361,,0.7955,Cho et al.

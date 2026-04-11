@@ -14,6 +14,7 @@ import si_units as si
 from scipy.optimize import least_squares
 
 from fit_pcsaft._binary._utils import (
+    _apply_induced_association,
     _build_binary_eos,
     _kij_at_T,
     _load_pure_records,
@@ -179,7 +180,15 @@ def fit_kij_vle_lle(
     ard = (ard_vle * n_vle + ard_lle * n_lle) / (n_vle + n_lle)
 
     record1, record2 = _load_pure_records(params_path, id1, id2)
+    if induced_assoc:
+        record1, record2 = _apply_induced_association(record1, record2)
     eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
+
+    # Collect experimental observations for plotting (prefixed by type)
+    vle_exp = {f"vle_{k}": v for k, v in vle_res.data.items()
+               if k in ("T", "P", "x1", "y1")}
+    lle_exp = {f"lle_{k}": v for k, v in lle_res.data.items()
+               if k in ("T", "x1_I", "x1_II")}
 
     return BinaryFitResult(
         kij_coeffs=kij_coeffs,
@@ -198,6 +207,8 @@ def fit_kij_vle_lle(
             ]),
             "ard_vle": np.array([ard_vle]),
             "ard_lle": np.array([ard_lle]),
+            **vle_exp,
+            **lle_exp,
         },
         data_full={},
         ard=ard,

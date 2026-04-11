@@ -28,15 +28,15 @@
       "formula": "H2O"
     },
     "molarweight": 18.011,
-    "m": 1.5725,
-    "sigma": 2.627,
-    "epsilon_k": 291.13,
+    "m": 1.3112,
+    "sigma": 2.7613,
+    "epsilon_k": 372.37,
     "association_sites": [
       {
-        "na": 2.0,
-        "nb": 2.0,
-        "kappa_ab": 0.074347,
-        "epsilon_k_ab": 1334.2
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.048987,
+        "epsilon_k_ab": 2123.1
       }
     ]
   },

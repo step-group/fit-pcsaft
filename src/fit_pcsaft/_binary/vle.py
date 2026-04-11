@@ -86,6 +86,13 @@ def fit_kij_vle(
     data = load_csv(vle_path, SCHEMA_VLE)
     data_full = {k: v.copy() for k, v in data.items()}
 
+    # --- Drop pure-component endpoints (x1≈0 or x1≈1) ----------------------
+    # Bubble/dew point calculations are singular for pure components.
+    _x1_raw = data["x1"].astype(float)
+    _mix_mask = (_x1_raw > 1e-4) & (_x1_raw < 1.0 - 1e-4)
+    if not _mix_mask.all():
+        data = {k: v[_mix_mask] for k, v in data.items()}
+
     # --- Temperature filter --------------------------------------------------
     if t_min is not None or t_max is not None:
         mask = np.ones(len(data["T"]), dtype=bool)

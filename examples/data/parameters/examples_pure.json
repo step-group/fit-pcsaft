@@ -129,5 +129,26 @@
         "epsilon_k_ab": 2155.1911608679197
       }
     ]
+  },
+  {
+    "identifier": {
+      "cas": "108-10-1",
+      "name": "mibk",
+      "iupac_name": "4-methylpentan-2-one",
+      "smiles": "CC(C)CC(=O)C",
+      "inchi": "InChI=1S/C6H12O/c1-5(2)4-6(3)7/h5H,4H2,1-3H3",
+      "formula": "C6H12O"
+    },
+    "molarweight": 100.16,
+    "m": 3.5141382716525915,
+    "sigma": 3.613279815980203,
+    "epsilon_k": 248.6950881253453,
+    "mu": 2.7,
+    "association_sites": [
+      {
+        "na": 0.0,
+        "nb": 1.0
+      }
+    ]
   }
 ]

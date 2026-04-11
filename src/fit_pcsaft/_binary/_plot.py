@@ -86,6 +86,9 @@ def _plot_binary(
         return _plot_sle(result, path, temperature_unit)
     elif eq == "henry":
         return _plot_henry(result, path, temperature_unit, henry_unit)
+    elif eq == "vle_lle":
+        return _plot_vle_lle(result, path, temperature_unit, pressure_unit,
+                             plot_unfitted=plot_unfitted)
     else:
         raise ValueError(f"Unknown equilibrium_type: {eq!r}")
 
@@ -973,3 +976,259 @@ def _sle_fixed_point(
                 return 1.0 - x_new
             x_iter = x_new
         return 1.0 - x_iter  # return x_id1
+
+
+# ---------------------------------------------------------------------------
+# VLE + LLE combined
+# ---------------------------------------------------------------------------
+
+
+def _find_heteroazeotrope(result, pressure_si, x_I_init: float, x_II_init: float,
+                          T_init_K: float):
+    """Find the heteroazeotrope with PhaseEquilibrium.heteroazeotrope.
+
+    Builds the EOS at k_ij(T_init_K) and calls feos' heteroazeotrope solver.
+
+    Returns (T_het_K, x1_liq_I, x1_liq_II, y1_vap) or None on failure.
+    The two liquid compositions are the water-rich (x1_liq_I, small x1) and
+    toluene-rich (x1_liq_II, large x1) phases at the three-phase point.
+    """
+    import feos
+
+    from fit_pcsaft._binary._utils import _build_binary_eos, _kij_at_T
+
+    if result._record1 is None or result._record2 is None:
+        return None
+
+    kij = _kij_at_T(result.kij_coeffs, T_init_K, result.kij_t_ref)
+    eos = _build_binary_eos(result._record1, result._record2, kij)
+    try:
+        ha = feos.PhaseEquilibrium.heteroazeotrope(
+            eos, pressure_si,
+            x_init=(float(x_I_init), float(x_II_init)),
+            tp_init=T_init_K * si.KELVIN,
+        )
+        # ThreePhaseEquilibrium has liquid1, liquid2, vapor attributes
+        T_het = float(ha.vapor.temperature / si.KELVIN)
+        x1_liq_I = float(ha.liquid1.molefracs[0])   # one liquid phase (low x1)
+        x1_liq_II = float(ha.liquid2.molefracs[0])  # other liquid phase (high x1)
+        y1_vap = float(ha.vapor.molefracs[0])        # vapor composition
+        # Ensure x1_liq_I < x1_liq_II (phase I = water-rich, phase II = MIBK-rich)
+        if x1_liq_I > x1_liq_II:
+            x1_liq_I, x1_liq_II = x1_liq_II, x1_liq_I
+        return T_het, x1_liq_I, x1_liq_II, y1_vap
+    except Exception:
+        return None
+
+
+def _vle_branch_isobaric(
+    result, pressure_si, x1_start: float, x1_end: float,
+    T_start_K: float, npoints: int = 80,
+) -> "tuple[list, list, list]":
+    """Trace one arm of the isobaric VLE bubble curve via PhaseEquilibrium.bubble_point.
+
+    Passes *pressure_si* as the first argument to ``bubble_point`` so that feos
+    solves for the **bubble temperature** at fixed pressure (isobaric mode).
+    Steps the liquid composition x1 from *x1_start* → *x1_end* (toward a pure
+    component) and uses the previous T as the temperature initial guess.
+
+    Returns (x1_bubble, T_K_bubble, y1_dew) — the dew-curve y1 values come
+    naturally as output of each bubble_point call.
+    """
+    import feos
+
+    from fit_pcsaft._binary._utils import _build_binary_eos, _kij_at_T
+
+    x1_arr = np.linspace(x1_start, x1_end, npoints + 1)[1:]  # skip start point
+    x1_out, T_out, y1_out = [], [], []
+    T_K = T_start_K
+
+    for x1 in x1_arr:
+        x1 = float(np.clip(x1, 1e-6, 1.0 - 1e-6))
+        kij = _kij_at_T(result.kij_coeffs, T_K, result.kij_t_ref)
+        eos = _build_binary_eos(result._record1, result._record2, kij)
+        try:
+            bp = feos.PhaseEquilibrium.bubble_point(
+                eos, pressure_si,
+                np.array([x1, 1.0 - x1]),
+                tp_init=T_K * si.KELVIN,
+            )
+            T_K = float(bp.liquid.temperature / si.KELVIN)
+            y1 = float(bp.vapor.molefracs[0])
+            x1_out.append(x1)
+            T_out.append(T_K)
+            y1_out.append(y1)
+        except Exception:
+            break
+
+    return x1_out, T_out, y1_out
+
+
+def _plot_vle_lle(
+    result, path, temperature_unit, pressure_unit, plot_unfitted: bool = False
+):
+    """T-x diagram overlaying VLE bubble/dew curves and LLE binodal.
+
+    VLE data (liquid = circles, vapour = triangles) and LLE data (phase I =
+    squares, phase II = diamonds) are shown on a linear composition axis.
+
+    The heteroazeotrope is located with ``PhaseEquilibrium.heteroazeotrope``.
+    From it:
+      - Bubble curves go outward (toward pure components) using
+        ``feos.State`` with ``density_initialization="liquid"``.
+      - Dew curves go outward using ``density_initialization="vapor"``.
+      - The LLE binodal goes downward in T using ``_lle_curve_kij_T``
+        (also liquid-initialized), honouring the T-dependent k_ij polynomial.
+    The three-phase horizontal line is drawn at T_heteroazeotrope.
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    sns.set_context("talk")
+    sns.set_style("ticks")
+
+    fig, ax = plt.subplots(figsize=(8, 7))
+
+    t_scale = float(temperature_unit / si.KELVIN)
+    data = result.data
+
+    # ---- VLE experimental data -------------------------------------------------
+    vle_T = data["vle_T"].astype(float) * t_scale  # in K
+    vle_P = data["vle_P"].astype(float)
+    vle_x1 = data["vle_x1"].astype(float)
+    has_y1 = "vle_y1" in data
+
+    P_mean = float(np.mean(vle_P))
+    is_isobaric = np.std(vle_P) / P_mean < 0.05
+    p_lbl = _pressure_label(pressure_unit)
+    pressure_si = P_mean * pressure_unit
+
+    # ---- LLE experimental data -------------------------------------------------
+    lle_T = data["lle_T"].astype(float) * t_scale  # in K
+    has_I = "lle_x1_I" in data
+    has_II = "lle_x1_II" in data
+
+    vals_I = data["lle_x1_I"].astype(float) if has_I else np.array([])
+    vals_II = data["lle_x1_II"].astype(float) if has_II else np.array([])
+    mean_I = float(np.nanmean(vals_I)) if len(vals_I) else float("nan")
+    mean_II = float(np.nanmean(vals_II)) if len(vals_II) else float("nan")
+    x_I_init = mean_I if not np.isnan(mean_I) else 0.01
+    x_II_init = mean_II if not np.isnan(mean_II) else 0.9
+
+    # ---- Find heteroazeotrope --------------------------------------------------
+    T_vle_mean = float(np.mean(vle_T))
+    ha = _find_heteroazeotrope(result, pressure_si, x_I_init, x_II_init, T_vle_mean)
+
+    # ---- VLE computed curves (only for isobaric data) -------------------------
+    if is_isobaric and ha is not None:
+        T_het, x1_I_het, x1_II_het, y1_het = ha
+
+        # Bubble + dew curves: each arm returns (x1_bubble, T, y1_dew) via
+        # isobaric bubble_point (pressure first → finds bubble temperature).
+        # Water-rich arm: x1_I_het → 0 (pure water)
+        xb1, Tb1, yd1 = _vle_branch_isobaric(
+            result, pressure_si, x1_I_het, 1e-5, T_het, npoints=80,
+        )
+        # MIBK-rich arm: x1_II_het → 1 (pure MIBK)
+        xb2, Tb2, yd2 = _vle_branch_isobaric(
+            result, pressure_si, x1_II_het, 1.0 - 1e-5, T_het, npoints=80,
+        )
+
+        def _above_het(xs, Ts, ys=None):
+            """Drop any points where T < T_het (numerical noise near three-phase point)."""
+            mask = [t >= T_het for t in Ts]
+            xs_f = [x for x, m in zip(xs, mask) if m]
+            Ts_f = [t for t, m in zip(Ts, mask) if m]
+            if ys is not None:
+                ys_f = [y for y, m in zip(ys, mask) if m]
+                return xs_f, Ts_f, ys_f
+            return xs_f, Ts_f
+
+        xb1, Tb1, yd1 = _above_het(xb1, Tb1, yd1)
+        xb2, Tb2, yd2 = _above_het(xb2, Tb2, yd2)
+
+        # Bubble curves (liquid compositions on x-axis)
+        if xb1:
+            ax.plot(xb1, Tb1, color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (bubble)")
+        if xb2:
+            ax.plot(xb2, Tb2, color=_EXP_COLOR_1, linestyle="-")
+
+        # Dew curves (vapor compositions on x-axis, same T as bubble tie-line)
+        if yd1:
+            ax.plot(yd1, Tb1[:len(yd1)], color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (dew)")
+        if yd2:
+            ax.plot(yd2, Tb2[:len(yd2)], color=_EXP_COLOR_2, linestyle="-")
+
+        # Three-phase horizontal line at T_het
+        ax.hlines(T_het, x1_I_het, x1_II_het,
+                  colors=_GRAY, linewidth=1.2, linestyle="-", label=f"VLLE  ({T_het:.1f} K)")
+
+    # ---- LLE computed binodal (liquid-init continuation downward from heteroazeotrope)
+    z1 = float(np.clip(0.5 * (x_I_init + x_II_init), 0.05, 0.95))
+    T_pad = max((lle_T.max() - lle_T.min()) * 0.05, 1.0)
+    curve_T_min = float(lle_T.min()) - T_pad
+    curve_T_max = (float(ha[0]) if ha is not None else float(lle_T.max())) + T_pad
+
+    T_c, x_I_c, x_II_c = _lle_curve_kij_T(result, z1, curve_T_min, curve_T_max, npoints=301)
+    if len(T_c) > 0:
+        T_c = np.array(T_c)
+        x_I_c = np.array(x_I_c)
+        x_II_c = np.array(x_II_c)
+        # Clip LLE curve at the heteroazeotrope — it doesn't exist above T_het
+        if ha is not None:
+            mask = T_c <= ha[0]
+            T_c, x_I_c, x_II_c = T_c[mask], x_I_c[mask], x_II_c[mask]
+        if len(T_c) > 0 and np.max(np.abs(x_I_c - x_II_c)) > 1e-4:
+            ax.plot(x_I_c, T_c, color=_EXP_COLOR_1, linestyle="--", label="PC-SAFT (LLE phase I)")
+            ax.plot(x_II_c, T_c, color=_EXP_COLOR_2, linestyle="--", label="PC-SAFT (LLE phase II)")
+
+    if plot_unfitted and result._record1 is not None and result._record2 is not None:
+        from types import SimpleNamespace as _NS
+        mock = _NS(
+            _record1=result._record1,
+            _record2=result._record2,
+            kij_coeffs=np.array([0.0]),
+            kij_t_ref=result.kij_t_ref,
+        )
+        T_u, x_I_u, x_II_u = _lle_curve_kij_T(mock, z1, curve_T_min, curve_T_max, npoints=301)
+        if len(T_u) > 0 and np.max(np.abs(np.array(x_I_u) - np.array(x_II_u))) > 1e-4:
+            ax.plot(x_I_u, T_u, color=_PRED_COLOR, linestyle=":", label="Predictive (k_ij = 0)")
+            ax.plot(x_II_u, T_u, color=_PRED_COLOR, linestyle=":")
+
+    # ---- Scatter: VLE ----------------------------------------------------------
+    ax.scatter(vle_x1, vle_T, label=r"Exp. VLE $x_1$", **_scatter_kw(_EXP_COLOR_1))
+    if has_y1:
+        ax.scatter(
+            data["vle_y1"].astype(float), vle_T,
+            label=r"Exp. VLE $y_1$", **_scatter_kw(_EXP_COLOR_2, "^"),
+        )
+
+    # ---- Scatter: LLE ----------------------------------------------------------
+    _lle_kw_I = dict(s=40, marker="s", facecolors="white",
+                     edgecolors="#8B4513", linewidths=1.2, zorder=5)
+    _lle_kw_II = dict(s=40, marker="D", facecolors="white",
+                      edgecolors="#2E8B57", linewidths=1.2, zorder=5)
+    if has_I:
+        x_I_arr = data["lle_x1_I"].astype(float)
+        valid = ~np.isnan(x_I_arr)
+        ax.scatter(x_I_arr[valid], lle_T[valid], label="Exp. LLE phase I", **_lle_kw_I)
+    if has_II:
+        x_II_arr = data["lle_x1_II"].astype(float)
+        valid = ~np.isnan(x_II_arr)
+        ax.scatter(x_II_arr[valid], lle_T[valid], label="Exp. LLE phase II", **_lle_kw_II)
+
+    ax.set_xlabel(rf"$x_1$ ({result.id1})")
+    ax.set_ylabel("$T$ / K")
+    ax.set_xlim(-0.02, 1.02)
+    title = f"VLE + LLE: {result.id1} + {result.id2}"
+    if is_isobaric:
+        title += rf"  ($p$ = {P_mean:.0f} {p_lbl})"
+    ax.set_title(title)
+    ax.legend(fontsize="small")
+    sns.despine(offset=10)
+    plt.tight_layout()
+
+    if path is not None:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+    return fig, ax
