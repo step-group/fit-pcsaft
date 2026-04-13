@@ -131,6 +131,9 @@ def _plot_binary(
     elif _tokens == {"sle"}:
         return _plot_sle(_normalize_result_for_type(result, "sle"),
                          path, temperature_unit)
+    elif _tokens == {"vlle"}:
+        return _plot_vlle(_normalize_result_for_type(result, "vlle"),
+                          path, temperature_unit, pressure_unit)
     elif _tokens == {"henry"}:
         return _plot_henry(result, path, temperature_unit, henry_unit)
     elif "vle" in _tokens and "lle" in _tokens:
@@ -1318,3 +1321,161 @@ def _plot_vle_lle(
         fig.savefig(path, dpi=300, bbox_inches="tight")
         plt.close(fig)
     return fig, ax
+
+
+# ---------------------------------------------------------------------------
+# VLLE  (multiple-pressure heteroazeotrope data)
+# ---------------------------------------------------------------------------
+
+
+def _vlle_locus(result, P_arr_si):
+    """Compute the VLLE heteroazeotrope locus over a range of pressures.
+
+    For each pressure in *P_arr_si* (Pa, plain floats), calls
+    ``feos.PhaseEquilibrium.heteroazeotrope`` with k_ij evaluated at the
+    predicted T from the previous step as the warm-start.  Returns four
+    arrays (T_K, x1_I, x1_II, y1) with ``nan`` for any pressure that failed.
+    """
+    import feos
+
+    from fit_pcsaft._binary._utils import _build_binary_eos, _kij_at_T
+
+    if result._record1 is None or result._record2 is None:
+        nan = np.full(len(P_arr_si), float("nan"))
+        return nan, nan.copy(), nan.copy(), nan.copy()
+
+    T_K = float("nan")
+    x_I = float("nan")
+    x_II = float("nan")
+
+    T_out, xI_out, xII_out, y1_out = [], [], [], []
+
+    for P_si in P_arr_si:
+        try:
+            T_guess = T_K if not np.isnan(T_K) else 350.0
+            x_I_g = x_I if not np.isnan(x_I) else 0.05
+            x_II_g = x_II if not np.isnan(x_II) else 0.90
+            kij = _kij_at_T(result.kij_coeffs, T_guess, result.kij_t_ref)
+            eos = _build_binary_eos(result._record1, result._record2, kij)
+            ha = feos.PhaseEquilibrium.heteroazeotrope(
+                eos, float(P_si) * si.PASCAL,
+                x_init=(float(np.clip(x_I_g, 1e-4, 1.0 - 1e-4)),
+                        float(np.clip(x_II_g, 1e-4, 1.0 - 1e-4))),
+                tp_init=T_guess * si.KELVIN,
+            )
+            T_K = float(ha.vapor.temperature / si.KELVIN)
+            x_I = float(ha.liquid1.molefracs[0])
+            x_II = float(ha.liquid2.molefracs[0])
+            y1 = float(ha.vapor.molefracs[0])
+            if x_I > x_II:
+                x_I, x_II = x_II, x_I
+            T_out.append(T_K); xI_out.append(x_I)
+            xII_out.append(x_II); y1_out.append(y1)
+        except Exception:
+            T_K = float("nan")
+            T_out.append(float("nan")); xI_out.append(float("nan"))
+            xII_out.append(float("nan")); y1_out.append(float("nan"))
+
+    return (np.array(T_out), np.array(xI_out),
+            np.array(xII_out), np.array(y1_out))
+
+
+def _plot_vlle(result, path, temperature_unit, pressure_unit):
+    """Conjoined T-x / P-x diagram for multi-pressure VLLE data.
+
+    Two side-by-side panels sharing the composition (x1) axis:
+
+    * **Left** — T vs x1: how the three-phase compositions change with T.
+    * **Right** — P vs x1: same compositions plotted against pressure.
+
+    The model locus is obtained by sweeping pressure over the experimental
+    range (±10 % padding) and calling
+    ``feos.PhaseEquilibrium.heteroazeotrope`` at each step.
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    sns.set_context("talk")
+    sns.set_style("ticks")
+
+    data = result.data
+    t_scale = float(temperature_unit / si.KELVIN)
+    p_scale = float(pressure_unit / si.PASCAL)   # data units → Pa
+    p_lbl = _pressure_label(pressure_unit)
+
+    # --- Experimental data ---------------------------------------------------
+    T_exp = data["T"].astype(float) * t_scale
+    P_exp = data["P"].astype(float)              # in data pressure units
+    has_xI  = "x1_I"  in data
+    has_xII = "x1_II" in data
+    has_y1  = "y1"    in data
+    xI_exp  = data["x1_I"].astype(float)  if has_xI  else None
+    xII_exp = data["x1_II"].astype(float) if has_xII else None
+    y1_exp  = data["y1"].astype(float)    if has_y1  else None
+
+    # --- Model locus ---------------------------------------------------------
+    P_min_si = float(P_exp.min()) * p_scale
+    P_max_si = float(P_exp.max()) * p_scale
+    P_pad_si = max((P_max_si - P_min_si) * 0.10, 500.0)  # ≥ 500 Pa padding
+    P_locus_si = np.linspace(P_min_si - P_pad_si, P_max_si + P_pad_si, 80)
+    T_loc, xI_loc, xII_loc, y1_loc = _vlle_locus(result, P_locus_si)
+    P_loc_plot = P_locus_si / p_scale   # back to data pressure unit
+    valid = ~np.isnan(T_loc)
+
+    # --- Figure: two panels --------------------------------------------------
+    fig, (ax_T, ax_P) = plt.subplots(1, 2, figsize=(14, 6))
+
+    _kw_I   = dict(s=45, marker="o", facecolors="white",
+                   edgecolors=_EXP_COLOR_1, linewidths=1.2, zorder=5)
+    _kw_II  = dict(s=45, marker="o", facecolors="white",
+                   edgecolors=_EXP_COLOR_2, linewidths=1.2, zorder=5)
+    _kw_vap = dict(s=45, marker="^", facecolors="white",
+                   edgecolors="#2ca02c", linewidths=1.2, zorder=5)
+
+    # Left panel: T vs x1
+    if valid.any():
+        ax_T.plot(xI_loc[valid],  T_loc[valid],
+                  color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (phase I)")
+        ax_T.plot(xII_loc[valid], T_loc[valid],
+                  color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (phase II)")
+        ax_T.plot(y1_loc[valid],  T_loc[valid],
+                  color="#2ca02c",   linestyle="-", label="PC-SAFT (vapor)")
+    if has_xI:
+        ax_T.scatter(xI_exp,  T_exp, label="Exp. phase I",  **_kw_I)
+    if has_xII:
+        ax_T.scatter(xII_exp, T_exp, label="Exp. phase II", **_kw_II)
+    if has_y1:
+        ax_T.scatter(y1_exp,  T_exp, label="Exp. vapor",    **_kw_vap)
+    ax_T.set_xlabel(rf"$x_1$, $y_1$ ({result.id1})")
+    ax_T.set_ylabel("$T$ / K")
+    ax_T.set_xlim(-0.02, 1.02)
+    ax_T.legend(fontsize="small")
+    sns.despine(ax=ax_T, offset=10)
+
+    # Right panel: P vs x1
+    if valid.any():
+        ax_P.plot(xI_loc[valid],  P_loc_plot[valid],
+                  color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (phase I)")
+        ax_P.plot(xII_loc[valid], P_loc_plot[valid],
+                  color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (phase II)")
+        ax_P.plot(y1_loc[valid],  P_loc_plot[valid],
+                  color="#2ca02c",   linestyle="-", label="PC-SAFT (vapor)")
+    if has_xI:
+        ax_P.scatter(xI_exp,  P_exp, label="Exp. phase I",  **_kw_I)
+    if has_xII:
+        ax_P.scatter(xII_exp, P_exp, label="Exp. phase II", **_kw_II)
+    if has_y1:
+        ax_P.scatter(y1_exp,  P_exp, label="Exp. vapor",    **_kw_vap)
+    ax_P.set_xlabel(rf"$x_1$, $y_1$ ({result.id1})")
+    ax_P.set_ylabel(f"$p$ / {p_lbl}")
+    ax_P.set_xlim(-0.02, 1.02)
+    ax_P.legend(fontsize="small")
+    sns.despine(ax=ax_P, offset=10)
+
+    fig.suptitle(f"VLLE locus: {result.id1} + {result.id2}", y=1.01)
+    plt.tight_layout()
+
+    if path is not None:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+    return fig, ax_T, ax_P
