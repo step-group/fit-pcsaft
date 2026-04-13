@@ -76,21 +76,40 @@ def _plot_binary(
     plot_unfitted: bool = False,
 ):
     eq = result.equilibrium_type
-    if eq == "vle":
-        return _plot_vle(
-            result, path, temperature_unit, pressure_unit, plot_unfitted=plot_unfitted
-        )
-    elif eq == "lle":
+    # Normalise to a frozenset of type tokens.
+    # Supports both legacy "vle_lle" (from fit_kij_vle_lle) and
+    # new "vle+lle", "vle+lle+vlle", etc. (from BinaryKijFitter).
+    _tokens = frozenset(eq.replace("_", "+").split("+"))
+
+    if _tokens == {"vle"}:
+        return _plot_vle(result, path, temperature_unit, pressure_unit,
+                         plot_unfitted=plot_unfitted)
+    elif _tokens == {"lle"}:
         return _plot_lle(result, path, temperature_unit, plot_unfitted=plot_unfitted)
-    elif eq == "sle":
+    elif _tokens == {"sle"}:
         return _plot_sle(result, path, temperature_unit)
-    elif eq == "henry":
+    elif _tokens == {"henry"}:
         return _plot_henry(result, path, temperature_unit, henry_unit)
-    elif eq == "vle_lle":
+    elif "vle" in _tokens and "lle" in _tokens:
+        # covers vle+lle, vle+lle+vlle, vle_lle (legacy)
         return _plot_vle_lle(result, path, temperature_unit, pressure_unit,
                              plot_unfitted=plot_unfitted)
+    elif "vle" in _tokens and "vlle" in _tokens:
+        # VLE + VLLE only (no LLE binodal): reuse _plot_vle_lle, which
+        # gracefully skips the LLE parts when lle_T is absent.
+        return _plot_vle_lle(result, path, temperature_unit, pressure_unit,
+                             plot_unfitted=plot_unfitted)
+    elif "vle" in _tokens:
+        return _plot_vle(result, path, temperature_unit, pressure_unit,
+                         plot_unfitted=plot_unfitted)
+    elif "lle" in _tokens:
+        return _plot_lle(result, path, temperature_unit, plot_unfitted=plot_unfitted)
     else:
-        raise ValueError(f"Unknown equilibrium_type: {eq!r}")
+        raise ValueError(
+            f"No plot implemented for equilibrium_type {eq!r}.\n"
+            f"Supported: vle, lle, sle, henry, vle+lle, vle+vlle, vle+lle+vlle "
+            f"(and legacy vle_lle)."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1103,17 +1122,33 @@ def _plot_vle_lle(
     p_lbl = _pressure_label(pressure_unit)
     pressure_si = P_mean * pressure_unit
 
-    # ---- LLE experimental data -------------------------------------------------
-    lle_T = data["lle_T"].astype(float) * t_scale  # in K
-    has_I = "lle_x1_I" in data
+    # ---- LLE experimental data (optional) -------------------------------------
+    has_lle = "lle_T" in data
+    lle_T = data["lle_T"].astype(float) * t_scale if has_lle else np.array([])
+    has_I  = "lle_x1_I"  in data
     has_II = "lle_x1_II" in data
 
-    vals_I = data["lle_x1_I"].astype(float) if has_I else np.array([])
+    vals_I  = data["lle_x1_I"].astype(float)  if has_I  else np.array([])
     vals_II = data["lle_x1_II"].astype(float) if has_II else np.array([])
+
+    # ---- VLLE experimental data (optional) ------------------------------------
+    has_vlle = "vlle_T" in data
+    if has_vlle:
+        vlle_T_arr  = data["vlle_T"].astype(float) * t_scale
+        vlle_x1_I   = data["vlle_x1_I"].astype(float)  if "vlle_x1_I"  in data else None
+        vlle_x1_II  = data["vlle_x1_II"].astype(float) if "vlle_x1_II" in data else None
+        vlle_y1     = data["vlle_y1"].astype(float)     if "vlle_y1"    in data else None
+
+    # ---- Initial guess for heteroazeotrope compositions -----------------------
+    # Prefer LLE data; fall back to VLLE phase compositions if LLE is absent.
     mean_I = float(np.nanmean(vals_I)) if len(vals_I) else float("nan")
     mean_II = float(np.nanmean(vals_II)) if len(vals_II) else float("nan")
-    x_I_init = mean_I if not np.isnan(mean_I) else 0.01
-    x_II_init = mean_II if not np.isnan(mean_II) else 0.9
+    if np.isnan(mean_I) and has_vlle and vlle_x1_I is not None:
+        mean_I = float(np.nanmean(vlle_x1_I))
+    if np.isnan(mean_II) and has_vlle and vlle_x1_II is not None:
+        mean_II = float(np.nanmean(vlle_x1_II))
+    x_I_init  = mean_I  if not np.isnan(mean_I)  else 0.01
+    x_II_init = mean_II if not np.isnan(mean_II) else 0.90
 
     # ---- Find heteroazeotrope --------------------------------------------------
     T_vle_mean = float(np.mean(vle_T))
@@ -1163,51 +1198,47 @@ def _plot_vle_lle(
         ax.hlines(T_het, x1_I_het, x1_II_het,
                   colors=_GRAY, linewidth=1.2, linestyle="-", label=f"VLLE  ({T_het:.1f} K)")
 
-    # ---- LLE computed binodal (liquid-init continuation downward from heteroazeotrope)
-    z1 = float(np.clip(0.5 * (x_I_init + x_II_init), 0.05, 0.95))
-    T_pad = max((lle_T.max() - lle_T.min()) * 0.05, 1.0)
-    curve_T_min = float(lle_T.min()) - T_pad
-    curve_T_max = (float(ha[0]) if ha is not None else float(lle_T.max())) + T_pad
+    # ---- LLE computed binodal (only when LLE or VLLE data is present) ---------
+    if has_lle or has_vlle:
+        z1 = float(np.clip(0.5 * (x_I_init + x_II_init), 0.05, 0.95))
+        _T_ref_lo = lle_T.min() if has_lle else (vlle_T_arr.min() if has_vlle else vle_T.min())
+        _T_ref_hi = lle_T.max() if has_lle else (vlle_T_arr.max() if has_vlle else vle_T.mean())
+        T_pad = max((_T_ref_hi - _T_ref_lo) * 0.05, 1.0)
+        curve_T_min = float(_T_ref_lo) - T_pad
+        curve_T_max = (float(ha[0]) if ha is not None else float(_T_ref_hi)) + T_pad
 
-    T_c, x_I_c, x_II_c = _lle_curve_kij_T(result, z1, curve_T_min, curve_T_max, npoints=301)
-    if len(T_c) > 0:
-        T_c = np.array(T_c)
-        x_I_c = np.array(x_I_c)
-        x_II_c = np.array(x_II_c)
-        # Clip LLE curve at the heteroazeotrope — it doesn't exist above T_het
-        if ha is not None:
-            mask = T_c <= ha[0]
-            T_c, x_I_c, x_II_c = T_c[mask], x_I_c[mask], x_II_c[mask]
-        if len(T_c) > 0 and np.max(np.abs(x_I_c - x_II_c)) > 1e-4:
-            ax.plot(x_I_c, T_c, color=_EXP_COLOR_1, linestyle="--", label="PC-SAFT (LLE phase I)")
-            ax.plot(x_II_c, T_c, color=_EXP_COLOR_2, linestyle="--", label="PC-SAFT (LLE phase II)")
+        T_c, x_I_c, x_II_c = _lle_curve_kij_T(result, z1, curve_T_min, curve_T_max, npoints=301)
+        if len(T_c) > 0:
+            T_c = np.array(T_c)
+            x_I_c = np.array(x_I_c)
+            x_II_c = np.array(x_II_c)
+            if ha is not None:
+                mask = T_c <= ha[0]
+                T_c, x_I_c, x_II_c = T_c[mask], x_I_c[mask], x_II_c[mask]
+            if len(T_c) > 0 and np.max(np.abs(x_I_c - x_II_c)) > 1e-4:
+                ax.plot(x_I_c, T_c, color=_EXP_COLOR_1, linestyle="--", label="PC-SAFT (LLE phase I)")
+                ax.plot(x_II_c, T_c, color=_EXP_COLOR_2, linestyle="--", label="PC-SAFT (LLE phase II)")
 
-    if plot_unfitted and result._record1 is not None and result._record2 is not None:
-        from types import SimpleNamespace as _NS
-        mock = _NS(
-            _record1=result._record1,
-            _record2=result._record2,
-            kij_coeffs=np.array([0.0]),
-            kij_t_ref=result.kij_t_ref,
-        )
-        T_u, x_I_u, x_II_u = _lle_curve_kij_T(mock, z1, curve_T_min, curve_T_max, npoints=301)
-        if len(T_u) > 0 and np.max(np.abs(np.array(x_I_u) - np.array(x_II_u))) > 1e-4:
-            ax.plot(x_I_u, T_u, color=_PRED_COLOR, linestyle=":", label="Predictive (k_ij = 0)")
-            ax.plot(x_II_u, T_u, color=_PRED_COLOR, linestyle=":")
+        if plot_unfitted and result._record1 is not None and result._record2 is not None:
+            from types import SimpleNamespace as _NS
+            mock = _NS(
+                _record1=result._record1, _record2=result._record2,
+                kij_coeffs=np.array([0.0]), kij_t_ref=result.kij_t_ref,
+            )
+            T_u, x_I_u, x_II_u = _lle_curve_kij_T(mock, z1, curve_T_min, curve_T_max, npoints=301)
+            if len(T_u) > 0 and np.max(np.abs(np.array(x_I_u) - np.array(x_II_u))) > 1e-4:
+                ax.plot(x_I_u, T_u, color=_PRED_COLOR, linestyle=":", label="Predictive (k_ij = 0)")
+                ax.plot(x_II_u, T_u, color=_PRED_COLOR, linestyle=":")
 
     # ---- Scatter: VLE ----------------------------------------------------------
     ax.scatter(vle_x1, vle_T, label=r"Exp. VLE $x_1$", **_scatter_kw(_EXP_COLOR_1))
     if has_y1:
-        ax.scatter(
-            data["vle_y1"].astype(float), vle_T,
-            label=r"Exp. VLE $y_1$", **_scatter_kw(_EXP_COLOR_2, "^"),
-        )
+        ax.scatter(data["vle_y1"].astype(float), vle_T,
+                   label=r"Exp. VLE $y_1$", **_scatter_kw(_EXP_COLOR_2, "^"))
 
     # ---- Scatter: LLE ----------------------------------------------------------
-    _lle_kw_I = dict(s=40, marker="s", facecolors="white",
-                     edgecolors="#8B4513", linewidths=1.2, zorder=5)
-    _lle_kw_II = dict(s=40, marker="D", facecolors="white",
-                      edgecolors="#2E8B57", linewidths=1.2, zorder=5)
+    _lle_kw_I  = dict(s=40, marker="s", facecolors="white", edgecolors="#8B4513", linewidths=1.2, zorder=5)
+    _lle_kw_II = dict(s=40, marker="D", facecolors="white", edgecolors="#2E8B57", linewidths=1.2, zorder=5)
     if has_I:
         x_I_arr = data["lle_x1_I"].astype(float)
         valid = ~np.isnan(x_I_arr)
@@ -1216,6 +1247,16 @@ def _plot_vle_lle(
         x_II_arr = data["lle_x1_II"].astype(float)
         valid = ~np.isnan(x_II_arr)
         ax.scatter(x_II_arr[valid], lle_T[valid], label="Exp. LLE phase II", **_lle_kw_II)
+
+    # ---- Scatter: VLLE (three-phase experimental points) ----------------------
+    if has_vlle:
+        _vlle_kw = dict(s=60, marker="*", color="#9400D3", zorder=6)
+        if vlle_x1_I is not None:
+            ax.scatter(vlle_x1_I, vlle_T_arr, label="Exp. VLLE phase I", **_vlle_kw)
+        if vlle_x1_II is not None:
+            ax.scatter(vlle_x1_II, vlle_T_arr, **_vlle_kw)
+        if vlle_y1 is not None:
+            ax.scatter(vlle_y1, vlle_T_arr, label="Exp. VLLE vapor", **{**_vlle_kw, "marker": "p"})
 
     ax.set_xlabel(rf"$x_1$ ({result.id1})")
     ax.set_ylabel("$T$ / K")
