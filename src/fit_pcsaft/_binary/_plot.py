@@ -67,6 +67,46 @@ def _curve_plot(ax, x_arr, y_arr, fit_min_K, fit_max_K, y_is_T: bool, **line_kw)
         ax.plot(x_arr[in_range], y_arr[in_range], **line_kw)
 
 
+def _normalize_result_for_type(result, type_name: str):
+    """Strip the ``type_name + "_"`` prefix from data keys for single-type plotters.
+
+    ``BinaryKijFitter`` stores data under prefixed keys (``"vle_T"``, ``"lle_T"``,
+    …) to avoid collisions when multiple sources are combined.  Single-type
+    plotters (``_plot_vle``, ``_plot_lle``) expect the canonical unprefixed
+    names.  This helper transparently remaps them and provides a fallback
+    ``data_full`` when it is empty (as is always the case for
+    ``BinaryKijFitter`` results).
+    """
+    import dataclasses
+
+    prefix = type_name + "_"
+    plen = len(prefix)
+    data = result.data
+
+    # If the prefixed key is absent the result came from a direct fit_kij_*
+    # call — nothing to do.
+    if f"{prefix}T" not in data:
+        return result
+
+    # Re-key: strip our prefix, drop keys that belong to *other* type prefixes.
+    _all_prefixes = {"vle_", "lle_", "vlle_", "sle_"}
+    _meta = {"T_kij", "kij_pointwise", "ard_pointwise", "source"}
+    new_data: dict = {}
+    for k, v in data.items():
+        if any(k.startswith(p) for p in _all_prefixes if p != prefix):
+            continue  # belongs to another source type — drop it
+        new_data[k[plen:] if k.startswith(prefix) else k] = v
+
+    # data_full is empty for BinaryKijFitter; fall back to the experimental
+    # columns (exclude fitting metadata so the unused-mask logic sees no gaps).
+    data_full = result.data_full
+    if not data_full:
+        data_full = {k: v for k, v in new_data.items()
+                     if k not in _meta and not k.startswith("ard_")}
+
+    return dataclasses.replace(result, data=new_data, data_full=data_full)
+
+
 def _plot_binary(
     result,
     path=None,
@@ -82,12 +122,15 @@ def _plot_binary(
     _tokens = frozenset(eq.replace("_", "+").split("+"))
 
     if _tokens == {"vle"}:
-        return _plot_vle(result, path, temperature_unit, pressure_unit,
+        return _plot_vle(_normalize_result_for_type(result, "vle"),
+                         path, temperature_unit, pressure_unit,
                          plot_unfitted=plot_unfitted)
     elif _tokens == {"lle"}:
-        return _plot_lle(result, path, temperature_unit, plot_unfitted=plot_unfitted)
+        return _plot_lle(_normalize_result_for_type(result, "lle"),
+                         path, temperature_unit, plot_unfitted=plot_unfitted)
     elif _tokens == {"sle"}:
-        return _plot_sle(result, path, temperature_unit)
+        return _plot_sle(_normalize_result_for_type(result, "sle"),
+                         path, temperature_unit)
     elif _tokens == {"henry"}:
         return _plot_henry(result, path, temperature_unit, henry_unit)
     elif "vle" in _tokens and "lle" in _tokens:
@@ -100,10 +143,12 @@ def _plot_binary(
         return _plot_vle_lle(result, path, temperature_unit, pressure_unit,
                              plot_unfitted=plot_unfitted)
     elif "vle" in _tokens:
-        return _plot_vle(result, path, temperature_unit, pressure_unit,
+        return _plot_vle(_normalize_result_for_type(result, "vle"),
+                         path, temperature_unit, pressure_unit,
                          plot_unfitted=plot_unfitted)
     elif "lle" in _tokens:
-        return _plot_lle(result, path, temperature_unit, plot_unfitted=plot_unfitted)
+        return _plot_lle(_normalize_result_for_type(result, "lle"),
+                         path, temperature_unit, plot_unfitted=plot_unfitted)
     else:
         raise ValueError(
             f"No plot implemented for equilibrium_type {eq!r}.\n"
