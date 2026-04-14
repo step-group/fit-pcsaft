@@ -232,6 +232,8 @@ def fit_kij_vle(
             time_elapsed=time.perf_counter() - t0,
             t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
             t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
+            _record1=record1,
+            _record2=record2,
         )
 
     # --- Global polynomial fit (default) -------------------------------------
@@ -322,6 +324,8 @@ def fit_kij_vle(
         time_elapsed=time_elapsed,
         t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
         t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
+        _record1=record1,
+        _record2=record2,
     )
 
 

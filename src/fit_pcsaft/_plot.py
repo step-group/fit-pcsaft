@@ -98,7 +98,7 @@ def _plot_pure(
 
     name = result.input_name
 
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
     # --- left: Clausius-Clapeyron ---
     ax = axes[0]
@@ -112,7 +112,7 @@ def _plot_pure(
     )
     ax.set_xlabel(r"$1000/T$ / K$^{-1}$")
     ax.set_ylabel(r"$\ln(p_\mathrm{sat})$")
-    ax.legend()
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2)
 
     # --- right: T-ρ ---
     ax = axes[1]
@@ -122,10 +122,10 @@ def _plot_pure(
     ax.scatter(result.data.rho, result.data.T_rho, label="Experiment", **sc_kw)
     ax.set_xlabel(r"$\rho$ / kg m$^{-3}$")
     ax.set_ylabel(r"$T$ / K")
-    ax.legend()
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2)
 
     sns.despine(offset=10)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")

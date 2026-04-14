@@ -171,6 +171,67 @@ class FitResult:
         data.append(entry)
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+    def to_csv(self, path: "Path | str") -> None:
+        """Export experimental data and PC-SAFT model curves to CSV files.
+
+        Writes two files into *path* (created if it doesn't exist):
+
+        * ``{name}_exp.csv``   — experimental data used for fitting
+        * ``{name}_model.csv`` — 501-point phase envelope from PC-SAFT
+
+        Parameters
+        ----------
+        path : Path or str
+            Directory to write the CSV files into.
+        """
+        import polars as pl
+        import feos
+        import si_units as si
+
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        name = self.input_name or self.compound.identifier.name
+
+        tu = self.units.temperature
+        pu = self.units.pressure
+        du = self.units.density
+        eu = self.units.enthalpy
+
+        # --- experimental CSV ---
+        n_psat = len(self.data.T_psat)
+        n_rho  = len(self.data.T_rho)
+        n_hvap = len(self.data.T_hvap)
+        n_exp  = max(n_psat, n_rho, n_hvap)
+
+        def _pad(arr, n):
+            if len(arr) == n:
+                return arr.tolist()
+            return arr.tolist() + [None] * (n - len(arr))
+
+        exp_data = {
+            "T_psat": _pad(self.data.T_psat, n_exp),
+            "p_psat": _pad(self.data.p_psat, n_exp),
+            "T_rho":  _pad(self.data.T_rho,  n_exp),
+            "rho":    _pad(self.data.rho,     n_exp),
+        }
+        if n_hvap > 0:
+            exp_data["T_hvap"] = _pad(self.data.T_hvap, n_exp)
+            exp_data["hvap"]   = _pad(self.data.hvap,   n_exp)
+
+        pl.DataFrame(exp_data).write_csv(path / f"{name}_exp.csv")
+
+        # --- model curve CSV ---
+        all_T = [self.data.T_psat, self.data.T_rho, self.data.T_hvap]
+        T_start = float(min(T.min() for T in all_T if len(T) > 0)) * tu
+        pd = feos.PhaseDiagram.pure(self.eos, T_start, 501)
+
+        pl.DataFrame({
+            "T":       (pd.vapor.temperature / tu).tolist(),
+            "p_sat":   (pd.vapor.pressure    / pu).tolist(),
+            "rho_liq": (pd.liquid.mass_density / du).tolist(),
+            "rho_vap": (pd.vapor.mass_density  / du).tolist(),
+        }).write_csv(path / f"{name}_model.csv")
+
     def plot(
         self,
         path=None,
@@ -315,6 +376,60 @@ class EvalResult:
     ard_rho: float
     ard_hvap: float
     input_name: str = ""
+
+    def to_csv(self, path: "Path | str") -> None:
+        """Export experimental data and PC-SAFT model curves to CSV files.
+
+        Writes two files into *path* (created if it doesn't exist):
+
+        * ``{name}_exp.csv``   — experimental data used for evaluation
+        * ``{name}_model.csv`` — 501-point phase envelope from PC-SAFT
+        """
+        import polars as pl
+        import feos
+        import si_units as si
+
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        name = self.input_name or self.compound.identifier.name
+
+        tu = self.units.temperature
+        pu = self.units.pressure
+        du = self.units.density
+        eu = self.units.enthalpy
+
+        n_psat = len(self.data.T_psat)
+        n_rho  = len(self.data.T_rho)
+        n_hvap = len(self.data.T_hvap)
+        n_exp  = max(n_psat, n_rho, n_hvap)
+
+        def _pad(arr, n):
+            if len(arr) == n:
+                return arr.tolist()
+            return arr.tolist() + [None] * (n - len(arr))
+
+        exp_data = {
+            "T_psat": _pad(self.data.T_psat, n_exp),
+            "p_psat": _pad(self.data.p_psat, n_exp),
+            "T_rho":  _pad(self.data.T_rho,  n_exp),
+            "rho":    _pad(self.data.rho,     n_exp),
+        }
+        if n_hvap > 0:
+            exp_data["T_hvap"] = _pad(self.data.T_hvap, n_exp)
+            exp_data["hvap"]   = _pad(self.data.hvap,   n_exp)
+
+        pl.DataFrame(exp_data).write_csv(path / f"{name}_exp.csv")
+
+        all_T = [self.data.T_psat, self.data.T_rho, self.data.T_hvap]
+        T_start = float(min(T.min() for T in all_T if len(T) > 0)) * tu
+        pd = feos.PhaseDiagram.pure(self.eos, T_start, 501)
+
+        pl.DataFrame({
+            "T":       (pd.vapor.temperature / tu).tolist(),
+            "p_sat":   (pd.vapor.pressure    / pu).tolist(),
+            "rho_liq": (pd.liquid.mass_density / du).tolist(),
+            "rho_vap": (pd.vapor.mass_density  / du).tolist(),
+        }).write_csv(path / f"{name}_model.csv")
 
     def plot(
         self,

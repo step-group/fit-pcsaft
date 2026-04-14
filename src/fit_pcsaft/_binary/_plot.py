@@ -136,19 +136,13 @@ def _plot_binary(
                           path, temperature_unit, pressure_unit)
     elif _tokens == {"henry"}:
         return _plot_henry(result, path, temperature_unit, henry_unit)
-    elif "vle" in _tokens and "lle" in _tokens:
-        # covers vle+lle, vle+lle+vlle, vle_lle (legacy)
-        return _plot_vle_lle(result, path, temperature_unit, pressure_unit,
-                             plot_unfitted=plot_unfitted)
-    elif "vle" in _tokens and "vlle" in _tokens:
-        # VLE + VLLE only (no LLE binodal): reuse _plot_vle_lle, which
-        # gracefully skips the LLE parts when lle_T is absent.
-        return _plot_vle_lle(result, path, temperature_unit, pressure_unit,
-                             plot_unfitted=plot_unfitted)
     elif "vle" in _tokens:
-        return _plot_vle(_normalize_result_for_type(result, "vle"),
-                         path, temperature_unit, pressure_unit,
-                         plot_unfitted=plot_unfitted)
+        # vle+lle, vle+vlle, vle+lle+vlle, vle_lle (legacy) — all go to _plot_vle_lle
+        return _plot_vle_lle(result, path, temperature_unit, pressure_unit,
+                             plot_unfitted=plot_unfitted)
+    elif "vlle" in _tokens:
+        # vlle-only or vlle+lle (no VLE): conjoined T-x / P-x VLLE plot
+        return _plot_vlle(result, path, temperature_unit, pressure_unit)
     elif "lle" in _tokens:
         return _plot_lle(_normalize_result_for_type(result, "lle"),
                          path, temperature_unit, plot_unfitted=plot_unfitted)
@@ -223,7 +217,7 @@ def _plot_vle(
     p_cv = np.std(P_data) / np.mean(P_data)  # coefficient of variation
     is_isobaric = p_cv < 0.05
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(9, 6))
     p_lbl = _pressure_label(pressure_unit)
 
     fit_min_K = result.t_filter_min_K
@@ -375,12 +369,12 @@ def _plot_vle(
         ax.set_ylabel(f"$p$ / {p_lbl}")
         ax.set_xlim(0, 1)
         ax.set_title(f"VLE: {result.id1} + {result.id2}")
-        ax.legend(fontsize="small", title="$T$")
+        ax.legend(fontsize="small", title="$T$", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
 
     if is_isobaric:
-        ax.legend(fontsize="small")
+        ax.legend(fontsize="small", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
     sns.despine(offset=10)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -536,7 +530,7 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
     curve_T_min = float(T_full.min()) - T_pad
     curve_T_max = float(T_full.max()) + T_pad
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(9, 6))
 
     def _log_odds(x):
         x = np.asarray(x, dtype=float)
@@ -638,10 +632,10 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
     ax.set_xlabel(rf"$\log_{{10}}(x_1/x_2)$  ({result.id1} / {result.id2})")
     ax.set_ylabel("$T$ / K")
     ax.set_title(f"LLE: {result.id1} + {result.id2}")
-    ax.legend(fontsize="small")
+    ax.legend(fontsize="small", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
     ax.axvline(0, color="gray", linewidth=0.7, linestyle=":")
     sns.despine(offset=10)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -670,7 +664,7 @@ def _plot_kij_vs_T(
     sns.set_context("talk")
     sns.set_style("ticks")
 
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(9, 6))
 
     if source is not None:
         # Color VLE and LLE points differently
@@ -720,9 +714,9 @@ def _plot_kij_vs_T(
     ax.set_xlabel("$T$ / K")
     ax.set_ylabel("$k_{ij}$")
     ax.set_title(f"$k_{{ij}}(T)$: {id1} + {id2} ({equilibrium_type.upper()})")
-    ax.legend(fontsize="small")
+    ax.legend(fontsize="small", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
     sns.despine(offset=10)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -799,7 +793,7 @@ def _plot_sle(result, path, temperature_unit):
     fit_max_K = result.t_filter_max_K
     curve_T_min = float(T_full.min())
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(9, 6))
 
     if eutectic:
         # Find eutectic point to properly clip each branch
@@ -901,9 +895,9 @@ def _plot_sle(result, path, temperature_unit):
     lo, hi = ax.get_xlim()
     ax.set_xlim(max(0.0, lo), min(1.0, hi))
     ax.set_title(title)
-    ax.legend(fontsize="small")
+    ax.legend(fontsize="small", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
     sns.despine(offset=10)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -981,7 +975,7 @@ def _plot_henry(result, path, temperature_unit, henry_unit):
     T_curve_valid = T_curve[mask_curve]
     H_curve_valid = np.array([h for h in H_curve if h is not None])
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(9, 6))
     h_lbl = _henry_label(henry_unit)
 
     if len(T_curve_valid) > 0:
@@ -992,9 +986,9 @@ def _plot_henry(result, path, temperature_unit, henry_unit):
     ax.set_xlabel("$T$ / K")
     ax.set_ylabel(f"$H$ / {h_lbl}")
     ax.set_title(f"Henry: {result.id1} (solute) + {result.id2} (solvent)")
-    ax.legend(fontsize="small")
+    ax.legend(fontsize="small", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
     sns.despine(offset=10)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -1154,7 +1148,7 @@ def _plot_vle_lle(
     sns.set_context("talk")
     sns.set_style("ticks")
 
-    fig, ax = plt.subplots(figsize=(8, 7))
+    fig, ax = plt.subplots(figsize=(9, 6))
 
     t_scale = float(temperature_unit / si.KELVIN)
     data = result.data
@@ -1313,9 +1307,9 @@ def _plot_vle_lle(
     if is_isobaric:
         title += rf"  ($p$ = {P_mean:.0f} {p_lbl})"
     ax.set_title(title)
-    ax.legend(fontsize="small")
+    ax.legend(fontsize="small", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
     sns.despine(offset=10)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -1328,13 +1322,35 @@ def _plot_vle_lle(
 # ---------------------------------------------------------------------------
 
 
-def _vlle_locus(result, P_arr_si):
+def _vlle_locus(
+    result, P_arr_si,
+    x_I_init: float = 0.05, x_II_init: float = 0.90,
+    T_init: float = 350.0,
+):
     """Compute the VLLE heteroazeotrope locus over a range of pressures.
 
     For each pressure in *P_arr_si* (Pa, plain floats), calls
     ``feos.PhaseEquilibrium.heteroazeotrope`` with k_ij evaluated at the
     predicted T from the previous step as the warm-start.  Returns four
     arrays (T_K, x1_I, x1_II, y1) with ``nan`` for any pressure that failed.
+
+    Parameters
+    ----------
+    x_I_init, x_II_init : float
+        Initial mole-fraction guesses for the two liquid phases, used only
+        for the very first pressure step (subsequent steps warm-start from
+        the previous solution).  Passing values close to the actual phase
+        compositions greatly improves convergence.
+    T_init : float
+        Initial temperature guess (K) for the very first pressure step.
+        Should be close to the heteroazeotrope temperature at P_arr_si[0].
+
+    Notes
+    -----
+    Sweep *P_arr_si* from the well-known end (high P, near data range) toward
+    the extrapolation end (low P) so the warm-start propagates naturally into
+    the unconstrained region.  Passing a descending pressure array is the
+    recommended usage when low-P extrapolation is desired.
     """
     import feos
 
@@ -1352,9 +1368,9 @@ def _vlle_locus(result, P_arr_si):
 
     for P_si in P_arr_si:
         try:
-            T_guess = T_K if not np.isnan(T_K) else 350.0
-            x_I_g = x_I if not np.isnan(x_I) else 0.05
-            x_II_g = x_II if not np.isnan(x_II) else 0.90
+            T_guess = T_K if not np.isnan(T_K) else T_init
+            x_I_g = x_I if not np.isnan(x_I) else x_I_init
+            x_II_g = x_II if not np.isnan(x_II) else x_II_init
             kij = _kij_at_T(result.kij_coeffs, T_guess, result.kij_t_ref)
             eos = _build_binary_eos(result._record1, result._record2, kij)
             ha = feos.PhaseEquilibrium.heteroazeotrope(
@@ -1367,8 +1383,8 @@ def _vlle_locus(result, P_arr_si):
             x_I = float(ha.liquid1.molefracs[0])
             x_II = float(ha.liquid2.molefracs[0])
             y1 = float(ha.vapor.molefracs[0])
-            if x_I > x_II:
-                x_I, x_II = x_II, x_I
+            # No swap: keep feos' liquid1/liquid2 order; _plot_vlle will align
+            # the two branches to the experimental phase convention by proximity.
             T_out.append(T_K); xI_out.append(x_I)
             xII_out.append(x_II); y1_out.append(y1)
         except Exception:
@@ -1386,11 +1402,14 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
     Two side-by-side panels sharing the composition (x1) axis:
 
     * **Left** — T vs x1: how the three-phase compositions change with T.
-    * **Right** — P vs x1: same compositions plotted against pressure.
+      If LLE data is present in the result, the LLE binodal is also drawn.
+    * **Right** — P vs x1: same three-phase compositions plotted against P.
 
     The model locus is obtained by sweeping pressure over the experimental
     range (±10 % padding) and calling
-    ``feos.PhaseEquilibrium.heteroazeotrope`` at each step.
+    ``feos.PhaseEquilibrium.heteroazeotrope`` at each step.  The two liquid
+    branches from feos are matched to the experimental phase convention
+    (I vs II) by proximity of their mean compositions.
     """
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -1403,77 +1422,144 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
     p_scale = float(pressure_unit / si.PASCAL)   # data units → Pa
     p_lbl = _pressure_label(pressure_unit)
 
-    # --- Experimental data ---------------------------------------------------
-    T_exp = data["T"].astype(float) * t_scale
-    P_exp = data["P"].astype(float)              # in data pressure units
-    has_xI  = "x1_I"  in data
-    has_xII = "x1_II" in data
-    has_y1  = "y1"    in data
-    xI_exp  = data["x1_I"].astype(float)  if has_xI  else None
-    xII_exp = data["x1_II"].astype(float) if has_xII else None
-    y1_exp  = data["y1"].astype(float)    if has_y1  else None
+    # --- Experimental VLLE data ----------------------------------------------
+    vlle_key = "vlle_T" if "vlle_T" in data else "T"
+    vlle_prefix = "vlle_" if "vlle_T" in data else ""
+    T_exp = data[vlle_prefix + "T"].astype(float) * t_scale
+    P_exp = data[vlle_prefix + "P"].astype(float)
+    has_xI  = (vlle_prefix + "x1_I")  in data
+    has_xII = (vlle_prefix + "x1_II") in data
+    has_y1  = (vlle_prefix + "y1")    in data
+    xI_exp  = data[vlle_prefix + "x1_I"].astype(float)  if has_xI  else None
+    xII_exp = data[vlle_prefix + "x1_II"].astype(float) if has_xII else None
+    y1_exp  = data[vlle_prefix + "y1"].astype(float)    if has_y1  else None
 
     # --- Model locus ---------------------------------------------------------
     P_min_si = float(P_exp.min()) * p_scale
     P_max_si = float(P_exp.max()) * p_scale
     P_pad_si = max((P_max_si - P_min_si) * 0.10, 500.0)  # ≥ 500 Pa padding
-    P_locus_si = np.linspace(P_min_si - P_pad_si, P_max_si + P_pad_si, 80)
-    T_loc, xI_loc, xII_loc, y1_loc = _vlle_locus(result, P_locus_si)
+    # Sweep HIGH → LOW so the warm-start is seeded inside the data range and
+    # propagates naturally into the low-P extrapolation.  Starting from low P
+    # with no warm-start fails because the T guess (experimental mean) can be
+    # 50+ K above the actual heteroazeotrope temperature at low P.
+    P_locus_si = np.linspace(P_max_si + P_pad_si, P_min_si - P_pad_si, 80)
+    # Seed with experimental means; T_init from the highest data temperature
+    # (close to the heteroazeotrope T at P_max).
+    x_I_init  = float(np.nanmean(xI_exp))  if has_xI  else 0.05
+    x_II_init = float(np.nanmean(xII_exp)) if has_xII else 0.90
+    T_init_K  = float(T_exp.max())   # T_exp is in K (t_scale applied above)
+    T_loc, xloc1, xloc2, y1_loc = _vlle_locus(
+        result, P_locus_si,
+        x_I_init=x_I_init, x_II_init=x_II_init, T_init=T_init_K,
+    )
     P_loc_plot = P_locus_si / p_scale   # back to data pressure unit
     valid = ~np.isnan(T_loc)
 
-    # --- Figure: two panels --------------------------------------------------
-    fig, (ax_T, ax_P) = plt.subplots(1, 2, figsize=(14, 6))
+    # Match model locus branches to experimental phase convention (I vs II)
+    # by checking which branch's mean composition is closer to mean xI_exp.
+    xI_loc, xII_loc = xloc1, xloc2   # default: feos liquid1 = phase I
+    if has_xI and has_xII and valid.any():
+        mean_xI_exp  = float(np.nanmean(xI_exp))
+        mean_xloc1   = float(np.nanmean(xloc1[valid]))
+        mean_xloc2   = float(np.nanmean(xloc2[valid]))
+        if abs(mean_xloc2 - mean_xI_exp) < abs(mean_xloc1 - mean_xI_exp):
+            xI_loc, xII_loc = xloc2, xloc1  # swap so phase I matches exp
 
+    # --- Colors / markers ----------------------------------------------------
+    _color_vap = "#2ca02c"
     _kw_I   = dict(s=45, marker="o", facecolors="white",
                    edgecolors=_EXP_COLOR_1, linewidths=1.2, zorder=5)
-    _kw_II  = dict(s=45, marker="o", facecolors="white",
+    _kw_II  = dict(s=45, marker="s", facecolors="white",
                    edgecolors=_EXP_COLOR_2, linewidths=1.2, zorder=5)
     _kw_vap = dict(s=45, marker="^", facecolors="white",
-                   edgecolors="#2ca02c", linewidths=1.2, zorder=5)
+                   edgecolors=_color_vap, linewidths=1.2, zorder=5)
 
-    # Left panel: T vs x1
-    if valid.any():
-        ax_T.plot(xI_loc[valid],  T_loc[valid],
-                  color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (phase I)")
-        ax_T.plot(xII_loc[valid], T_loc[valid],
-                  color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (phase II)")
-        ax_T.plot(y1_loc[valid],  T_loc[valid],
-                  color="#2ca02c",   linestyle="-", label="PC-SAFT (vapor)")
-    if has_xI:
-        ax_T.scatter(xI_exp,  T_exp, label="Exp. phase I",  **_kw_I)
-    if has_xII:
-        ax_T.scatter(xII_exp, T_exp, label="Exp. phase II", **_kw_II)
-    if has_y1:
-        ax_T.scatter(y1_exp,  T_exp, label="Exp. vapor",    **_kw_vap)
-    ax_T.set_xlabel(rf"$x_1$, $y_1$ ({result.id1})")
-    ax_T.set_ylabel("$T$ / K")
-    ax_T.set_xlim(-0.02, 1.02)
-    ax_T.legend(fontsize="small")
-    sns.despine(ax=ax_T, offset=10)
+    # --- Figure: two panels --------------------------------------------------
+    fig, (ax_T, ax_P) = plt.subplots(1, 2, figsize=(15, 5))
 
-    # Right panel: P vs x1
-    if valid.any():
-        ax_P.plot(xI_loc[valid],  P_loc_plot[valid],
-                  color=_EXP_COLOR_1, linestyle="-", label="PC-SAFT (phase I)")
-        ax_P.plot(xII_loc[valid], P_loc_plot[valid],
-                  color=_EXP_COLOR_2, linestyle="-", label="PC-SAFT (phase II)")
-        ax_P.plot(y1_loc[valid],  P_loc_plot[valid],
-                  color="#2ca02c",   linestyle="-", label="PC-SAFT (vapor)")
-    if has_xI:
-        ax_P.scatter(xI_exp,  P_exp, label="Exp. phase I",  **_kw_I)
-    if has_xII:
-        ax_P.scatter(xII_exp, P_exp, label="Exp. phase II", **_kw_II)
-    if has_y1:
-        ax_P.scatter(y1_exp,  P_exp, label="Exp. vapor",    **_kw_vap)
-    ax_P.set_xlabel(rf"$x_1$, $y_1$ ({result.id1})")
-    ax_P.set_ylabel(f"$p$ / {p_lbl}")
-    ax_P.set_xlim(-0.02, 1.02)
-    ax_P.legend(fontsize="small")
-    sns.despine(ax=ax_P, offset=10)
+    def _draw_locus_and_scatter(ax, Y_exp, Y_loc_plot, y_lbl):
+        if valid.any():
+            Y_v = Y_loc_plot[valid]
+            Y_lo = float(np.nanmin(Y_exp))
+            Y_hi = float(np.nanmax(Y_exp))
+            in_range = (Y_v >= Y_lo) & (Y_v <= Y_hi)
+            for x_v, color, label in [
+                (xI_loc[valid],  _EXP_COLOR_1, "PC-SAFT (phase I)"),
+                (xII_loc[valid], _EXP_COLOR_2, "PC-SAFT (phase II)"),
+                (y1_loc[valid],  _color_vap,   "PC-SAFT (vapor)"),
+            ]:
+                ax.plot(x_v, Y_v, color=color, linestyle="--", alpha=0.40, label=None)
+                if in_range.any():
+                    ax.plot(x_v[in_range], Y_v[in_range],
+                            color=color, linestyle="-", label=label)
+        if has_xI:
+            ax.scatter(xI_exp,  Y_exp, label=r"Exp. phase I ($x_1$)",  **_kw_I)
+        if has_xII:
+            ax.scatter(xII_exp, Y_exp, label=r"Exp. phase II ($x_1$)", **_kw_II)
+        if has_y1:
+            ax.scatter(y1_exp,  Y_exp, label=r"Exp. vapor ($y_1$)",    **_kw_vap)
+        ax.set_xlabel(rf"$x_1$, $y_1$ ({result.id1})")
+        ax.set_ylabel(y_lbl)
+        ax.set_xlim(-0.02, 1.02)
+        ax.legend(fontsize="small", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
+        sns.despine(ax=ax, offset=10)
+
+    _draw_locus_and_scatter(ax_T, T_exp, T_loc,      "$T$ / K")
+    _draw_locus_and_scatter(ax_P, P_exp, P_loc_plot, f"$p$ / {p_lbl}")
+
+    # LLE binodal on the T-x panel (when LLE data is present)
+    has_lle = "lle_T" in data
+    if has_lle and result._record1 is not None and result._record2 is not None:
+        lle_T = data["lle_T"].astype(float) * t_scale
+        T_pad = max((lle_T.max() - lle_T.min()) * 0.05, 1.0)
+        z1 = float(np.clip(
+            0.5 * ((np.nanmean(data["lle_x1_I"]) if "lle_x1_I" in data else 0.05)
+                   + (np.nanmean(data["lle_x1_II"]) if "lle_x1_II" in data else 0.90)),
+            0.05, 0.95,
+        ))
+        # Upper T for the binodal: use the LLE data max (not VLLE temps), plus
+        # a small pad so the UCST region is visible.  _lle_curve_kij_T extends
+        # 500 K past its T_max argument to find the UCST naturally, so we clip
+        # the returned curve to lle_T.max() + T_pad to avoid bogus extrapolation.
+        _lle_T_max = float(lle_T.max())
+        T_c, x_I_c, x_II_c = _lle_curve_kij_T(
+            result, z1,
+            float(lle_T.min()) - T_pad,
+            _lle_T_max + T_pad,
+            npoints=301,
+        )
+        # Clip to the LLE data range + small margin so we never plot hundreds of
+        # Kelvin of unconstrained extrapolation.
+        _T_max_show = _lle_T_max + T_pad
+        if len(T_c) > 0:
+            _T_c = np.asarray(T_c)
+            _keep = _T_c <= _T_max_show
+            T_c    = _T_c[_keep]
+            x_I_c  = np.asarray(x_I_c)[_keep]
+            x_II_c = np.asarray(x_II_c)[_keep]
+        if len(T_c) > 0 and np.max(np.abs(x_I_c - x_II_c)) > 1e-4:
+            ax_T.plot(x_I_c, T_c, color=_EXP_COLOR_1, linestyle="--",
+                      label="PC-SAFT LLE (phase I)", alpha=0.7)
+            ax_T.plot(x_II_c, T_c, color=_EXP_COLOR_2, linestyle="--",
+                      label="PC-SAFT LLE (phase II)", alpha=0.7)
+        if "lle_x1_I" in data:
+            vals = data["lle_x1_I"].astype(float)
+            valid_lle = ~np.isnan(vals)
+            ax_T.scatter(vals[valid_lle], lle_T[valid_lle],
+                         s=30, marker="s", facecolors="white",
+                         edgecolors=_EXP_COLOR_1, linewidths=1.0, zorder=4,
+                         label="Exp. LLE phase I")
+        if "lle_x1_II" in data:
+            vals = data["lle_x1_II"].astype(float)
+            valid_lle = ~np.isnan(vals)
+            ax_T.scatter(vals[valid_lle], lle_T[valid_lle],
+                         s=30, marker="D", facecolors="white",
+                         edgecolors=_EXP_COLOR_2, linewidths=1.0, zorder=4,
+                         label="Exp. LLE phase II")
+        ax_T.legend(fontsize="x-small")
 
     fig.suptitle(f"VLLE locus: {result.id1} + {result.id2}", y=1.01)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
