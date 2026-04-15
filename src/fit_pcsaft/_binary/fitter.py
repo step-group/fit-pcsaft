@@ -311,7 +311,7 @@ class BinaryKijFitter:
             kij_all.append(kij_pts)
             ard_all.append(ard_pts)
             source_labels.append(np.full(len(T_pts), stype))
-            ard_by_type[stype] = float(np.mean(ard_pts))
+            ard_by_type[stype] = res.ard  # post-polynomial ARD (not per-point optimal)
             total_nfev += res.scipy_result.nfev
 
         # --- combine and fit polynomial ---
