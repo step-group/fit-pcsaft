@@ -543,16 +543,27 @@ def _model_curve_df(eos, data, units, T_min, T_max, n_points):
             return col_vals
         return [v if lo <= t <= hi else None for t, v in zip(T_col, col_vals)]
 
-    p_sat_vals   = (phase_diagram.vapor.pressure         / pu).tolist()
-    rho_liq_vals = (phase_diagram.liquid.mass_density    / du).tolist()
-    rho_vap_vals = (phase_diagram.vapor.mass_density     / du).tolist()
+    import math
+    p_sat_kpa    = (phase_diagram.vapor.pressure      / pu).tolist()
+    rho_liq_vals = (phase_diagram.liquid.mass_density / du).tolist()
+    rho_vap_vals = (phase_diagram.vapor.mass_density  / du).tolist()
+
+    masked_ln_psat = _mask(
+        [math.log(v) if v is not None and v > 0 else None for v in p_sat_kpa],
+        psat_lo, psat_hi,
+    )
+    masked_inv_T = _mask(
+        [1000.0 / t if t else None for t in T_col],
+        psat_lo, psat_hi,
+    )
 
     return (
         pl.DataFrame({
-            "T":       T_col,
-            "p_sat":   _mask(p_sat_vals,   psat_lo, psat_hi),
-            "rho_liq": _mask(rho_liq_vals, rho_lo,  rho_hi),
-            "rho_vap": _mask(rho_vap_vals, rho_lo,  rho_hi),
+            "T":        T_col,
+            "inv_T":    masked_inv_T,
+            "ln_psat":  masked_ln_psat,
+            "rho_liq":  _mask(rho_liq_vals, rho_lo, rho_hi),
+            "rho_vap":  _mask(rho_vap_vals, rho_lo, rho_hi),
         })
         .filter(pl.col("T") <= overall_max)
     )
