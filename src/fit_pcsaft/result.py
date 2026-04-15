@@ -199,15 +199,10 @@ class FitResult:
             Number of points along the phase envelope. Default: 501.
         """
         import polars as pl
-        import feos
 
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         name = self.input_name or self.compound.identifier.name
-
-        tu = self.units.temperature
-        pu = self.units.pressure
-        du = self.units.density
 
         # --- experimental CSV ---
         n_psat = len(self.data.T_psat)
@@ -233,26 +228,9 @@ class FitResult:
         pl.DataFrame(exp_data).write_csv(path / f"{name}_exp.csv")
 
         # --- model curve CSV ---
-        all_T = [self.data.T_psat, self.data.T_rho, self.data.T_hvap]
-        T_exp_min = float(min(T.min() for T in all_T if len(T) > 0))
-        T_exp_max = float(max(T.max() for T in all_T if len(T) > 0))
-        if T_min is None:
-            T_min = T_exp_min - 5.0
-        if T_max is None:
-            T_max = T_exp_max + 5.0
-
-        phase_diagram = feos.PhaseDiagram.pure(self.eos, T_min * tu, n_points)
-
-        (
-            pl.DataFrame({
-                "T":       (phase_diagram.vapor.temperature / tu).tolist(),
-                "p_sat":   (phase_diagram.vapor.pressure    / pu).tolist(),
-                "rho_liq": (phase_diagram.liquid.mass_density / du).tolist(),
-                "rho_vap": (phase_diagram.vapor.mass_density  / du).tolist(),
-            })
-            .filter(pl.col("T") <= T_max)
-            .write_csv(path / f"{name}_model.csv")
-        )
+        _model_curve_df(
+            self.eos, self.data, self.units, T_min, T_max, n_points
+        ).write_csv(path / f"{name}_model.csv")
 
     def plot(
         self,
@@ -427,15 +405,10 @@ class EvalResult:
             Number of points along the phase envelope. Default: 501.
         """
         import polars as pl
-        import feos
 
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         name = self.input_name or self.compound.identifier.name
-
-        tu = self.units.temperature
-        pu = self.units.pressure
-        du = self.units.density
 
         n_psat = len(self.data.T_psat)
         n_rho  = len(self.data.T_rho)
@@ -459,26 +432,9 @@ class EvalResult:
 
         pl.DataFrame(exp_data).write_csv(path / f"{name}_exp.csv")
 
-        all_T = [self.data.T_psat, self.data.T_rho, self.data.T_hvap]
-        T_exp_min = float(min(T.min() for T in all_T if len(T) > 0))
-        T_exp_max = float(max(T.max() for T in all_T if len(T) > 0))
-        if T_min is None:
-            T_min = T_exp_min - 5.0
-        if T_max is None:
-            T_max = T_exp_max + 5.0
-
-        phase_diagram = feos.PhaseDiagram.pure(self.eos, T_min * tu, n_points)
-
-        (
-            pl.DataFrame({
-                "T":       (phase_diagram.vapor.temperature / tu).tolist(),
-                "p_sat":   (phase_diagram.vapor.pressure    / pu).tolist(),
-                "rho_liq": (phase_diagram.liquid.mass_density / du).tolist(),
-                "rho_vap": (phase_diagram.vapor.mass_density  / du).tolist(),
-            })
-            .filter(pl.col("T") <= T_max)
-            .write_csv(path / f"{name}_model.csv")
-        )
+        _model_curve_df(
+            self.eos, self.data, self.units, T_min, T_max, n_points
+        ).write_csv(path / f"{name}_model.csv")
 
     def plot(
         self,
@@ -545,6 +501,61 @@ class EvalResult:
         lines.append(f"  ARD total:               {ard_total:.2f}%")
 
         return "\n".join(lines)
+
+
+def _model_curve_df(eos, data, units, T_min, T_max, n_points):
+    """Build the model-curve polars DataFrame for to_csv.
+
+    T ranges are computed per-dataset (psat / rho / hvap independently),
+    so a wide rho dataset does not inflate the psat column range and vice
+    versa.  Each column is nulled outside its own dataset's [T_min, T_max].
+    The overall phase diagram spans the union of all per-dataset ranges.
+    """
+    import polars as pl
+    import feos
+
+    tu = units.temperature
+    pu = units.pressure
+    du = units.density
+
+    def _bounds(arr, override_min, override_max):
+        """Return (lo, hi) in data units, or (None, None) if dataset empty."""
+        if len(arr) == 0:
+            return None, None
+        lo = override_min if override_min is not None else float(arr.min()) - 5.0
+        hi = override_max if override_max is not None else float(arr.max()) + 5.0
+        return lo, hi
+
+    psat_lo, psat_hi = _bounds(data.T_psat, T_min, T_max)
+    rho_lo,  rho_hi  = _bounds(data.T_rho,  T_min, T_max)
+    hvap_lo, hvap_hi = _bounds(data.T_hvap, T_min, T_max)
+
+    all_los = [v for v in [psat_lo, rho_lo, hvap_lo] if v is not None]
+    all_his = [v for v in [psat_hi, rho_hi, hvap_hi] if v is not None]
+    overall_min = min(all_los)
+    overall_max = max(all_his)
+
+    phase_diagram = feos.PhaseDiagram.pure(eos, overall_min * tu, n_points)
+    T_col = (phase_diagram.vapor.temperature / tu).tolist()
+
+    def _mask(col_vals, lo, hi):
+        if lo is None:
+            return col_vals
+        return [v if lo <= t <= hi else None for t, v in zip(T_col, col_vals)]
+
+    p_sat_vals   = (phase_diagram.vapor.pressure         / pu).tolist()
+    rho_liq_vals = (phase_diagram.liquid.mass_density    / du).tolist()
+    rho_vap_vals = (phase_diagram.vapor.mass_density     / du).tolist()
+
+    return (
+        pl.DataFrame({
+            "T":       T_col,
+            "p_sat":   _mask(p_sat_vals,   psat_lo, psat_hi),
+            "rho_liq": _mask(rho_liq_vals, rho_lo,  rho_hi),
+            "rho_vap": _mask(rho_vap_vals, rho_lo,  rho_hi),
+        })
+        .filter(pl.col("T") <= overall_max)
+    )
 
 
 def _assoc_scheme_name(na: int, nb: int) -> str:
