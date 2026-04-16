@@ -46,8 +46,9 @@ class ViscosityFitResult:
     ard: float
     n_points: int
     input_name: str = ""
-    # Internal data stored for plotting (not shown in __str__)
+    # Internal data stored for plotting / export (not shown in __str__)
     _T_K: list = field(default_factory=list, repr=False, compare=False)
+    _P_MPa: list = field(default_factory=list, repr=False, compare=False)
     _eta_exp_Pa_s: list = field(default_factory=list, repr=False, compare=False)
     _s_vals: list = field(default_factory=list, repr=False, compare=False)
     _y_vals: list = field(default_factory=list, repr=False, compare=False)
@@ -102,6 +103,49 @@ class ViscosityFitResult:
             )
 
         path.write_text(json.dumps(records, indent=2), encoding="utf-8")
+
+    def to_csv(self, path: "Path | str") -> None:
+        """Write experimental and predicted viscosity to a CSV file.
+
+        Columns: ``T`` (K), ``P`` (MPa), ``eta_exp`` (Pa·s),
+        ``eta_pred`` (Pa·s), ``ard_pct`` (%).
+
+        ``eta_pred`` is computed from the rebuilt EOS when available;
+        otherwise from the entropy scaling polynomial directly.
+
+        Parameters
+        ----------
+        path : Path | str
+            Output CSV path.
+        """
+        import csv
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        A, B, C, D = self.viscosity_params
+        rows = []
+        for T, P, eta_e in zip(self._T_K, self._P_MPa, self._eta_exp_Pa_s):
+            eta_p = float("nan")
+            if self.eos is not None:
+                try:
+                    state = feos.State(
+                        self.eos,
+                        temperature=T * si.KELVIN,
+                        pressure=P * si.MEGA * si.PASCAL,
+                        total_moles=si.MOL,
+                        density_initialization="liquid",
+                    )
+                    eta_p = float(state.viscosity() / (si.PASCAL * si.SECOND))
+                except Exception:
+                    pass
+            ard_pct = abs(eta_p - eta_e) / eta_e * 100 if np.isfinite(eta_p) else float("nan")
+            rows.append({"T": T, "P": P, "eta_exp": eta_e, "eta_pred": eta_p, "ard_pct": ard_pct})
+
+        with path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["T", "P", "eta_exp", "eta_pred", "ard_pct"])
+            w.writeheader()
+            w.writerows(rows)
 
     def __str__(self) -> str:
         A, B, C, D = self.viscosity_params
@@ -337,6 +381,7 @@ def fit_viscosity_entropy_scaling(
         n_points=n,
         input_name=compound_name,
         _T_K=[float(T) * float(temperature_unit / si.KELVIN) for T in T_data],
+        _P_MPa=[float(P) * float(pressure_unit / (si.MEGA * si.PASCAL)) for P in P_data],
         _eta_exp_Pa_s=[float(e) * float(viscosity_unit / (si.PASCAL * si.SECOND)) for e in eta_data],
         _s_vals=s_vals,
         _y_vals=y_vals,
@@ -434,6 +479,7 @@ def plot_viscosity_binary(
     id1: str = "component 1",
     id2: str = "component 2",
     path=None,
+    csv_out=None,
     pressure_unit: "si.SIObject" = si.MEGA * si.PASCAL,
     viscosity_unit: "si.SIObject" = si.PASCAL * si.SECOND,
 ):
@@ -452,6 +498,8 @@ def plot_viscosity_binary(
         Label for component 2 (solvent side, x → 0).
     path : str or Path, optional
         If given, save the figure to this path (dpi=300).
+    csv_out : str or Path, optional
+        If given, write a CSV with columns T, P, x1, eta_exp, eta_pred, ard_pct.
     pressure_unit : si.SIObject
         Unit of the P column. Default: MPa.
     viscosity_unit : si.SIObject
@@ -461,6 +509,7 @@ def plot_viscosity_binary(
     -------
     fig, ax
     """
+    import csv as _csv
     import matplotlib.pyplot as plt
     import seaborn as sns
 
@@ -524,5 +573,31 @@ def plot_viscosity_binary(
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")
+
+    if csv_out is not None:
+        csv_out = Path(csv_out)
+        csv_out.parent.mkdir(parents=True, exist_ok=True)
+        rows_out = []
+        for T_iso, P_iso_csv, x1, eta_e_mPas in zip(T_arr, P_arr, x_arr, eta_arr):
+            try:
+                state = feos.State(
+                    eos_mix,
+                    temperature=T_iso * si.KELVIN,
+                    pressure=float(P_iso_csv) * pressure_unit,
+                    total_moles=si.MOL,
+                    molefracs=np.array([x1, 1.0 - x1]),
+                )
+                eta_p_mPas = float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3
+            except Exception:
+                eta_p_mPas = float("nan")
+            eta_e_Pas = eta_e_mPas * 1e-3
+            eta_p_Pas = eta_p_mPas * 1e-3
+            ard = abs(eta_p_Pas - eta_e_Pas) / eta_e_Pas * 100 if np.isfinite(eta_p_Pas) else float("nan")
+            rows_out.append({"T": T_iso, "P": float(P_iso_csv), "x1": x1,
+                             "eta_exp": eta_e_Pas, "eta_pred": eta_p_Pas, "ard_pct": ard})
+        with csv_out.open("w", newline="", encoding="utf-8") as f:
+            w = _csv.DictWriter(f, fieldnames=["T", "P", "x1", "eta_exp", "eta_pred", "ard_pct"])
+            w.writeheader()
+            w.writerows(rows_out)
 
     return fig, ax
