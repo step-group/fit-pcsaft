@@ -11,7 +11,7 @@ by linear least squares.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +46,11 @@ class ViscosityFitResult:
     ard: float
     n_points: int
     input_name: str = ""
+    # Internal data stored for plotting (not shown in __str__)
+    _T_K: list = field(default_factory=list, repr=False, compare=False)
+    _eta_exp_Pa_s: list = field(default_factory=list, repr=False, compare=False)
+    _s_vals: list = field(default_factory=list, repr=False, compare=False)
+    _y_vals: list = field(default_factory=list, repr=False, compare=False)
 
     def to_json(self, path: "Path | str", name: str = "") -> None:
         """Add or update the ``viscosity`` field in a feos-compatible JSON file.
@@ -113,6 +118,20 @@ class ViscosityFitResult:
         if self.eos is None:
             lines.append("\n  Note: EOS rebuild failed — viscosity_params are still valid.")
         return "\n".join(lines)
+
+    def plot(self, path=None):
+        """Two-panel plot: η vs T (left) and entropy scaling fit (right).
+
+        Parameters
+        ----------
+        path : str or Path, optional
+            If given, save the figure to this path (dpi=300).
+
+        Returns
+        -------
+        fig, axes
+        """
+        return _plot_viscosity_pure(self, path=path)
 
 
 # ---------------------------------------------------------------------------
@@ -317,4 +336,193 @@ def fit_viscosity_entropy_scaling(
         ard=ard,
         n_points=n,
         input_name=compound_name,
+        _T_K=[float(T) * float(temperature_unit / si.KELVIN) for T in T_data],
+        _eta_exp_Pa_s=[float(e) * float(viscosity_unit / (si.PASCAL * si.SECOND)) for e in eta_data],
+        _s_vals=s_vals,
+        _y_vals=y_vals,
     )
+
+
+# ---------------------------------------------------------------------------
+# Plotting helpers
+# ---------------------------------------------------------------------------
+
+_EXP_COLOR = "#E32F2F"
+_LINE_COLOR = "#000000"
+
+
+def _scatter_kw(color: str, marker: str = "o") -> dict:
+    return dict(s=40, marker=marker, facecolors="white", edgecolors=color,
+                linewidths=1.2, zorder=5)
+
+
+def _plot_viscosity_pure(result: ViscosityFitResult, path=None):
+    """Two-panel: η vs T (left) and entropy scaling fit ln(η/η_CE) vs s (right)."""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    sns.set_context("talk")
+    sns.set_style("ticks")
+
+    name = result.input_name or "compound"
+    A, B, C, D = result.viscosity_params
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+
+    # --- Left: η vs T ---
+    ax = axes[0]
+    T_exp = np.array(result._T_K)
+    eta_exp_mPas = np.array(result._eta_exp_Pa_s) * 1e3
+
+    ax.scatter(T_exp, eta_exp_mPas, label="Experiment", **_scatter_kw(_EXP_COLOR))
+
+    if result.eos is not None:
+        T_min, T_max = T_exp.min(), T_exp.max()
+        T_pad = (T_max - T_min) * 0.05
+        T_curve = np.linspace(T_min - T_pad, T_max + T_pad, 80)
+        eta_curve = []
+        for T in T_curve:
+            try:
+                state = feos.State(result.eos, temperature=T * si.KELVIN,
+                                   pressure=0.1 * si.MEGA * si.PASCAL,
+                                   total_moles=si.MOL,
+                                   density_initialization="liquid")
+                eta_curve.append(float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3)
+            except Exception:
+                eta_curve.append(float("nan"))
+        eta_curve = np.array(eta_curve)
+        valid = np.isfinite(eta_curve)
+        ax.plot(T_curve[valid], eta_curve[valid], color=_LINE_COLOR, label="PC-SAFT")
+
+    ax.set_yscale("log")
+    ax.set_xlabel("$T$ / K")
+    ax.set_ylabel(r"$\eta$ / mPa·s")
+    ax.set_title(f"Viscosity — {name}  (ARD {result.ard:.2f}%)")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, fontsize="small")
+
+    # --- Right: entropy scaling fit ---
+    ax = axes[1]
+    s_arr = np.array(result._s_vals)
+    y_arr = np.array(result._y_vals)
+
+    if len(s_arr) > 0:
+        s_lo, s_hi = s_arr.min(), s_arr.max()
+        s_pad = (s_hi - s_lo) * 0.05
+        s_curve = np.linspace(s_lo - s_pad, s_hi + s_pad, 200)
+        y_curve = A + B * s_curve + C * s_curve**2 + D * s_curve**3
+
+        ax.scatter(s_arr, y_arr, label="Experiment", **_scatter_kw(_EXP_COLOR))
+        ax.plot(s_curve, y_curve, color=_LINE_COLOR, label="Fit")
+
+    ax.set_xlabel(r"$s = s_\mathrm{res}/(R\,m)$")
+    ax.set_ylabel(r"$\ln(\eta/\eta_\mathrm{CE})$")
+    ax.set_title(f"Entropy scaling fit — {name}")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, fontsize="small")
+
+    sns.despine(offset=10)
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
+
+    if path is not None:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+
+    return fig, axes
+
+
+def plot_viscosity_binary(
+    eos_mix,
+    csv_path: "Path | str",
+    id1: str = "component 1",
+    id2: str = "component 2",
+    path=None,
+    pressure_unit: "si.SIObject" = si.MEGA * si.PASCAL,
+    viscosity_unit: "si.SIObject" = si.PASCAL * si.SECOND,
+):
+    """Plot binary mixture viscosity: η vs x₁ at each isotherm.
+
+    Parameters
+    ----------
+    eos_mix : feos.EquationOfState
+        Binary EOS with viscosity parameters set for both components.
+    csv_path : Path | str
+        CSV with columns ``T`` (K), ``P`` (MPa), ``x_2pe`` or ``x1`` (mole
+        fraction of component 1), ``eta`` (Pa·s).
+    id1 : str
+        Label for component 1 (2-phenylethanol side, x → 1).
+    id2 : str
+        Label for component 2 (solvent side, x → 0).
+    path : str or Path, optional
+        If given, save the figure to this path (dpi=300).
+    pressure_unit : si.SIObject
+        Unit of the P column. Default: MPa.
+    viscosity_unit : si.SIObject
+        Unit of the eta column. Default: Pa·s.
+
+    Returns
+    -------
+    fig, ax
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    sns.set_context("talk")
+    sns.set_style("ticks")
+
+    df_raw = pl.read_csv(Path(csv_path))
+    x_col = next((c for c in df_raw.columns if c.lower() in ("x_2pe", "x1", "x_1")), None)
+    if x_col is None:
+        raise ValueError(f"No mole fraction column found in {csv_path}. Expected x_2pe or x1.")
+
+    T_arr = df_raw["T"].to_numpy()
+    P_arr = df_raw["P"].to_numpy()
+    x_arr = df_raw[x_col].to_numpy()
+    eta_arr = df_raw["eta"].to_numpy() * float(viscosity_unit / (si.PASCAL * si.SECOND)) * 1e3  # → mPa·s
+
+    unique_T = np.unique(np.round(T_arr, 1))
+    cmap = plt.cm.plasma
+    colors = [cmap(i / max(1, len(unique_T) - 1)) for i in range(len(unique_T))]
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    x_smooth = np.linspace(0.0, 1.0, 100)
+
+    for k, T_iso in enumerate(unique_T):
+        color = colors[k]
+        iso_mask = np.abs(T_arr - T_iso) < 0.5
+        P_iso = float(P_arr[iso_mask][0]) if iso_mask.any() else 0.1
+
+        # Smooth PC-SAFT curve
+        eta_model = []
+        for x1 in x_smooth:
+            try:
+                state = feos.State(
+                    eos_mix,
+                    temperature=T_iso * si.KELVIN,
+                    pressure=P_iso * pressure_unit,
+                    total_moles=si.MOL,
+                    molefracs=np.array([x1, 1.0 - x1]),
+                )
+                eta_model.append(float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3)
+            except Exception:
+                eta_model.append(float("nan"))
+        eta_model = np.array(eta_model)
+        valid = np.isfinite(eta_model)
+        ax.plot(x_smooth[valid], eta_model[valid], color=color,
+                label=f"{T_iso:.1f} K")
+
+        # Experimental scatter at this isotherm
+        ax.scatter(x_arr[iso_mask], eta_arr[iso_mask],
+                   s=40, marker="o", facecolors="white",
+                   edgecolors=color, linewidths=1.2, zorder=5)
+
+    ax.set_xlabel(rf"$x_1$ ({id1})")
+    ax.set_ylabel(r"$\eta$ / mPa·s")
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_title(f"Viscosity: {id1} + {id2}")
+    ax.legend(fontsize="small", title="$T$",
+              loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=len(unique_T))
+    sns.despine(offset=10)
+    plt.tight_layout(rect=[0, 0.15, 1, 1])
+
+    if path is not None:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+
+    return fig, ax

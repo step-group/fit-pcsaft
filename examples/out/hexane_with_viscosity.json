@@ -1,0 +1,22 @@
+[
+  {
+    "identifier": {
+      "cas": "110-54-3",
+      "name": "hexane",
+      "iupac_name": "hexane",
+      "smiles": "CCCCCC",
+      "inchi": "InChI=1S/C6H14/c1-3-5-6-4-2/h3-6H2,1-2H3",
+      "formula": "C6H14"
+    },
+    "molarweight": 86.177,
+    "m": 3.0576,
+    "sigma": 3.7983,
+    "epsilon_k": 236.77,
+    "viscosity": [
+      -1.1798007738544474,
+      -2.2101416779234353,
+      -0.07415137355931511,
+      0.024420886514097573
+    ]
+  }
+]

@@ -7,7 +7,7 @@ from fit_pcsaft._binary.vle import fit_kij_vle
 from fit_pcsaft._binary.vle_lle import fit_kij_vle_lle
 from fit_pcsaft._binary.vlle import fit_kij_vlle
 from fit_pcsaft.fit import eval_pure, fit_pure, fit_pure_de
-from fit_pcsaft._pure.viscosity import ViscosityFitResult, fit_viscosity_entropy_scaling
+from fit_pcsaft._pure.viscosity import ViscosityFitResult, fit_viscosity_entropy_scaling, plot_viscosity_binary
 from fit_pcsaft.result import EvalResult, FitResult
 
 __all__ = [
@@ -15,6 +15,7 @@ __all__ = [
     "fit_pure_de",
     "eval_pure",
     "fit_viscosity_entropy_scaling",
+    "plot_viscosity_binary",
     "FitResult",
     "EvalResult",
     "ViscosityFitResult",
