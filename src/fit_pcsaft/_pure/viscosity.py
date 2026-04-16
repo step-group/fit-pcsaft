@@ -366,11 +366,25 @@ def fit_viscosity_entropy_scaling(
     y_arr = np.array(y_vals)
 
     # --- Linear regression: y = A + B*s + C*s^2 + D*s^3 ------------------
-    Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
-    coeffs, _, _, _ = np.linalg.lstsq(Phi, y_arr, rcond=None)
+    # Fit in a centered basis (s_c = s - mu) to avoid near-singular Vandermonde
+    # matrices when all data points cluster in a narrow s range (e.g. only 5
+    # liquid points at 20-60°C give s range ~0.3, condition number ~400,000).
+    # Convert back to the standard [A,B,C,D] basis analytically afterward.
+    mu = float(s_arr.mean())
+    s_c = s_arr - mu
+    Phi_c = np.column_stack([np.ones(n), s_c, s_c**2, s_c**3])
+    a, _, _, _ = np.linalg.lstsq(Phi_c, y_arr, rcond=None)
+    a0, a1, a2, a3 = float(a[0]), float(a[1]), float(a[2]), float(a[3])
 
-    ard = 100.0 * float(np.mean(np.abs(np.expm1(Phi @ coeffs - y_arr))))
-    viscosity_list = [float(v) for v in coeffs]
+    # Expand (s - mu) polynomial back to standard s basis
+    A = a0 - a1*mu + a2*mu**2 - a3*mu**3
+    B = a1 - 2*a2*mu + 3*a3*mu**2
+    C = a2 - 3*a3*mu
+    D = a3
+
+    Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
+    viscosity_list = [A, B, C, D]
+    ard = 100.0 * float(np.mean(np.abs(np.expm1(Phi @ np.array(viscosity_list) - y_arr))))
 
     eos_final = _rebuild_eos_with_viscosity(source, viscosity_list)
 
