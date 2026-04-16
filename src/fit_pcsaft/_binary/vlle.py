@@ -21,6 +21,7 @@ from scipy.optimize import least_squares
 from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
+    _fit_kij_polynomial,
     _kij_at_T,
     _load_pure_records,
     _make_binary_jac_fn,
@@ -194,39 +195,17 @@ def fit_kij_vlle(
         raise RuntimeError("No VLLE points converged. Try relaxing kij_bounds.")
 
     # --- Polynomial fit to (T, k_ij) pairs -----------------------------------
-    effective_order = min(kij_order, len(T_fitted) - 1)
     T_arr_fit = np.array(T_fitted)
     kij_arr_fit = np.array(kij_fitted)
-    dT = T_arr_fit - kij_t_ref
-
-    ols_rev = np.polyfit(dT, kij_arr_fit, effective_order)
-    x0_poly = ols_rev[::-1]
-
-    if effective_order == 0 or len(T_fitted) == 1:
-        kij_coeffs = x0_poly
-        poly_resid = kij_arr_fit - sum(c * dT**j for j, c in enumerate(kij_coeffs))
-        poly_result = SimpleNamespace(
-            x=kij_coeffs, fun=poly_resid,
-            cost=float(np.sum(poly_resid**2)) / 2.0,
-            success=True, nfev=total_nfev,
-            message="VLLE per-point fitting completed",
-        )
-    else:
-        def _poly_resid(coeffs):
-            return sum(c * dT**j for j, c in enumerate(coeffs)) - kij_arr_fit
-
-        rob = least_squares(
-            _poly_resid, x0_poly,
-            loss="cauchy", f_scale=0.01,
-            ftol=1e-8, xtol=1e-8, gtol=1e-8,
-        )
-        total_nfev += rob.nfev
-        kij_coeffs = rob.x
-        poly_result = SimpleNamespace(
-            x=kij_coeffs, fun=rob.fun, cost=rob.cost,
-            success=rob.success, nfev=total_nfev,
-            message="VLLE per-point fitting completed",
-        )
+    kij_coeffs, poly_resid = _fit_kij_polynomial(
+        T_arr_fit, kij_arr_fit, np.array(ard_fitted), kij_order, kij_t_ref
+    )
+    poly_result = SimpleNamespace(
+        x=kij_coeffs, fun=poly_resid,
+        cost=float(np.sum(poly_resid**2)) / 2.0,
+        success=True, nfev=total_nfev,
+        message="VLLE per-point fitting completed",
+    )
 
     ard = float(np.mean(ard_fitted))
     eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))

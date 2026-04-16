@@ -107,6 +107,56 @@ def _kij_at_T(coeffs: np.ndarray, T: float, t_ref: float) -> float:
 
 
 
+def _fit_kij_polynomial(
+    T_arr: np.ndarray,
+    kij_arr: np.ndarray,
+    ard_arr: np.ndarray,
+    kij_order: int,
+    kij_t_ref: float,
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Fit k_ij(T) polynomial with ARD-based weighting and Cauchy robust loss.
+
+    Points with high per-point ARD (unreliable k_ij) are down-weighted using:
+        w_i = 1 / (1 + (ard_i / ard_median)^2)
+
+    The Cauchy loss additionally down-weights outliers in k_ij space.
+
+    Returns (kij_coeffs, unweighted_poly_residuals).
+    """
+    from scipy.optimize import least_squares as _lsq
+
+    n = len(T_arr)
+    effective_order = min(kij_order, n - 1)
+    dT = T_arr - kij_t_ref
+
+    ard_med = float(np.median(ard_arr))
+    if ard_med > 0.0:
+        w = 1.0 / (1.0 + (ard_arr / ard_med) ** 2)
+    else:
+        w = np.ones(n)
+    w_sqrt = np.sqrt(w / w.max())
+
+    ols_rev = np.polyfit(dT, kij_arr, effective_order, w=w_sqrt)
+    x0_poly = ols_rev[::-1]  # lowest-order first
+
+    if effective_order == 0 or n == 1:
+        kij_coeffs = x0_poly
+    else:
+        def _poly_resid(coeffs):
+            pred = sum(c * dT**j for j, c in enumerate(coeffs))
+            return w_sqrt * (pred - kij_arr)
+
+        rob = _lsq(
+            _poly_resid, x0_poly,
+            loss="cauchy", f_scale=0.01,
+            ftol=1e-8, xtol=1e-8, gtol=1e-8,
+        )
+        kij_coeffs = rob.x
+
+    poly_resid = kij_arr - np.array([_kij_at_T(kij_coeffs, float(T), kij_t_ref) for T in T_arr])
+    return kij_coeffs, poly_resid
+
+
 def _make_binary_jac_fn(fun, n_params: int, h: float = 1e-012):
     """Build a central-difference (3-point) Jacobian for a binary cost function."""
 

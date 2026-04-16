@@ -16,6 +16,7 @@ from scipy.optimize import least_squares
 from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
+    _fit_kij_polynomial,
     _kij_at_T,
     _load_pure_records,
 )
@@ -130,49 +131,22 @@ def fit_kij_vle_lle(
     # --- Stage 2: polynomial fit to combined (T, k_ij) pairs ------------------
     T_combined = np.concatenate([T_vle_K, T_lle_K])
     kij_combined = np.concatenate([kij_vle, kij_lle])
+    ard_combined = np.concatenate([vle_res.data["ard_pointwise"], lle_res.data["ard_pointwise"]])
     source = np.array(["vle"] * len(T_vle_K) + ["lle"] * len(T_lle_K))
-
-    effective_order = min(kij_order, len(T_combined) - 1)
-    dT = T_combined - kij_t_ref
-
-    ols_rev = np.polyfit(dT, kij_combined, effective_order)
-    x0_poly = ols_rev[::-1]  # lowest-order first
 
     total_nfev = vle_res.scipy_result.nfev + lle_res.scipy_result.nfev
 
-    if effective_order == 0 or len(T_combined) == 1:
-        kij_coeffs = x0_poly
-        poly_resid = kij_combined - sum(
-            c * dT**j for j, c in enumerate(kij_coeffs)
-        )
-        poly_result = SimpleNamespace(
-            x=kij_coeffs,
-            fun=poly_resid,
-            cost=float(np.sum(poly_resid**2)) / 2.0,
-            success=True,
-            nfev=total_nfev,
-            message="VLE+LLE two-stage fitting completed",
-        )
-    else:
-        def _poly_resid(coeffs):
-            pred = sum(c * dT**j for j, c in enumerate(coeffs))
-            return pred - kij_combined
-
-        rob = least_squares(
-            _poly_resid, x0_poly,
-            loss="cauchy", f_scale=0.01,
-            ftol=1e-8, xtol=1e-8, gtol=1e-8,
-        )
-        total_nfev += rob.nfev
-        kij_coeffs = rob.x
-        poly_result = SimpleNamespace(
-            x=kij_coeffs,
-            fun=rob.fun,
-            cost=rob.cost,
-            success=rob.success,
-            nfev=total_nfev,
-            message="VLE+LLE two-stage fitting completed",
-        )
+    kij_coeffs, poly_resid = _fit_kij_polynomial(
+        T_combined, kij_combined, ard_combined, kij_order, kij_t_ref
+    )
+    poly_result = SimpleNamespace(
+        x=kij_coeffs,
+        fun=poly_resid,
+        cost=float(np.sum(poly_resid**2)) / 2.0,
+        success=True,
+        nfev=total_nfev,
+        message="VLE+LLE two-stage fitting completed",
+    )
 
     # Combined ARD (weighted by number of points)
     n_vle = len(T_vle_K)

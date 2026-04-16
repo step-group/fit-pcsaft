@@ -9,6 +9,7 @@ from scipy.optimize import least_squares
 
 from fit_pcsaft._binary._utils import (
     _build_binary_eos,
+    _fit_kij_polynomial,
     _kij_at_T,
     _load_pure_records,
     _make_binary_jac_fn,
@@ -243,25 +244,10 @@ def fit_kij_sle(
         if not T_fitted:
             raise RuntimeError("No SLE points converged. Try relaxing kij_bounds.")
 
-        effective_order = min(kij_order, len(T_fitted) - 1)
         T_fitted_arr  = np.array(T_fitted)
         kij_fitted_arr = np.array(kij_fitted)
-        dT = T_fitted_arr - kij_t_ref
-
-        ols_rev = np.polyfit(dT, kij_fitted_arr, effective_order)
-        x0_poly = ols_rev[::-1]
-
-        if effective_order == 0 or len(T_fitted) == 1:
-            kij_coeffs = x0_poly
-        else:
-            def _poly_resid(coeffs):
-                return sum(c * dT**j for j, c in enumerate(coeffs)) - kij_fitted_arr
-            rob = least_squares(_poly_resid, x0_poly, loss="cauchy", f_scale=0.01,
-                                ftol=1e-8, xtol=1e-8, gtol=1e-8)
-            kij_coeffs = rob.x
-
-        poly_resid = kij_fitted_arr - np.array(
-            [_kij_at_T(kij_coeffs, T, kij_t_ref) for T in T_fitted_arr]
+        kij_coeffs, poly_resid = _fit_kij_polynomial(
+            T_fitted_arr, kij_fitted_arr, np.array(ard_fitted), kij_order, kij_t_ref
         )
         eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
         ard = float(np.mean(ard_fitted))

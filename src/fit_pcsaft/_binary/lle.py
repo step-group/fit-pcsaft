@@ -12,6 +12,7 @@ from scipy.optimize import least_squares
 from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
+    _fit_kij_polynomial,
     _kij_at_T,
     _load_pure_records,
 )
@@ -199,33 +200,12 @@ def fit_kij_lle(
         raise RuntimeError("No temperatures converged. Try relaxing kij_bounds.")
     effective_order = min(kij_order, len(T_fitted) - 1)
 
-    # Stage 2: robust Cauchy polynomial fit to k_ij(T) trend
+    # Stage 2: ARD-weighted polynomial fit to k_ij(T) trend
     T_fitted_arr = np.array(T_fitted)
     kij_fitted_arr = np.array(kij_fitted)
-    dT = T_fitted_arr - kij_t_ref
-
-    # Warm-start from OLS, then refine with Cauchy loss
-    ols_rev = np.polyfit(dT, kij_fitted_arr, effective_order)
-    x0 = ols_rev[::-1]  # lowest-order first
-
-    if effective_order == 0 or len(T_fitted) == 1:
-        kij_coeffs = x0
-    else:
-
-        def _poly_resid(coeffs):
-            pred = sum(c * dT**i for i, c in enumerate(coeffs))
-            return pred - kij_fitted_arr
-
-        rob = least_squares(
-            _poly_resid,
-            x0,
-            loss="cauchy",
-            f_scale=0.01,
-            ftol=1e-08,
-            xtol=1e-08,
-            gtol=1e-08,
-        )
-        kij_coeffs = rob.x
+    kij_coeffs, _ = _fit_kij_polynomial(
+        T_fitted_arr, kij_fitted_arr, np.array(cost_fitted), kij_order, kij_t_ref
+    )
 
     # Post-poly ARD: re-evaluate residuals at the polynomial k_ij for each point
     ard_poly = []

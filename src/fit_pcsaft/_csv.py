@@ -81,12 +81,25 @@ _COL_ALIASES: dict[str, str] = {
     "H_Pa":                  "H",
     "h":                     "H",
     "h_atm":                 "H",
+    # --- Viscosity (canonical: "eta") ---
+    "Viscosity (Pa*s)":      "eta",
+    "Viscosity (Pa s)":      "eta",
+    "Viscosity (Pa·s)":      "eta",
+    "Viscosity (mPa*s)":     "eta",
+    "Viscosity":             "eta",
+    "viscosity":             "eta",
+    "viscosity_Pa_s":        "eta",
+    "eta_Pa_s":              "eta",
+    # --- Pressure in MPa (canonical: "P") ---
+    "Pressure (MPa)":        "P",
+    "pressure_MPa":          "P",
+    "P_MPa":                 "P",
 }
 
 # Set of all canonical names (values in the alias map plus bare canonicals).
 _CANONICAL_NAMES: frozenset[str] = frozenset(_COL_ALIASES.values()) | frozenset(
     ["T", "P", "psat", "rho", "hvap", "x1", "y1",
-     "x1_I", "x1_II", "w1_I", "w1_II", "H"]
+     "x1_I", "x1_II", "w1_I", "w1_II", "H", "eta"]
 )
 
 
@@ -103,14 +116,15 @@ class CsvSchema:
     name: str = ""  # used in error messages
 
 
-SCHEMA_PSAT    = CsvSchema(required=("T", "psat"),           name="vapor pressure")
-SCHEMA_DENSITY = CsvSchema(required=("T", "rho"),            name="density")
-SCHEMA_HVAP    = CsvSchema(required=("T", "hvap"),           name="enthalpy of vaporization")
-SCHEMA_VLE     = CsvSchema(required=("T", "P", "x1"),        optional=("y1",),                   name="VLE")
-SCHEMA_SLE     = CsvSchema(required=("T", "x1"),             name="SLE")
-SCHEMA_LLE     = CsvSchema(required=("T",),                  optional=("x1_I", "x1_II", "w1_I", "w1_II"), name="LLE")
-SCHEMA_VLLE    = CsvSchema(required=("T", "P"),              optional=("x1_I", "x1_II", "y1"),   name="VLLE")
-SCHEMA_HENRY   = CsvSchema(required=("T", "H"),              name="Henry")
+SCHEMA_PSAT       = CsvSchema(required=("T", "psat"),           name="vapor pressure")
+SCHEMA_VISCOSITY  = CsvSchema(required=("T", "P", "eta"),       name="viscosity")
+SCHEMA_DENSITY    = CsvSchema(required=("T", "rho"),            name="density")
+SCHEMA_HVAP       = CsvSchema(required=("T", "hvap"),           name="enthalpy of vaporization")
+SCHEMA_VLE        = CsvSchema(required=("T", "P", "x1"),        optional=("y1",),                   name="VLE")
+SCHEMA_SLE        = CsvSchema(required=("T", "x1"),             name="SLE")
+SCHEMA_LLE        = CsvSchema(required=("T",),                  optional=("x1_I", "x1_II", "w1_I", "w1_II"), name="LLE")
+SCHEMA_VLLE       = CsvSchema(required=("T", "P"),              optional=("x1_I", "x1_II", "y1"),   name="VLLE")
+SCHEMA_HENRY      = CsvSchema(required=("T", "H"),              name="Henry")
 
 
 # ---------------------------------------------------------------------------

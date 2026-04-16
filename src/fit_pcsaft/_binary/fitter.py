@@ -25,11 +25,11 @@ from types import SimpleNamespace
 
 import numpy as np
 import si_units as si
-from scipy.optimize import least_squares
 
 from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
+    _fit_kij_polynomial,
     _load_pure_records,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
@@ -320,47 +320,17 @@ class BinaryKijFitter:
         ard_combined = np.concatenate(ard_all)
         source = np.concatenate(source_labels)
 
-        effective_order = min(self.kij_order, len(T_combined) - 1)
-        dT = T_combined - self.kij_t_ref
-
-        ols_rev = np.polyfit(dT, kij_combined, effective_order)
-        x0_poly = ols_rev[::-1]
-
-        if effective_order == 0 or len(T_combined) == 1:
-            kij_coeffs = x0_poly
-            poly_resid = kij_combined - sum(c * dT**j for j, c in enumerate(kij_coeffs))
-            scipy_result = SimpleNamespace(
-                x=kij_coeffs,
-                fun=poly_resid,
-                cost=float(np.sum(poly_resid**2)) / 2.0,
-                success=True,
-                nfev=total_nfev,
-                message="Combined per-point fitting completed",
-            )
-        else:
-
-            def _poly_resid(coeffs):
-                return sum(c * dT**j for j, c in enumerate(coeffs)) - kij_combined
-
-            rob = least_squares(
-                _poly_resid,
-                x0_poly,
-                loss="cauchy",
-                f_scale=0.01,
-                ftol=1e-8,
-                xtol=1e-8,
-                gtol=1e-8,
-            )
-            total_nfev += rob.nfev
-            kij_coeffs = rob.x
-            scipy_result = SimpleNamespace(
-                x=kij_coeffs,
-                fun=rob.fun,
-                cost=rob.cost,
-                success=rob.success,
-                nfev=total_nfev,
-                message="Combined per-point fitting completed",
-            )
+        kij_coeffs, poly_resid = _fit_kij_polynomial(
+            T_combined, kij_combined, ard_combined, self.kij_order, self.kij_t_ref
+        )
+        scipy_result = SimpleNamespace(
+            x=kij_coeffs,
+            fun=poly_resid,
+            cost=float(np.sum(poly_resid**2)) / 2.0,
+            success=True,
+            nfev=total_nfev,
+            message="Combined per-point fitting completed",
+        )
 
         # overall ARD: weighted by number of points per type
         counts = {t: int(np.sum(source == t)) for t in types_seen}
