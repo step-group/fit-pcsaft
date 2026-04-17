@@ -223,8 +223,8 @@ def _rebuild_eos_with_viscosity(source, viscosity_list: list) -> Optional[object
             for opt in ('mu', 'q'):
                 if opt in mr:
                     kw[opt] = mr[opt]
-            if 'association_sites' in mr:
-                kw['association_sites'] = mr['association_sites']
+            if rec.association_sites:
+                kw['association_sites'] = list(rec.association_sites)
         else:
             # FitResult
             fr = source
@@ -382,11 +382,34 @@ def fit_viscosity_entropy_scaling(
     C = a2 - 3*a3*mu
     D = a3
 
-    Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
     viscosity_list = [A, B, C, D]
-    ard = 100.0 * float(np.mean(np.abs(np.expm1(Phi @ np.array(viscosity_list) - y_arr))))
-
     eos_final = _rebuild_eos_with_viscosity(source, viscosity_list)
+
+    # Compute ARD from the rebuilt EOS so the reported number reflects actual
+    # prediction quality (catches any rebuild mismatch).  Fall back to the
+    # polynomial residual only when EOS rebuild failed.
+    if eos_final is not None:
+        ard_vals: list[float] = []
+        for T, P, eta_exp, phase in zip(T_data, P_data, eta_data, phase_data):
+            try:
+                kw2: dict = {
+                    'temperature': T * temperature_unit,
+                    'pressure': P * pressure_unit,
+                    'total_moles': si.MOL,
+                }
+                if isinstance(phase, str) and phase.lower() in ('liquid', 'vapor', 'vapour'):
+                    kw2['density_initialization'] = phase
+                state2 = feos.State(eos_final, **kw2)
+                eta_pred = float(state2.viscosity() / (si.PASCAL * si.SECOND))
+                eta_exp_Pas = float(eta_exp) * float(viscosity_unit / (si.PASCAL * si.SECOND))
+                if np.isfinite(eta_pred) and eta_exp_Pas > 0:
+                    ard_vals.append(abs(eta_pred - eta_exp_Pas) / eta_exp_Pas)
+            except Exception:
+                continue
+        ard = 100.0 * float(np.mean(ard_vals)) if ard_vals else float("nan")
+    else:
+        Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
+        ard = 100.0 * float(np.mean(np.abs(np.expm1(Phi @ np.array(viscosity_list) - y_arr))))
 
     return ViscosityFitResult(
         viscosity_params=viscosity_list,
