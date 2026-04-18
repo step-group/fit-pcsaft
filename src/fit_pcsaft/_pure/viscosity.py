@@ -373,7 +373,17 @@ def fit_viscosity_entropy_scaling(
     mu = float(s_arr.mean())
     s_c = s_arr - mu
     Phi_c = np.column_stack([np.ones(n), s_c, s_c**2, s_c**3])
-    a, _, _, _ = np.linalg.lstsq(Phi_c, y_arr, rcond=None)
+
+    # Ridge regularization: λ scales with 1/span² so it is negligible for
+    # wide-range data (span ≳ 2) but shrinks C,D toward zero for
+    # narrow-range liquid data (span < 1) — preventing cubic blow-up in
+    # mixture predictions that fall outside the pure fitting window.
+    s_span = float(s_arr.max() - s_arr.min())
+    lam = 1e-4 / max(s_span, 1e-3) ** 2
+    W = np.diag([0.0, lam, lam, lam])  # intercept unpenalized
+    ATA = Phi_c.T @ Phi_c + W
+    ATy = Phi_c.T @ y_arr
+    a = np.linalg.solve(ATA, ATy)
     a0, a1, a2, a3 = float(a[0]), float(a[1]), float(a[2]), float(a[3])
 
     # Expand (s - mu) polynomial back to standard s basis
