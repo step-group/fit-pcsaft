@@ -21,6 +21,7 @@ import polars as pl
 import si_units as si
 
 from fit_pcsaft._csv import SCHEMA_VISCOSITY, load_csv
+from fit_pcsaft._binary._utils import _apply_induced_association
 
 
 @dataclass(frozen=True)
@@ -374,16 +375,13 @@ def fit_viscosity_entropy_scaling(
     s_c = s_arr - mu
     Phi_c = np.column_stack([np.ones(n), s_c, s_c**2, s_c**3])
 
-    # Ridge regularization: λ scales with 1/span² so it is negligible for
-    # wide-range data (span ≳ 2) but shrinks C,D toward zero for
-    # narrow-range liquid data (span < 1) — preventing cubic blow-up in
-    # mixture predictions that fall outside the pure fitting window.
-    s_span = float(s_arr.max() - s_arr.min())
-    lam = 1e-4 / max(s_span, 1e-3) ** 2
-    W = np.diag([0.0, lam, lam, lam])  # intercept unpenalized
-    ATA = Phi_c.T @ Phi_c + W
-    ATy = Phi_c.T @ y_arr
-    a = np.linalg.solve(ATA, ATy)
+    # Ridge on B,C,D only (intercept free). After centering, higher-order
+    # columns have norms ∝ s_std^k, so a fixed λ automatically provides
+    # stronger regularization on C,D than B when data is narrow — no
+    # adaptive tuning needed.
+    lam = 1e-3
+    ATA = Phi_c.T @ Phi_c + np.diag([0.0, lam, lam, lam])
+    a = np.linalg.solve(ATA, Phi_c.T @ y_arr)
     a0, a1, a2, a3 = float(a[0]), float(a[1]), float(a[2]), float(a[3])
 
     # Expand (s - mu) polynomial back to standard s basis
@@ -521,7 +519,7 @@ def _plot_viscosity_pure(result: ViscosityFitResult, path=None):
 
 
 def plot_viscosity_binary(
-    eos_mix,
+    params_mix,
     csv_path: "Path | str",
     id1: str = "component 1",
     id2: str = "component 2",
@@ -529,13 +527,14 @@ def plot_viscosity_binary(
     csv_out=None,
     pressure_unit: "si.SIObject" = si.MEGA * si.PASCAL,
     viscosity_unit: "si.SIObject" = si.PASCAL * si.SECOND,
+    induced_association: bool = False,
 ):
     """Plot binary mixture viscosity: η vs x₁ at each isotherm.
 
     Parameters
     ----------
-    eos_mix : feos.EquationOfState
-        Binary EOS with viscosity parameters set for both components.
+    params_mix : feos.Parameters or feos.EquationOfState
+        Binary parameters (or pre-built EOS) with viscosity set for both components.
     csv_path : Path | str
         CSV with columns ``T`` (K), ``P`` (MPa), ``x_2pe`` or ``x1`` (mole
         fraction of component 1), ``eta`` (Pa·s).
@@ -551,6 +550,10 @@ def plot_viscosity_binary(
         Unit of the P column. Default: MPa.
     viscosity_unit : si.SIObject
         Unit of the eta column. Default: Pa·s.
+    induced_association : bool
+        If True, apply the induced-association mixing rule (solvation) before
+        building the EOS — one component must be self-associating and the other
+        not. Mirrors the same flag in BinaryKijFitter. Default: False.
 
     Returns
     -------
@@ -562,6 +565,16 @@ def plot_viscosity_binary(
 
     sns.set_context("talk")
     sns.set_style("ticks")
+
+    # Build EOS — apply induced association if requested
+    if hasattr(params_mix, 'pure_records'):
+        if induced_association:
+            rec1, rec2 = params_mix.pure_records
+            rec1, rec2 = _apply_induced_association(rec1, rec2)
+            params_mix = feos.Parameters.new_binary([rec1, rec2])
+        eos_mix = feos.EquationOfState.pcsaft(params_mix)
+    else:
+        eos_mix = params_mix  # already an EOS
 
     df_raw = pl.read_csv(Path(csv_path))
     x_col = next((c for c in df_raw.columns if c.lower() in ("x_2pe", "x1", "x_1")), None)
