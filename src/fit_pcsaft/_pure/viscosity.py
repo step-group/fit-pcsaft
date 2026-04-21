@@ -273,16 +273,13 @@ def fit_viscosity_entropy_scaling(
 ) -> ViscosityFitResult:
     """Fit entropy scaling viscosity correlation ``[A, B, C, D]`` to experimental data.
 
-    Uses OLS in a Chebyshev polynomial basis to fit:
+    Uses OLS via SVD (``numpy.linalg.lstsq``) to fit:
 
         ln(η / η_CE) = A + B·s + C·s² + D·s³,   s = s_res / (R·m)
 
     where η_CE is the Chapman-Enskog reference viscosity from the PC-SAFT EOS.
-    The Chebyshev basis (mapped from the data's s-range to [-1, 1]) is
-    near-orthogonal regardless of data spread, avoiding the ill-conditioning
-    of the raw Vandermonde.  Chebyshev coefficients are converted back to the
-    standard monomial form analytically before returning, so the result is
-    fully compatible with feos.
+    SVD avoids squaring the condition number of the Vandermonde (unlike the
+    normal equations) and handles rank-deficient data gracefully.
 
     Parameters
     ----------
@@ -371,39 +368,14 @@ def fit_viscosity_entropy_scaling(
     s_arr = np.array(s_vals)
     y_arr = np.array(y_vals)
 
-    # --- OLS in Chebyshev basis ---------------------------------------------
-    # Map s ∈ [s_lo, s_hi] → x ∈ [-1, 1] via x = k·s + offset.
-    # Chebyshev polynomials T0..T3 are near-orthogonal on [-1,1] for any data
-    # distribution, so ΦᵀΦ is well-conditioned without ridge or centering.
-    # Chebyshev coefficients are converted back to monomial [A,B,C,D] via
-    # cheb2poly (Chebyshev→monomial in x) followed by the analytic affine
-    # substitution x = k·s + offset (monomial in x → monomial in s).
-    from numpy.polynomial.chebyshev import cheb2poly
+    # --- OLS via SVD ---------------------------------------------------------
+    # lstsq uses LAPACK gelsd (divide-and-conquer SVD) internally, so it is
+    # numerically stable even when the Vandermonde is ill-conditioned.  The
+    # coefficients come out directly as [A, B, C, D] — no basis conversion.
+    Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
+    (A, B, C, D), *_ = np.linalg.lstsq(Phi, y_arr, rcond=None)
 
-    s_lo, s_hi = float(s_arr.min()), float(s_arr.max())
-    if s_hi <= s_lo:
-        s_hi = s_lo + 1.0
-    k = 2.0 / (s_hi - s_lo)
-    offset = -(s_hi + s_lo) / (s_hi - s_lo)
-    x = k * s_arr + offset
-
-    Phi_cheb = np.column_stack([np.ones(n), x, 2*x**2 - 1, 4*x**3 - 3*x])
-    c, *_ = np.linalg.lstsq(Phi_cheb, y_arr, rcond=None)
-
-    # cheb2poly: Chebyshev coefficients [c0,c1,c2,c3] → monomial [a0,a1,a2,a3]
-    # such that y = a0 + a1·x + a2·x² + a3·x³
-    a_x = cheb2poly(c)
-    a0, a1, a2, a3 = float(a_x[0]), float(a_x[1]), float(a_x[2]), float(a_x[3])
-
-    # Substitute x = k·s + offset into y = a0 + a1·x + a2·x² + a3·x³
-    # to get y = A + B·s + C·s² + D·s³
-    o = offset
-    A = a0 + a1*o + a2*o**2 + a3*o**3
-    B = k*(a1 + 2*a2*o + 3*a3*o**2)
-    C = k**2*(a2 + 3*a3*o)
-    D = k**3*a3
-
-    viscosity_list = [A, B, C, D]
+    viscosity_list = [float(A), float(B), float(C), float(D)]
     eos_final = _rebuild_eos_with_viscosity(source, viscosity_list)
 
     # Compute ARD from the rebuilt EOS so the reported number reflects actual
