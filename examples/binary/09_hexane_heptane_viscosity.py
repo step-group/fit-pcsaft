@@ -109,7 +109,7 @@ def main() -> None:
     df = pl.read_csv(mix_data_path)
 
     T_col  = df["T"].to_numpy()
-    P_col  = df["P"].to_numpy()
+    P_col  = df["P"].to_numpy() if "P" in df.columns else None
     x1_col = df["x_hexane"].to_numpy()
     eta_exp = df["eta"].to_numpy()
 
@@ -117,7 +117,8 @@ def main() -> None:
     print(f"{'T/K':>7}  {'x_hex':>6}  {'η_exp/mPa·s':>12}  {'η_pred/mPa·s':>13}  {'ARD/%':>7}")
 
     ard_vals = []
-    for T, P, x1, eta_e in zip(T_col, P_col, x1_col, eta_exp):
+    P_iter = P_col if P_col is not None else [0.1] * len(T_col)
+    for T, P, x1, eta_e in zip(T_col, P_iter, x1_col, eta_exp):
         try:
             state = feos.State(
                 eos_mix,

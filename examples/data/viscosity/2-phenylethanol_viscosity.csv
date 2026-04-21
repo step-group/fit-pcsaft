@@ -1,6 +1,21 @@
-T,eta,phase
-293.15,0.014039999999999999,liquid
-303.15,0.008973,liquid
-313.15,0.006102000000000001,liquid
-323.15,0.004368,liquid
-333.15,0.0032519999999999997,liquid
+T,eta,phase,,,,,,,,,,,,
+293.15,0.01404,liquid,,,,,,,,,,,,
+303.15,0.008973,liquid,,,,,,,,,,,,
+313.15,0.006102,liquid,,,,,,,,,,,,
+323.15,0.004368,liquid,,,,,,,,,,,,
+333.15,0.003252,liquid,,,,,,,,,,,,
+293.138,0.014173,liquid,Authors: Huckel, W.;Wenzke, U. Title: The Association of Aromatic Alcohols Citation: Z. Phys. Chem. (Leipzig),1944,193, 132-61,,,,,,
+298.15,0.0109,liquid,Authors: Domanska, U.;Zawadzki, M.;Lewandrowska, A. Title: Effect of temperature and composition on the density, viscosity, surface tension, and thermodynamic properties of binary mixtures of N-octylisoquinolinium bis{(trifluoromethyl)sulfonyl}imide with alcohols Citation: J. Chem. Thermodyn.,2012,48, 101-111,,
+298.15,0.011405,liquid,Authors: Yeh, C.-T.;Tu, C. -H. Title: Densities, Viscosities, Refractive Indexes, and Surface Tensions for Binary Mixtures of 2-Propanol + Benzyl Alcohol, + 2-Phenylethanol and Benzyl Alcohol + 2-Phenylethanol at T ) (298.15,308.15, and 318.15) K Citation: J. Chem. Eng. Data,2007,52, 1760-1767
+308.15,0.00719,liquid,Authors: Domanska, U.;Zawadzki, M.;Lewandrowska, A. Title: Effect of temperature and composition on the density, viscosity, surface tension, and thermodynamic properties of binary mixtures of N-octylisoquinolinium bis{(trifluoromethyl)sulfonyl}imide with alcohols Citation: J. Chem. Thermodyn.,2012,48, 101-111,,
+308.15,0.007438,liquid,Authors: Francesconi, R.;Bigi, A.;Rubini, K.;Comelli, F. Title: Excess Enthalpies, Heat Capacities, Densities, Viscosities and Refractive Indices of Dimethyl Sulfoxide + Three Aryl Alcohols at 308.15 K and Atmospheric Pressure Citation: J. Chem. Eng. Data,2005,50, 1932-1937,
+308.15,0.007518,liquid,Authors: Huang, T.-T.;Yeh, C.-T.;Tu, C. -H. Title: Densities, Viscosities, Refractive Indices, and Surface Tensions for the Ternary Mixtures of 2-Propanol + Benzyl Alcohol + 2-Phenylethanol at T = 308.15 K Citation: J. Chem. Eng. Data,2008,53, 1203-1207,,
+308.15,0.007518,liquid,Authors: Yeh, C.-T.;Tu, C. -H. Title: Densities, Viscosities, Refractive Indexes, and Surface Tensions for Binary Mixtures of 2-Propanol + Benzyl Alcohol, + 2-Phenylethanol and Benzyl Alcohol + 2-Phenylethanol at T ) (298.15,308.15, and 318.15) K Citation: J. Chem. Eng. Data,2007,52, 1760-1767
+313.13,0.006061,liquid,Authors: Huckel, W.;Wenzke, U. Title: The Association of Aromatic Alcohols Citation: Z. Phys. Chem. (Leipzig),1944,193, 132-61,,,,,,
+318.15,0.00498,liquid,Authors: Domanska, U.;Zawadzki, M.;Lewandrowska, A. Title: Effect of temperature and composition on the density, viscosity, surface tension, and thermodynamic properties of binary mixtures of N-octylisoquinolinium bis{(trifluoromethyl)sulfonyl}imide with alcohols Citation: J. Chem. Thermodyn.,2012,48, 101-111,,
+318.15,0.005232,liquid,Authors: Yeh, C.-T.;Tu, C. -H. Title: Densities, Viscosities, Refractive Indexes, and Surface Tensions for Binary Mixtures of 2-Propanol + Benzyl Alcohol, + 2-Phenylethanol and Benzyl Alcohol + 2-Phenylethanol at T ) (298.15,308.15, and 318.15) K Citation: J. Chem. Eng. Data,2007,52, 1760-1767
+328.15,0.00364,liquid,Authors: Domanska, U.;Zawadzki, M.;Lewandrowska, A. Title: Effect of temperature and composition on the density, viscosity, surface tension, and thermodynamic properties of binary mixtures of N-octylisoquinolinium bis{(trifluoromethyl)sulfonyl}imide with alcohols Citation: J. Chem. Thermodyn.,2012,48, 101-111,,
+333.124,0.00322,liquid,Authors: Huckel, W.;Wenzke, U. Title: The Association of Aromatic Alcohols Citation: Z. Phys. Chem. (Leipzig),1944,193, 132-61,,,,,,
+338.15,0.00277,liquid,Authors: Domanska, U.;Zawadzki, M.;Lewandrowska, A. Title: Effect of temperature and composition on the density, viscosity, surface tension, and thermodynamic properties of binary mixtures of N-octylisoquinolinium bis{(trifluoromethyl)sulfonyl}imide with alcohols Citation: J. Chem. Thermodyn.,2012,48, 101-111,,
+353.123,0.001949,liquid,Authors: Huckel, W.;Wenzke, U. Title: The Association of Aromatic Alcohols Citation: Z. Phys. Chem. (Leipzig),1944,193, 132-61,,,,,,
+363.123,0.001605,liquid,Authors: Huckel, W.;Wenzke, U. Title: The Association of Aromatic Alcohols Citation: Z. Phys. Chem. (Leipzig),1944,193, 132-61,,,,,,

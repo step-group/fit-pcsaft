@@ -19,6 +19,7 @@ from typing import Optional
 import feos
 import numpy as np
 import polars as pl
+import scipy.optimize
 import si_units as si
 
 from fit_pcsaft._csv import SCHEMA_VISCOSITY, load_csv
@@ -294,6 +295,8 @@ def fit_viscosity_entropy_scaling(
     pressure_unit: "si.SIObject" = si.MEGA * si.PASCAL,
     viscosity_unit: "si.SIObject" = si.PASCAL * si.SECOND,
     noise_sigma: float = 0.05,
+    loss: str = "linear",
+    f_scale: float = 0.1,
 ) -> ViscosityFitResult:
     """Fit entropy scaling viscosity correlation ``[A, B, C, D]`` to experimental data.
 
@@ -327,6 +330,19 @@ def fit_viscosity_entropy_scaling(
     noise_sigma : float
         Prior width relative to the Lötgering-Lin reference σ.  Smaller values
         tighten the prior; larger values relax it toward an OLS solution.
+    loss : str
+        Loss function for the residuals — any value accepted by
+        ``scipy.optimize.least_squares``: ``'linear'`` (default, standard L2),
+        ``'arctan'``, ``'huber'``, ``'soft_l1'``, ``'cauchy'``.  Non-linear losses
+        automatically downweight outlier data points (e.g. near-critical
+        measurements that span a different regime from the liquid phase).
+        When ``loss='linear'`` the fast ``np.linalg.lstsq`` path is used;
+        otherwise ``scipy.optimize.least_squares`` is called.
+    f_scale : float
+        Residual scale for the robust loss.  Residuals with magnitude much
+        larger than *f_scale* are treated as outliers and downweighted.
+        Typical range: 0.05–0.3 (in units of ln(η/η_CE), where experimental
+        scatter is ~0.02–0.05).  Ignored when ``loss='linear'``.
 
     Returns
     -------
@@ -427,9 +443,29 @@ def fit_viscosity_entropy_scaling(
     scale = noise_sigma / sigma_ref
 
     Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
-    Phi_aug = np.vstack([Phi, np.diag(scale)])
-    y_aug = np.concatenate([y_arr, scale * mu_ref])
-    theta, *_ = np.linalg.lstsq(Phi_aug, y_aug, rcond=None)
+
+    if loss == "linear":
+        Phi_aug = np.vstack([Phi, np.diag(scale)])
+        y_aug = np.concatenate([y_arr, scale * mu_ref])
+        theta, *_ = np.linalg.lstsq(Phi_aug, y_aug, rcond=None)
+    else:
+        # Robust loss via scipy.optimize.least_squares.
+        # Residual vector: [data residuals, prior residuals].
+        # The prior rows use the same robust loss as the data rows;
+        # since prior residuals start near zero they are seldom downweighted.
+        def _residuals(t: np.ndarray) -> np.ndarray:
+            r_data = Phi @ t - y_arr
+            r_prior = scale * (t - mu_ref)
+            return np.concatenate([r_data, r_prior])
+
+        result = scipy.optimize.least_squares(
+            _residuals,
+            x0=mu_ref.copy(),
+            loss=loss,
+            f_scale=f_scale,
+            method="trf",
+        )
+        theta = result.x
     A, B, C, D = theta.tolist()
 
     viscosity_list = [float(A), float(B), float(C), float(D)]
