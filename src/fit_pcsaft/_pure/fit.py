@@ -38,9 +38,15 @@ _X0_ASSOC: list[list[float]] = [
     [5.0, 3.8, 250, 0.01, 2600],
     [5.5, 3.9, 260, 0.01, 2700],
     [6.0, 3.8, 250, 0.02, 2500],
+    # Low kappa_ab: 1-alkanol-style tight association (kappa ~ 0.002–0.004)
+    [2.5, 3.3, 220, 0.003, 2900],
+    [3.5, 3.6, 250, 0.004, 2800],
+    # High kappa_ab + low epsilon_k_ab: tertiary / aromatic alcohols
+    [2.5, 3.5, 250, 0.07, 2100],
+    [3.0, 3.8, 300, 0.02, 2000],
 ]
 _MU_NONASSOC: list[float] = [1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
-_MU_ASSOC: list[float] = [1.0, 1.5, 1.0, 1.5, 1.0, 1.5, 1.0, 1.5]
+_MU_ASSOC: list[float] = [1.0, 1.5, 1.0, 1.5, 1.0, 1.5, 1.0, 1.5, 1.0, 1.5, 1.0, 1.5]
 
 # Default bounds for differential_evolution (actual parameter space)
 _DE_BOUNDS_BASE = [(1.0, 20.0), (2.0, 6.0), (50.0, 700.0)]  # m, sigma, epsilon_k
