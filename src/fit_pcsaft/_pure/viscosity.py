@@ -6,10 +6,11 @@ Correlation model (Lötgering-Lin & Gross 2018, Ind. Eng. Chem. Res.):
 
 where η_CE is the Chapman-Enskog reference viscosity (computed from SAFT
 σ and ε/k), s_res the residual molar entropy, R the gas constant, and m
-the number of SAFT segments.  The four parameters [A, B, C, D] are fitted
-by linear least squares.
+the number of SAFT segments.  All four parameters are fitted via
+Levenberg-Marquardt minimising squared relative viscosity deviations.
 """
 
+import functools
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,7 @@ import feos
 import numpy as np
 import polars as pl
 import si_units as si
+from scipy.optimize import least_squares
 
 from fit_pcsaft._csv import SCHEMA_VISCOSITY, load_csv
 from fit_pcsaft._binary._utils import _apply_induced_association
@@ -203,6 +205,7 @@ def _load_viscosity_csv(path: "Path | str"):
     return T, P, eta, phases
 
 
+
 def _rebuild_eos_with_viscosity(source, viscosity_list: list) -> Optional[object]:
     """Rebuild feos.EquationOfState with viscosity params added.
 
@@ -273,13 +276,12 @@ def fit_viscosity_entropy_scaling(
 ) -> ViscosityFitResult:
     """Fit entropy scaling viscosity correlation ``[A, B, C, D]`` to experimental data.
 
-    Uses OLS via SVD (``numpy.linalg.lstsq``) to fit:
+    Fits the Lötgering-Lin & Gross (2018) model:
 
         ln(η / η_CE) = A + B·s + C·s² + D·s³,   s = s_res / (R·m)
 
-    where η_CE is the Chapman-Enskog reference viscosity from the PC-SAFT EOS.
-    SVD avoids squaring the condition number of the Vandermonde (unlike the
-    normal equations) and handles rank-deficient data gracefully.
+    using Levenberg-Marquardt (``scipy.optimize.least_squares``) on squared
+    relative viscosity deviations ``(η_pred − η_exp) / η_exp``.
 
     Parameters
     ----------
@@ -334,9 +336,10 @@ def fit_viscosity_entropy_scaling(
     # --- Load experimental data -------------------------------------------
     T_data, P_data, eta_data, phase_data = _load_viscosity_csv(viscosity_path)
 
-    # --- Compute (s, y) pairs from EOS ------------------------------------
+    # --- Compute (s, eta_CE, eta_exp) triples from EOS -----------------------
     s_vals: list[float] = []
-    y_vals: list[float] = []
+    eta_CE_vals: list[float] = []
+    eta_exp_Pa_s_vals: list[float] = []
 
     for T, P, eta_exp, phase in zip(T_data, P_data, eta_data, phase_data):
         try:
@@ -363,12 +366,14 @@ def fit_viscosity_entropy_scaling(
                         kw['pressure'] = P_sat_list[0]
                         state = feos.State(eos, **kw)
 
-            s = state.molar_entropy(feos.Contributions.Residual) / si.RGAS / m
-            y = float(np.log(eta_exp * viscosity_unit / state.viscosity_reference()))
+            s = float(state.molar_entropy(feos.Contributions.Residual) / si.RGAS / m)
+            eta_CE = float(state.viscosity_reference() / (si.PASCAL * si.SECOND))
+            eta_exp_Pa_s = float(eta_exp) * float(viscosity_unit / (si.PASCAL * si.SECOND))
 
-            if np.isfinite(s) and np.isfinite(y):
+            if np.isfinite(s) and eta_CE > 0 and eta_exp_Pa_s > 0:
                 s_vals.append(s)
-                y_vals.append(y)
+                eta_CE_vals.append(eta_CE)
+                eta_exp_Pa_s_vals.append(eta_exp_Pa_s)
         except Exception:
             continue
 
@@ -380,58 +385,21 @@ def fit_viscosity_entropy_scaling(
         )
 
     s_arr = np.array(s_vals)
-    y_arr = np.array(y_vals)
+    eta_CE_arr = np.array(eta_CE_vals)
+    eta_exp_arr = np.array(eta_exp_Pa_s_vals)
+    # log-ratio for plotting (kept for ViscosityFitResult._y_vals)
+    y_arr = np.log(eta_exp_arr / eta_CE_arr)
 
-    # --- Tikhonov-regularized OLS in column-normalized basis ----------------
-    #
-    # Goal: fit θ = [A, B, C, D] in  y = Φ θ,  Φ = [1, s, s², s³].
-    #
-    # Problem: when data cluster in a narrow s-range (e.g. five liquid points
-    # over 40 K → Δs ≈ 0.3), the columns s², s³ are nearly proportional
-    # (s³/s² ≈ s ≈ const), so Φ is near-rank-deficient.  Plain least-squares
-    # finds the minimum-norm solution, which still has huge coefficients because
-    # the near-singular direction mixes large s² and s³ values.  Ridge on the
-    # *raw* Vandermonde is ineffective here: the column norms scale as
-    # ‖s^k‖ ~ |s̄|^k · √n (with s̄ ≈ −5), so ‖s³‖ ≈ 360 while λ = 10⁻³ adds a
-    # negligible fraction to ΦᵀΦ.
-    #
-    # Fix — two steps:
-    #
-    # 1. Column normalisation.  Define D = diag(‖Φ_j‖) and Φ̃ = Φ D⁻¹, so
-    #    every column of Φ̃ has unit norm.  The model becomes y = Φ̃ θ̃  where
-    #    θ̃ = D θ.  In this basis λ has the same relative weight on every
-    #    coefficient regardless of how large s is.
-    #
-    # 2. Tikhonov (L2) regularisation.  Minimise ‖Φ̃ θ̃ − y‖² + λ ‖θ̃‖².
-    #    This is equivalent to the augmented least-squares system
-    #
-    #        [  Φ̃       ]         [y]
-    #        [√λ · I₄   ]  θ̃  =  [0]
-    #
-    #    solved via lstsq (LAPACK gelsd, i.e. divide-and-conquer SVD).
-    #    Back-scaling gives θ = D⁻¹ θ̃, i.e.  A,B,C,D = theta_n / col_norms.
-    #
-    # Adaptive λ.  The ill-conditioning grows as Δs shrinks (the near-singular
-    # singular value σ_min ~ Δs³).  We set
-    #
-    #        λ = 10⁻⁴ / Δs²
-    #
-    #    so that for wide data (Δs ~ 2, hexane with 19 points) λ ≈ 2.5 × 10⁻⁵
-    #    and the result is indistinguishable from plain SVD, while for narrow
-    #    data (Δs ~ 0.3, five atmospheric-pressure liquid points over 40 K)
-    #    λ ≈ 1.1 × 10⁻³ and the regularisation pulls all four coefficients to
-    #    O(1) at the cost of a modest ARD increase.
-    Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
-    col_norms = np.linalg.norm(Phi, axis=0)
-    Phi_n = Phi / col_norms
+    # --- Levenberg-Marquardt on relative viscosity residuals -----------------
+    x0 = np.zeros(4)
 
-    s_range = float(s_arr.max() - s_arr.min())
-    lam = 1e-4 / max(s_range, 0.01) ** 2
+    def _residuals(abcd):
+        A, B, C, D = abcd
+        eta_pred = eta_CE_arr * np.exp(A + B * s_arr + C * s_arr**2 + D * s_arr**3)
+        return (eta_pred - eta_exp_arr) / eta_exp_arr
 
-    Phi_aug = np.vstack([Phi_n, np.sqrt(lam) * np.eye(4)])
-    y_aug = np.concatenate([y_arr, np.zeros(4)])
-    theta_n, *_ = np.linalg.lstsq(Phi_aug, y_aug, rcond=None)
-    A, B, C, D = (theta_n / col_norms).tolist()
+    lm = least_squares(_residuals, x0, method='lm')
+    A, B, C, D = lm.x.tolist()
 
     viscosity_list = [float(A), float(B), float(C), float(D)]
     eos_final = _rebuild_eos_with_viscosity(source, viscosity_list)
@@ -472,7 +440,7 @@ def fit_viscosity_entropy_scaling(
         _P_MPa=[float(P) * float(pressure_unit / (si.MEGA * si.PASCAL)) for P in P_data],
         _eta_exp_Pa_s=[float(e) * float(viscosity_unit / (si.PASCAL * si.SECOND)) for e in eta_data],
         _s_vals=s_vals,
-        _y_vals=y_vals,
+        _y_vals=y_arr.tolist(),
     )
 
 
