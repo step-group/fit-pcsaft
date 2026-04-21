@@ -301,8 +301,7 @@ def fit_viscosity_entropy_scaling(
 
         ln(η / η_CE) = A + B·s + C·s² + D·s³,   s = s_res / (R·m)
 
-    using Levenberg-Marquardt (``scipy.optimize.least_squares``) on squared
-    relative viscosity deviations ``(η_pred − η_exp) / η_exp``.
+    using MAP ridge regression toward the Lötgering-Lin 2018 reference prior.
 
     Parameters
     ----------
@@ -325,6 +324,9 @@ def fit_viscosity_entropy_scaling(
         Unit for pressure column. Default: MPa.
     viscosity_unit : si.SIObject
         Unit for viscosity column. Default: Pa·s.
+    noise_sigma : float
+        Prior width relative to the Lötgering-Lin reference σ.  Smaller values
+        tighten the prior; larger values relax it toward an OLS solution.
 
     Returns
     -------
@@ -590,12 +592,12 @@ def plot_viscosity_binary(
     params_mix : feos.Parameters or feos.EquationOfState
         Binary parameters (or pre-built EOS) with viscosity set for both components.
     csv_path : Path | str
-        CSV with columns ``T`` (K), ``P`` (MPa), ``x_2pe`` or ``x1`` (mole
-        fraction of component 1), ``eta`` (Pa·s).
+        CSV with columns ``T`` (K), optionally ``P`` (MPa), ``x_2pe`` or ``x1`` (mole
+        fraction of component 1), ``eta`` (Pa·s).  If P is absent, 0.1 MPa is used.
     id1 : str
-        Label for component 1 (2-phenylethanol side, x → 1).
+        Label for component 1 (x → 1).
     id2 : str
-        Label for component 2 (solvent side, x → 0).
+        Label for component 2 (x → 0).
     path : str or Path, optional
         If given, save the figure to this path (dpi=300).
     csv_out : str or Path, optional
@@ -636,7 +638,7 @@ def plot_viscosity_binary(
         raise ValueError(f"No mole fraction column found in {csv_path}. Expected x_2pe or x1.")
 
     T_arr = df_raw["T"].to_numpy()
-    P_arr = df_raw["P"].to_numpy()
+    P_arr = df_raw["P"].to_numpy() if "P" in df_raw.columns else np.full(len(T_arr), 0.1)
     x_arr = df_raw[x_col].to_numpy()
     eta_arr = df_raw["eta"].to_numpy() * float(viscosity_unit / (si.PASCAL * si.SECOND)) * 1e3  # → mPa·s
 
@@ -652,26 +654,20 @@ def plot_viscosity_binary(
         iso_mask = np.abs(T_arr - T_iso) < 0.5
         P_iso = float(P_arr[iso_mask][0]) if iso_mask.any() else 0.1
 
-        # Smooth PC-SAFT curve
         eta_model = []
         for x1 in x_smooth:
             try:
-                state = feos.State(
-                    eos_mix,
-                    temperature=T_iso * si.KELVIN,
-                    pressure=P_iso * pressure_unit,
-                    total_moles=si.MOL,
-                    molefracs=np.array([x1, 1.0 - x1]),
-                )
+                state = feos.State(eos_mix, temperature=T_iso * si.KELVIN,
+                                   pressure=P_iso * pressure_unit,
+                                   total_moles=si.MOL,
+                                   molefracs=np.array([x1, 1.0 - x1]))
                 eta_model.append(float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3)
             except Exception:
                 eta_model.append(float("nan"))
         eta_model = np.array(eta_model)
         valid = np.isfinite(eta_model)
-        ax.plot(x_smooth[valid], eta_model[valid], color=color,
-                label=f"{T_iso:.1f} K")
+        ax.plot(x_smooth[valid], eta_model[valid], color=color, label=f"{T_iso:.1f} K")
 
-        # Experimental scatter at this isotherm
         ax.scatter(x_arr[iso_mask], eta_arr[iso_mask],
                    s=40, marker="o", facecolors="white",
                    edgecolors=color, linewidths=1.2, zorder=5)
@@ -694,13 +690,10 @@ def plot_viscosity_binary(
         rows_out = []
         for T_iso, P_iso_csv, x1, eta_e_mPas in zip(T_arr, P_arr, x_arr, eta_arr):
             try:
-                state = feos.State(
-                    eos_mix,
-                    temperature=T_iso * si.KELVIN,
-                    pressure=float(P_iso_csv) * pressure_unit,
-                    total_moles=si.MOL,
-                    molefracs=np.array([x1, 1.0 - x1]),
-                )
+                state = feos.State(eos_mix, temperature=T_iso * si.KELVIN,
+                                   pressure=float(P_iso_csv) * pressure_unit,
+                                   total_moles=si.MOL,
+                                   molefracs=np.array([x1, 1.0 - x1]))
                 eta_p_mPas = float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3
             except Exception:
                 eta_p_mPas = float("nan")
