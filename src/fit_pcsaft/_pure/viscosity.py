@@ -368,12 +368,56 @@ def fit_viscosity_entropy_scaling(
     s_arr = np.array(s_vals)
     y_arr = np.array(y_vals)
 
-    # --- OLS via SVD ---------------------------------------------------------
-    # lstsq uses LAPACK gelsd (divide-and-conquer SVD) internally, so it is
-    # numerically stable even when the Vandermonde is ill-conditioned.  The
-    # coefficients come out directly as [A, B, C, D] — no basis conversion.
+    # --- Tikhonov-regularized OLS in column-normalized basis ----------------
+    #
+    # Goal: fit θ = [A, B, C, D] in  y = Φ θ,  Φ = [1, s, s², s³].
+    #
+    # Problem: when data cluster in a narrow s-range (e.g. five liquid points
+    # over 40 K → Δs ≈ 0.3), the columns s², s³ are nearly proportional
+    # (s³/s² ≈ s ≈ const), so Φ is near-rank-deficient.  Plain least-squares
+    # finds the minimum-norm solution, which still has huge coefficients because
+    # the near-singular direction mixes large s² and s³ values.  Ridge on the
+    # *raw* Vandermonde is ineffective here: the column norms scale as
+    # ‖s^k‖ ~ |s̄|^k · √n (with s̄ ≈ −5), so ‖s³‖ ≈ 360 while λ = 10⁻³ adds a
+    # negligible fraction to ΦᵀΦ.
+    #
+    # Fix — two steps:
+    #
+    # 1. Column normalisation.  Define D = diag(‖Φ_j‖) and Φ̃ = Φ D⁻¹, so
+    #    every column of Φ̃ has unit norm.  The model becomes y = Φ̃ θ̃  where
+    #    θ̃ = D θ.  In this basis λ has the same relative weight on every
+    #    coefficient regardless of how large s is.
+    #
+    # 2. Tikhonov (L2) regularisation.  Minimise ‖Φ̃ θ̃ − y‖² + λ ‖θ̃‖².
+    #    This is equivalent to the augmented least-squares system
+    #
+    #        [  Φ̃       ]         [y]
+    #        [√λ · I₄   ]  θ̃  =  [0]
+    #
+    #    solved via lstsq (LAPACK gelsd, i.e. divide-and-conquer SVD).
+    #    Back-scaling gives θ = D⁻¹ θ̃, i.e.  A,B,C,D = theta_n / col_norms.
+    #
+    # Adaptive λ.  The ill-conditioning grows as Δs shrinks (the near-singular
+    # singular value σ_min ~ Δs³).  We set
+    #
+    #        λ = 10⁻⁴ / Δs²
+    #
+    #    so that for wide data (Δs ~ 2, hexane with 19 points) λ ≈ 2.5 × 10⁻⁵
+    #    and the result is indistinguishable from plain SVD, while for narrow
+    #    data (Δs ~ 0.3, five atmospheric-pressure liquid points over 40 K)
+    #    λ ≈ 1.1 × 10⁻³ and the regularisation pulls all four coefficients to
+    #    O(1) at the cost of a modest ARD increase.
     Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
-    (A, B, C, D), *_ = np.linalg.lstsq(Phi, y_arr, rcond=None)
+    col_norms = np.linalg.norm(Phi, axis=0)
+    Phi_n = Phi / col_norms
+
+    s_range = float(s_arr.max() - s_arr.min())
+    lam = 1e-4 / max(s_range, 0.01) ** 2
+
+    Phi_aug = np.vstack([Phi_n, np.sqrt(lam) * np.eye(4)])
+    y_aug = np.concatenate([y_arr, np.zeros(4)])
+    theta_n, *_ = np.linalg.lstsq(Phi_aug, y_aug, rcond=None)
+    A, B, C, D = (theta_n / col_norms).tolist()
 
     viscosity_list = [float(A), float(B), float(C), float(D)]
     eos_final = _rebuild_eos_with_viscosity(source, viscosity_list)
