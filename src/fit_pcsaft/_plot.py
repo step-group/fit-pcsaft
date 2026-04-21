@@ -131,3 +131,56 @@ def _plot_pure(
         fig.savefig(path, dpi=300, bbox_inches="tight")
 
     return fig, axes
+
+
+def _plot_residuals_pure(result, path=None):
+    """Signed RD% vs temperature for psat, rho, and hvap."""
+    import matplotlib.pyplot as plt
+    import polars as pl
+    import seaborn as sns
+
+    from fit_pcsaft.result import _compute_per_point_rd
+
+    sns.set_context("talk")
+    sns.set_style("ticks")
+
+    df = _compute_per_point_rd(result.eos, result.data, result.units)
+    present = set(df["property"].to_list())
+
+    _props = [
+        ("psat", "Vapor pressure",    "#1F77B4", "o"),
+        ("rho",  "Liquid density",    "#E32F2F", "s"),
+        ("hvap", "Enthalpy of vap.",  "#2CA02C", "^"),
+    ]
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    for prop, label, color, marker in _props:
+        if prop not in present:
+            continue
+        sub = df.filter(pl.col("property") == prop)
+        ax.scatter(
+            sub["T"].to_numpy(),
+            sub["rd_pct"].to_numpy(),
+            label=label,
+            color=color,
+            marker=marker,
+            s=50,
+            edgecolors="white",
+            linewidths=0.5,
+            zorder=5,
+        )
+
+    ax.axhline(0.0, color="gray", lw=0.8, ls="--", zorder=1)
+    ax.set_xlabel("$T$ / K")
+    ax.set_ylabel(r"RD% = (model $-$ exp) / exp $\times$ 100")
+    ax.set_title(f"Residuals — {result.input_name}")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
+
+    sns.despine(offset=10)
+    plt.tight_layout(rect=[0, 0.12, 1, 1])
+
+    if path is not None:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+
+    return fig, ax

@@ -9,6 +9,61 @@ import numpy as np
 from fit_pcsaft._types import Compound, ModelSpec, PureData, Units
 
 
+def _compute_per_point_rd(eos, data, units):
+    """Compute per-point signed RD% and ARD% for all experimental datasets."""
+    import polars as pl
+
+    tu = units.temperature
+    pu = units.pressure
+    du = units.density
+    eu = units.enthalpy
+
+    rows = []
+
+    for T_val, p_exp in zip(data.T_psat, data.p_psat):
+        try:
+            p_model = float(feos.PhaseEquilibrium.vapor_pressure(eos, float(T_val) * tu)[0] / pu)
+            rd = (p_model - float(p_exp)) / float(p_exp) * 100.0
+        except Exception:
+            p_model = float("nan")
+            rd = float("nan")
+        rows.append({"property": "psat", "T": float(T_val), "exp": float(p_exp),
+                     "model": p_model, "rd_pct": rd, "ard_pct": abs(rd)})
+
+    for T_val, rho_exp in zip(data.T_rho, data.rho):
+        try:
+            rho_model = float(
+                feos.PhaseEquilibrium.pure(eos, float(T_val) * tu).liquid.mass_density() / du
+            )
+            rd = (rho_model - float(rho_exp)) / float(rho_exp) * 100.0
+        except Exception:
+            rho_model = float("nan")
+            rd = float("nan")
+        rows.append({"property": "rho", "T": float(T_val), "exp": float(rho_exp),
+                     "model": rho_model, "rd_pct": rd, "ard_pct": abs(rd)})
+
+    for T_val, hvap_exp in zip(data.T_hvap, data.hvap):
+        try:
+            vle = feos.PhaseEquilibrium.pure(eos, float(T_val) * tu)
+            hvap_model = float(
+                (vle.vapor.molar_enthalpy(feos.Contributions.Residual)
+                 - vle.liquid.molar_enthalpy(feos.Contributions.Residual)) / eu
+            )
+            rd = (hvap_model - float(hvap_exp)) / float(hvap_exp) * 100.0
+        except Exception:
+            hvap_model = float("nan")
+            rd = float("nan")
+        rows.append({"property": "hvap", "T": float(T_val), "exp": float(hvap_exp),
+                     "model": hvap_model, "rd_pct": rd, "ard_pct": abs(rd)})
+
+    if not rows:
+        return pl.DataFrame(schema={
+            "property": pl.Utf8, "T": pl.Float64, "exp": pl.Float64,
+            "model": pl.Float64, "rd_pct": pl.Float64, "ard_pct": pl.Float64,
+        })
+    return pl.DataFrame(rows)
+
+
 @dataclass(frozen=True)
 class FitResult:
     """Result of PC-SAFT pure component fitting.
@@ -278,6 +333,31 @@ class FitResult:
             line_kw=line_kw,
         )
 
+    def residuals(self):
+        """Per-point signed RD% and absolute ARD% as a polars DataFrame.
+
+        Columns: ``property`` ("psat"/"rho"/"hvap"), ``T``, ``exp``, ``model``,
+        ``rd_pct`` = (model − exp)/exp × 100, ``ard_pct`` = |rd_pct|.
+
+        Export: ``result.residuals().write_csv("out.csv")``.
+        """
+        return _compute_per_point_rd(self.eos, self.data, self.units)
+
+    def plot_residuals(self, path=None):
+        """RD% vs temperature for each property.
+
+        Parameters
+        ----------
+        path : str or Path, optional
+            If given, save the figure to this path.
+
+        Returns
+        -------
+        fig, ax
+        """
+        from fit_pcsaft._plot import _plot_residuals_pure
+        return _plot_residuals_pure(self, path=path)
+
     def __str__(self) -> str:
         """Pretty-print fitted parameters and quality metrics."""
         mu = self.params.get("mu", self.spec.mu or 0.0)
@@ -457,6 +537,31 @@ class EvalResult:
             scatter_kw=scatter_kw,
             line_kw=line_kw,
         )
+
+    def residuals(self):
+        """Per-point signed RD% and absolute ARD% as a polars DataFrame.
+
+        Columns: ``property`` ("psat"/"rho"/"hvap"), ``T``, ``exp``, ``model``,
+        ``rd_pct`` = (model − exp)/exp × 100, ``ard_pct`` = |rd_pct|.
+
+        Export: ``result.residuals().write_csv("out.csv")``.
+        """
+        return _compute_per_point_rd(self.eos, self.data, self.units)
+
+    def plot_residuals(self, path=None):
+        """RD% vs temperature for each property.
+
+        Parameters
+        ----------
+        path : str or Path, optional
+            If given, save the figure to this path.
+
+        Returns
+        -------
+        fig, ax
+        """
+        from fit_pcsaft._plot import _plot_residuals_pure
+        return _plot_residuals_pure(self, path=path)
 
     def __str__(self) -> str:
         mu = self.params.get("mu", self.spec.mu or 0.0)
