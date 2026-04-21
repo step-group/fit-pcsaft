@@ -205,6 +205,27 @@ def _load_viscosity_csv(path: "Path | str"):
 
 
 
+@functools.lru_cache(maxsize=1)
+def _viscosity_prior() -> tuple:
+    """(mu_ref, sigma_ref) shape-(4,) arrays from the Lötgering-Lin 2018 reference dataset.
+
+    Loaded from loetgeringlin2018.json at repo root; hard-coded fallback if missing.
+    """
+    _MU = np.array([-1.279, -2.627, -0.479, -0.118])
+    _SIGMA = np.array([0.483, 0.993, 0.343, 0.060])
+    candidate = Path(__file__).parent.parent.parent.parent / "loetgeringlin2018.json"
+    if candidate.is_file():
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+            rows = [e["viscosity"] for e in data if "viscosity" in e]
+            if len(rows) >= 10:
+                arr = np.array(rows)
+                return arr.mean(axis=0), arr.std(axis=0, ddof=1)
+        except Exception:
+            pass
+    return _MU, _SIGMA
+
+
 def _rebuild_eos_with_viscosity(source, viscosity_list: list) -> Optional[object]:
     """Rebuild feos.EquationOfState with viscosity params added.
 
@@ -272,6 +293,7 @@ def fit_viscosity_entropy_scaling(
     temperature_unit: "si.SIObject" = si.KELVIN,
     pressure_unit: "si.SIObject" = si.MEGA * si.PASCAL,
     viscosity_unit: "si.SIObject" = si.PASCAL * si.SECOND,
+    noise_sigma: float = 0.05,
 ) -> ViscosityFitResult:
     """Fit entropy scaling viscosity correlation ``[A, B, C, D]`` to experimental data.
 
@@ -319,30 +341,16 @@ def fit_viscosity_entropy_scaling(
     Individual data points at which the EOS fails to converge are silently
     skipped and do not contribute to the fit.
     """
-    # --- Resolve EOS, m, and molar weight from source ------------------------
+    # --- Resolve EOS and m from source ---------------------------------------
     if hasattr(source, 'pure_records'):
         rec = source.pure_records[0]
         m = float(rec.model_record['m'])
-        mw = float(rec.molarweight)
         eos = feos.EquationOfState.pcsaft(source)
         compound_name = name or rec.identifier.name
     else:
         eos = source.eos
         m = source.params['m']
-        mw = float(source.compound.mw)
         compound_name = name or source.input_name
-
-    # --- D from Lötgering-Lin molar-mass correlation -------------------------
-    D = 1.0 / (-1.25594 - 888.1232 / mw)
-
-    # --- Critical point for near-critical data exclusion ---------------------
-    try:
-        _crit = feos.State.critical_point_pure(eos)[0]
-        T_crit = float(_crit.temperature / si.KELVIN)
-        P_crit_MPa = float(_crit.pressure() / (si.MEGA * si.PASCAL))
-    except Exception:
-        T_crit = None
-        P_crit_MPa = None
 
     # --- Load experimental data -------------------------------------------
     T_data, P_data, eta_data, phase_data = _load_viscosity_csv(viscosity_path)
@@ -359,24 +367,20 @@ def fit_viscosity_entropy_scaling(
             is_liquid = isinstance(phase, str) and phase.lower() == 'liquid'
 
             if no_pressure_col:
-                P_sat_list = feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)
-                if not P_sat_list:
-                    continue
-                P_state_MPa = float(P_sat_list[0] / (si.MEGA * si.PASCAL))
-                kw['pressure'] = P_sat_list[0]
-                kw['density_initialization'] = 'liquid'
+                if is_liquid:
+                    P_sat_list = feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)
+                    if not P_sat_list:
+                        continue
+                    kw['pressure'] = P_sat_list[0]
+                    kw['density_initialization'] = 'liquid'
+                else:
+                    kw['pressure'] = 0.1 * si.MEGA * si.PASCAL
+                    if isinstance(phase, str) and phase.lower() in ('vapor', 'vapour'):
+                        kw['density_initialization'] = 'vapor'
             else:
-                P_state_MPa = float(P_data[i]) * float(pressure_unit / (si.MEGA * si.PASCAL))
                 kw['pressure'] = float(P_data[i]) * pressure_unit
                 if is_liquid or isinstance(phase, str) and phase.lower() in ('vapor', 'vapour'):
                     kw['density_initialization'] = phase
-
-            # Exclude near-critical region (LL 2018 filtering criterion)
-            if T_crit is not None and P_crit_MPa is not None:
-                near_T = 0.8 * T_crit < float(T) * float(temperature_unit / si.KELVIN) < 1.2 * T_crit
-                near_P = 0.5 * P_crit_MPa < P_state_MPa < 1.5 * P_crit_MPa
-                if near_T and near_P:
-                    continue
 
             state = feos.State(eos, **kw)
 
@@ -402,9 +406,9 @@ def fit_viscosity_entropy_scaling(
             continue
 
     n = len(s_vals)
-    if n < 3:
+    if n < 4:
         raise RuntimeError(
-            f"Only {n} valid data points after near-critical filtering (need ≥ 3). "
+            f"Only {n} valid data points (need ≥ 4). "
             "Check that T/P conditions are within the EOS validity range."
         )
 
@@ -413,20 +417,18 @@ def fit_viscosity_entropy_scaling(
     eta_exp_arr = np.array(eta_exp_Pa_s_vals)
     y_arr = np.log(eta_exp_arr / eta_CE_arr)
 
-    # --- OLS in centered s-basis with D fixed --------------------------------
-    # Centering s decorrelates [1, s, s²] columns for narrow-range data.
-    # Subtract the fixed D contribution first, then fit the residual.
-    s_bar = float(s_arr.mean())
-    s_c = s_arr - s_bar
-    y_tilde = y_arr - D * s_arr**3
+    # --- MAP ridge OLS toward Lötgering-Lin 2018 reference -------------------
+    # Prior: θ ~ N(μ_ref, diag(σ_ref²)); noise: y_i ~ N(Φ_i θ, σ_noise²).
+    # Augmented system:  [Φ; diag(scale)] θ = [y; scale·μ_ref]
+    # where scale_k = σ_noise / σ_ref,k.
+    mu_ref, sigma_ref = _viscosity_prior()
+    scale = noise_sigma / sigma_ref
 
-    Phi_c = np.column_stack([np.ones(n), s_c, s_c**2])
-    (A_prime, B_c, C_raw), *_ = np.linalg.lstsq(Phi_c, y_tilde, rcond=None)
-
-    # Back-transform centered coefficients to raw monomial basis
-    A = float(A_prime) - float(B_c) * s_bar + float(C_raw) * s_bar**2
-    B = float(B_c) - 2.0 * float(C_raw) * s_bar
-    C = float(C_raw)
+    Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
+    Phi_aug = np.vstack([Phi, np.diag(scale)])
+    y_aug = np.concatenate([y_arr, scale * mu_ref])
+    theta, *_ = np.linalg.lstsq(Phi_aug, y_aug, rcond=None)
+    A, B, C, D = theta.tolist()
 
     viscosity_list = [float(A), float(B), float(C), float(D)]
     eos_final = _rebuild_eos_with_viscosity(source, viscosity_list)
@@ -439,12 +441,18 @@ def fit_viscosity_entropy_scaling(
         for i, (T, eta_exp, phase) in enumerate(zip(T_data, eta_data, phase_data)):
             try:
                 kw2: dict = {'temperature': T * temperature_unit, 'total_moles': si.MOL}
+                is_liq2 = isinstance(phase, str) and phase.lower() == 'liquid'
                 if no_pressure_col:
-                    P_sat_list = feos.PhaseEquilibrium.vapor_pressure(eos_final, T * temperature_unit)
-                    if not P_sat_list:
-                        continue
-                    kw2['pressure'] = P_sat_list[0]
-                    kw2['density_initialization'] = 'liquid'
+                    if is_liq2:
+                        P_sat_list = feos.PhaseEquilibrium.vapor_pressure(eos_final, T * temperature_unit)
+                        if not P_sat_list:
+                            continue
+                        kw2['pressure'] = P_sat_list[0]
+                        kw2['density_initialization'] = 'liquid'
+                    else:
+                        kw2['pressure'] = 0.1 * si.MEGA * si.PASCAL
+                        if isinstance(phase, str) and phase.lower() in ('vapor', 'vapour'):
+                            kw2['density_initialization'] = 'vapor'
                 else:
                     kw2['pressure'] = float(P_data[i]) * pressure_unit
                     if isinstance(phase, str) and phase.lower() in ('liquid', 'vapor', 'vapour'):
