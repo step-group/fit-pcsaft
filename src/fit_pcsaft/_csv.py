@@ -117,7 +117,7 @@ class CsvSchema:
 
 
 SCHEMA_PSAT       = CsvSchema(required=("T", "psat"),           name="vapor pressure")
-SCHEMA_VISCOSITY  = CsvSchema(required=("T", "P", "eta"),       name="viscosity")
+SCHEMA_VISCOSITY  = CsvSchema(required=("T", "eta"), optional=("P",), name="viscosity")
 SCHEMA_DENSITY    = CsvSchema(required=("T", "rho"),            name="density")
 SCHEMA_HVAP       = CsvSchema(required=("T", "hvap"),           name="enthalpy of vaporization")
 SCHEMA_VLE        = CsvSchema(required=("T", "P", "x1"),        optional=("y1",),                   name="VLE")
