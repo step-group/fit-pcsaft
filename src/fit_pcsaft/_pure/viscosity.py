@@ -345,10 +345,24 @@ def fit_viscosity_entropy_scaling(
                 'pressure': P * pressure_unit,
                 'total_moles': si.MOL,
             }
-            if isinstance(phase, str) and phase.lower() in ('liquid', 'vapor', 'vapour'):
+            is_liquid = isinstance(phase, str) and phase.lower() == 'liquid'
+            if is_liquid or isinstance(phase, str) and phase.lower() in ('vapor', 'vapour'):
                 kw['density_initialization'] = phase
 
             state = feos.State(eos, **kw)
+
+            # If a liquid was requested but feos settled on a near-ideal-gas
+            # root (happens when CSV records P=0.1 MPa for data measured along
+            # the saturation curve), retry at P_sat.  Threshold: molar volume
+            # > 1 L/mol is unambiguously vapor for any liquid of interest.
+            if is_liquid:
+                V_mol = float(state.volume / si.METER**3)  # total_moles=1 mol
+                if V_mol > 1e-3:  # m³ ≡ m³/mol since n=1 mol
+                    P_sat_list = feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)
+                    if P_sat_list:
+                        kw['pressure'] = P_sat_list[0]
+                        state = feos.State(eos, **kw)
+
             s = state.molar_entropy(feos.Contributions.Residual) / si.RGAS / m
             y = float(np.log(eta_exp * viscosity_unit / state.viscosity_reference()))
 
