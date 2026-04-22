@@ -251,66 +251,6 @@
   {
     "identifier": {
       "cas": "7732-18-5",
-      "name": "water_2B_pcpsaft_rehner2020",
-      "formula": "H2O"
-    },
-    "molarweight": 18.015,
-    "m": 1.0,
-    "sigma": 3.0054,
-    "epsilon_k": 166.61,
-    "mu": 1.6152,
-    "association_sites": [
-      {
-        "na": 1.0,
-        "nb": 1.0,
-        "kappa_ab": 0.098194,
-        "epsilon_k_ab": 2667.3
-      }
-    ]
-  },
-  {
-    "identifier": {
-      "cas": "7732-18-5",
-      "name": "water_3B_pcpsaft_rehner2020",
-      "formula": "H2O"
-    },
-    "molarweight": 18.015,
-    "m": 1.0488,
-    "sigma": 2.9896,
-    "epsilon_k": 115.19,
-    "mu": 1.9374,
-    "association_sites": [
-      {
-        "na": 1.0,
-        "nb": 2.0,
-        "kappa_ab": 0.038236,
-        "epsilon_k_ab": 2377.9
-      }
-    ]
-  },
-  {
-    "identifier": {
-      "cas": "7732-18-5",
-      "name": "water_4C_pcpsaft_rehner2020",
-      "formula": "H2O"
-    },
-    "molarweight": 18.015,
-    "m": 1.2808,
-    "sigma": 2.8129,
-    "epsilon_k": 117.78,
-    "mu": 1.505,
-    "association_sites": [
-      {
-        "na": 2.0,
-        "nb": 2.0,
-        "kappa_ab": 0.082907,
-        "epsilon_k_ab": 1784.1
-      }
-    ]
-  },
-  {
-    "identifier": {
-      "cas": "7732-18-5",
       "name": "water2B_cameretti2005",
       "formula": "H2O"
     },
@@ -457,66 +397,6 @@
         "nb": 1.0,
         "kappa_ab": 0.2637,
         "epsilon_k_ab": 2506.794
-      }
-    ]
-  },
-  {
-    "identifier": {
-      "cas": "7732-18-5",
-      "name": "water_MP2B_forte2017",
-      "formula": "H2O"
-    },
-    "molarweight": 18.015,
-    "m": 2.2159,
-    "sigma": 2.2396,
-    "epsilon_k": 214.485,
-    "mu": 1.8550,
-    "association_sites": [
-      {
-        "na": 1.0,
-        "nb": 1.0,
-        "kappa_ab": 0.5000,
-        "epsilon_k_ab": 1543.672
-      }
-    ]
-  },
-  {
-    "identifier": {
-      "cas": "7732-18-5",
-      "name": "water_MP2Bu_forte2017",
-      "formula": "H2O"
-    },
-    "molarweight": 18.015,
-    "m": 1.2256,
-    "sigma": 2.8249,
-    "epsilon_k": 292.990,
-    "mu": 2.1870,
-    "association_sites": [
-      {
-        "na": 1.0,
-        "nb": 1.0,
-        "kappa_ab": 0.0171,
-        "epsilon_k_ab": 1760.237
-      }
-    ]
-  },
-  {
-    "identifier": {
-      "cas": "7732-18-5",
-      "name": "water_MP4Cu_forte2017",
-      "formula": "H2O"
-    },
-    "molarweight": 18.015,
-    "m": 1.1990,
-    "sigma": 2.8792,
-    "epsilon_k": 285.368,
-    "mu": 2.2088,
-    "association_sites": [
-      {
-        "na": 2.0,
-        "nb": 2.0,
-        "kappa_ab": 0.0144,
-        "epsilon_k_ab": 1117.327
       }
     ]
   }

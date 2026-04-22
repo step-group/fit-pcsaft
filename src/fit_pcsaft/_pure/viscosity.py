@@ -1,16 +1,25 @@
 """Entropy scaling viscosity correlation fitting for pure PC-SAFT components.
 
-Correlation model (Lötgering-Lin & Gross 2018, Ind. Eng. Chem. Res.):
+Correlation model (Lötgering-Lin & Gross 2018, Ind. Eng. Chem. Res. 57, 4095):
 
     ln(η / η_CE) = A + B·s + C·s² + D·s³,   s = s_res / (R·m)
 
-where η_CE is the Chapman-Enskog reference viscosity (computed from SAFT
-σ and ε/k), s_res the residual molar entropy, R the gas constant, and m
-the number of SAFT segments.  D is fixed from the LL molar-mass correlation;
-A, B, C are fitted by OLS in a centered s-basis for numerical conditioning.
+where η_CE is the Chapman-Enskog reference viscosity, s_res the residual molar
+entropy, R the gas constant, and m the number of SAFT segments.
+
+Fitting procedure (faithful to LL 2018):
+
+- **D** is always fixed from the molar-mass correlation (LL 2018, eq. 14):
+      D = 1 / (−1.25594 − 888.1232 / M[g/mol])
+- **A** is fixed from group contribution when ``groups`` is supplied (LL 2015,
+  eq. 11 + page 4097 of LL 2018):
+      A_gc = Σ_α (n_α · m_α · σ_α³ · A_α)
+      A_i  = A_gc + 0.5 · ln(1 / m_i)
+  The ln shift bridges the 2015 vs 2018 Chapman-Enskog reference conventions.
+  Alternatively pass ``a_gc=<float>`` to supply A_gc directly.
+- **Only B and C** are fit from data (or A, B, C when no GC source is given).
 """
 
-import functools
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +33,7 @@ import si_units as si
 
 from fit_pcsaft._csv import SCHEMA_VISCOSITY, load_csv
 from fit_pcsaft._binary._utils import _apply_induced_association
+from fit_pcsaft._pure.viscosity_gc import compute_a_gc
 
 
 @dataclass(frozen=True)
@@ -49,6 +59,9 @@ class ViscosityFitResult:
     ard: float
     n_points: int
     input_name: str = ""
+    a_fixed: bool = False
+    groups: Optional[dict] = None
+    a_gc_used: Optional[float] = None
     # Internal data stored for plotting / export (not shown in __str__)
     _T_K: list = field(default_factory=list, repr=False, compare=False)
     _P_MPa: list = field(default_factory=list, repr=False, compare=False)
@@ -152,12 +165,19 @@ class ViscosityFitResult:
 
     def __str__(self) -> str:
         A, B, C, D = self.viscosity_params
+        if self.a_fixed:
+            if self.groups is not None:
+                a_src = f"(fixed from GC: groups={self.groups})"
+            else:
+                a_src = "(fixed from a_gc)"
+        else:
+            a_src = "(fit)"
         lines = [
             "Entropy scaling viscosity parameters [A, B, C, D]:",
-            f"  A: {A:+.6f}",
-            f"  B: {B:+.6f}",
-            f"  C: {C:+.6f}",
-            f"  D: {D:+.6f}",
+            f"  A: {A:+.6f}  {a_src}",
+            f"  B: {B:+.6f}  (fit)",
+            f"  C: {C:+.6f}  (fit)",
+            f"  D: {D:+.6f}  (fixed from molar-mass correlation)",
             "",
             "Fitting quality:",
             f"  ARD viscosity: {self.ard:.2f}%  (n={self.n_points})",
@@ -206,25 +226,9 @@ def _load_viscosity_csv(path: "Path | str"):
 
 
 
-@functools.lru_cache(maxsize=1)
-def _viscosity_prior() -> tuple:
-    """(mu_ref, sigma_ref) shape-(4,) arrays from the Lötgering-Lin 2018 reference dataset.
-
-    Loaded from loetgeringlin2018.json at repo root; hard-coded fallback if missing.
-    """
-    _MU = np.array([-1.279, -2.627, -0.479, -0.118])
-    _SIGMA = np.array([0.483, 0.993, 0.343, 0.060])
-    candidate = Path(__file__).parent.parent.parent.parent / "loetgeringlin2018.json"
-    if candidate.is_file():
-        try:
-            data = json.loads(candidate.read_text(encoding="utf-8"))
-            rows = [e["viscosity"] for e in data if "viscosity" in e]
-            if len(rows) >= 10:
-                arr = np.array(rows)
-                return arr.mean(axis=0), arr.std(axis=0, ddof=1)
-        except Exception:
-            pass
-    return _MU, _SIGMA
+def _D_from_molar_mass(mw_g_mol: float) -> float:
+    """LL & Gross 2018, eq. 14: D = 1 / (−1.25594 − 888.1232 / M[g/mol])."""
+    return 1.0 / (-1.25594 - 888.1232 / mw_g_mol)
 
 
 def _rebuild_eos_with_viscosity(source, viscosity_list: list) -> Optional[object]:
@@ -294,17 +298,19 @@ def fit_viscosity_entropy_scaling(
     temperature_unit: "si.SIObject" = si.KELVIN,
     pressure_unit: "si.SIObject" = si.MEGA * si.PASCAL,
     viscosity_unit: "si.SIObject" = si.PASCAL * si.SECOND,
-    noise_sigma: float = 0.05,
+    groups: "dict[str, int] | None" = None,
+    a_gc: "float | None" = None,
     loss: str = "linear",
     f_scale: float = 0.1,
 ) -> ViscosityFitResult:
     """Fit entropy scaling viscosity correlation ``[A, B, C, D]`` to experimental data.
 
-    Fits the Lötgering-Lin & Gross (2018) model:
+    Implements the Lötgering-Lin & Gross (2018) procedure faithfully:
 
-        ln(η / η_CE) = A + B·s + C·s² + D·s³,   s = s_res / (R·m)
-
-    using MAP ridge regression toward the Lötgering-Lin 2018 reference prior.
+    - **D** is always computed from the molar-mass correlation (eq. 14).
+    - **A** is fixed from group contribution when ``groups`` or ``a_gc`` is
+      given; otherwise A is also fit from data.
+    - Only **B and C** (or A, B, C without GC) are regressed by OLS.
 
     Parameters
     ----------
@@ -327,22 +333,20 @@ def fit_viscosity_entropy_scaling(
         Unit for pressure column. Default: MPa.
     viscosity_unit : si.SIObject
         Unit for viscosity column. Default: Pa·s.
-    noise_sigma : float
-        Prior width relative to the Lötgering-Lin reference σ.  Smaller values
-        tighten the prior; larger values relax it toward an OLS solution.
+    groups : dict[str, int], optional
+        Segment name → count for group-contribution A calculation, e.g.
+        ``{"CH3": 2, "CH2": 4}`` for hexane.  Uses the Sauer 2014 + LL 2015
+        parameter table shipped with fit-pcsaft.
+    a_gc : float, optional
+        Pre-computed A_gc value (before the 0.5·ln(1/m) shift).  Use when
+        group parameters come from an external source.  Ignored if ``groups``
+        is given.
     loss : str
-        Loss function for the residuals — any value accepted by
-        ``scipy.optimize.least_squares``: ``'linear'`` (default, standard L2),
-        ``'arctan'``, ``'huber'``, ``'soft_l1'``, ``'cauchy'``.  Non-linear losses
-        automatically downweight outlier data points (e.g. near-critical
-        measurements that span a different regime from the liquid phase).
-        When ``loss='linear'`` the fast ``np.linalg.lstsq`` path is used;
-        otherwise ``scipy.optimize.least_squares`` is called.
+        Loss function: ``'linear'`` (default, fast lstsq) or any robust loss
+        accepted by ``scipy.optimize.least_squares`` (``'huber'``, ``'cauchy'``,
+        ``'arctan'``, ``'soft_l1'``).
     f_scale : float
-        Residual scale for the robust loss.  Residuals with magnitude much
-        larger than *f_scale* are treated as outliers and downweighted.
-        Typical range: 0.05–0.3 (in units of ln(η/η_CE), where experimental
-        scatter is ~0.02–0.05).  Ignored when ``loss='linear'``.
+        Residual scale for robust loss.  Ignored when ``loss='linear'``.
 
     Returns
     -------
@@ -352,23 +356,34 @@ def fit_viscosity_entropy_scaling(
     Raises
     ------
     RuntimeError
-        If fewer than 4 data points could be evaluated successfully.
+        If fewer than 3 data points could be evaluated successfully.
 
     Notes
     -----
     Individual data points at which the EOS fails to converge are silently
     skipped and do not contribute to the fit.
     """
-    # --- Resolve EOS and m from source ---------------------------------------
+    # --- Resolve EOS, m, and mw from source ----------------------------------
     if hasattr(source, 'pure_records'):
         rec = source.pure_records[0]
         m = float(rec.model_record['m'])
+        mw = float(rec.molarweight)
         eos = feos.EquationOfState.pcsaft(source)
         compound_name = name or rec.identifier.name
     else:
         eos = source.eos
         m = source.params['m']
+        mw = float(source.compound.mw)
         compound_name = name or source.input_name
+
+    # --- Fix D from molar-mass correlation; resolve A from GC if available --
+    D_fixed = _D_from_molar_mass(mw)
+    a_gc_val: "float | None" = None
+    if a_gc is not None:
+        a_gc_val = float(a_gc)
+    elif groups is not None:
+        a_gc_val = compute_a_gc(groups)
+    A_fixed: "float | None" = (a_gc_val + 0.5 * np.log(1.0 / m)) if a_gc_val is not None else None
 
     # --- Load experimental data -------------------------------------------
     T_data, P_data, eta_data, phase_data = _load_viscosity_csv(viscosity_path)
@@ -424,9 +439,10 @@ def fit_viscosity_entropy_scaling(
             continue
 
     n = len(s_vals)
-    if n < 4:
+    min_pts = 2 if A_fixed is not None else 3
+    if n < min_pts:
         raise RuntimeError(
-            f"Only {n} valid data points (need ≥ 4). "
+            f"Only {n} valid data points (need ≥ {min_pts}). "
             "Check that T/P conditions are within the EOS validity range."
         )
 
@@ -435,38 +451,35 @@ def fit_viscosity_entropy_scaling(
     eta_exp_arr = np.array(eta_exp_Pa_s_vals)
     y_arr = np.log(eta_exp_arr / eta_CE_arr)
 
-    # --- MAP ridge OLS toward Lötgering-Lin 2018 reference -------------------
-    # Prior: θ ~ N(μ_ref, diag(σ_ref²)); noise: y_i ~ N(Φ_i θ, σ_noise²).
-    # Augmented system:  [Φ; diag(scale)] θ = [y; scale·μ_ref]
-    # where scale_k = σ_noise / σ_ref,k.
-    mu_ref, sigma_ref = _viscosity_prior()
-    scale = noise_sigma / sigma_ref
-
-    Phi = np.column_stack([np.ones(n), s_arr, s_arr**2, s_arr**3])
+    # --- Shifted-y linear solve (LL 2018 faithful) ---------------------------
+    # D is fixed from the molar-mass correlation; subtract its contribution.
+    # A is fixed from GC when available; subtract and fit only [B, C].
+    # Without GC source, fit [A, B, C] (D still fixed).
+    y_shift = y_arr - D_fixed * s_arr**3
+    if A_fixed is not None:
+        y_shift = y_shift - A_fixed
+        Phi_fit = np.column_stack([s_arr, s_arr**2])
+        x0 = np.array([-2.6, -0.5])
+    else:
+        Phi_fit = np.column_stack([np.ones(n), s_arr, s_arr**2])
+        x0 = np.array([-1.2, -2.6, -0.5])
 
     if loss == "linear":
-        Phi_aug = np.vstack([Phi, np.diag(scale)])
-        y_aug = np.concatenate([y_arr, scale * mu_ref])
-        theta, *_ = np.linalg.lstsq(Phi_aug, y_aug, rcond=None)
+        theta, *_ = np.linalg.lstsq(Phi_fit, y_shift, rcond=None)
     else:
-        # Robust loss via scipy.optimize.least_squares.
-        # Residual vector: [data residuals, prior residuals].
-        # The prior rows use the same robust loss as the data rows;
-        # since prior residuals start near zero they are seldom downweighted.
         def _residuals(t: np.ndarray) -> np.ndarray:
-            r_data = Phi @ t - y_arr
-            r_prior = scale * (t - mu_ref)
-            return np.concatenate([r_data, r_prior])
+            return Phi_fit @ t - y_shift
 
-        result = scipy.optimize.least_squares(
-            _residuals,
-            x0=mu_ref.copy(),
-            loss=loss,
-            f_scale=f_scale,
-            method="trf",
-        )
-        theta = result.x
-    A, B, C, D = theta.tolist()
+        theta = scipy.optimize.least_squares(
+            _residuals, x0=x0, loss=loss, f_scale=f_scale, method="trf",
+        ).x
+
+    if A_fixed is not None:
+        A = A_fixed
+        B, C = theta.tolist()
+    else:
+        A, B, C = theta.tolist()
+    D = D_fixed
 
     viscosity_list = [float(A), float(B), float(C), float(D)]
     eos_final = _rebuild_eos_with_viscosity(source, viscosity_list)
@@ -517,6 +530,9 @@ def fit_viscosity_entropy_scaling(
         ard=ard,
         n_points=n,
         input_name=compound_name,
+        a_fixed=(A_fixed is not None),
+        groups=(dict(groups) if groups is not None else None),
+        a_gc_used=a_gc_val,
         _T_K=[float(T) * float(temperature_unit / si.KELVIN) for T in T_data],
         _P_MPa=p_MPa_for_result,
         _eta_exp_Pa_s=[float(e) * float(viscosity_unit / (si.PASCAL * si.SECOND)) for e in eta_data],

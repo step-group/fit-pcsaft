@@ -5,27 +5,23 @@ Fits [A, B, C, D] in:
 
     ln(η / η_CE) = A + B·s + C·s²  + D·s³,   s = s_res / (R·m)
 
-where η_CE is the Chapman-Enskog reference viscosity.
+Procedure (Lötgering-Lin & Gross 2018):
+
+- D is fixed from the molar-mass correlation (eq. 14):
+      D = 1 / (−1.25594 − 888.1232 / M)  →  −0.0865 for hexane
+- A is fixed from group contribution (LL 2015, eq. 11):
+      A_gc = Σ_α (n_α · m_α · σ_α³ · A_α)
+      A_i  = A_gc + 0.5·ln(1/m)           →  ≈ −1.205 for hexane
+- Only B and C are fit from experimental viscosity data.
 
 Workflow
 --------
-1. Load PC-SAFT parameters (from a prior fit_pure run or a literature JSON).
+1. Load PC-SAFT parameters.
 2. Provide viscosity data as a CSV with columns T (K), P (MPa), eta (Pa·s).
-   An optional ``phase`` column ('liquid' / 'vapor') helps convergence near
-   two-phase boundaries.
-3. Call fit_viscosity_entropy_scaling — it does a linear least-squares fit,
-   so no initial guess is needed.
-4. Write the result back into the same JSON (adds the ``viscosity`` field).
+3. Call fit_viscosity_entropy_scaling with groups={"CH3": 2, "CH2": 4}.
+4. Write the result back into a feos-compatible JSON.
 
-Data
-----
-Replace examples/data/viscosity/hexane_viscosity.csv with real measurements.
-The placeholder file was generated from the Lötgering-Lin (2018) model as a
-consistency check — a real fit should use experimental viscosity data.
-
-Reference PC-SAFT params (Gross & Sadowski 2001):
-  m=3.0576, σ=3.7983 Å, ε/k=236.77 K
-Reference viscosity params (Lötgering-Lin & Gross 2018):
+Reference (Lötgering-Lin & Gross 2018):
   A=-1.2035, B=-2.5958, C=-0.4816, D=-0.0865
 """
 
@@ -76,6 +72,8 @@ def main() -> None:
         params,
         visc_path,
         name="hexane",
+        groups={"CH3": 2, "CH2": 4},
+        # Alternative: pass a_gc=<float> if you computed A_gc externally
     )
     print(result)
 
