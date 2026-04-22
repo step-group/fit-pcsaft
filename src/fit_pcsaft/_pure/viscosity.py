@@ -455,6 +455,25 @@ def fit_viscosity_entropy_scaling(
     # D is fixed from the molar-mass correlation; subtract its contribution.
     # A is fixed from GC when available; subtract and fit only [B, C].
     # Without GC source, fit [A, B, C] (D still fixed).
+    #
+    # CENTERING NOTE (for conditioning — not applied here, document for reuse):
+    #
+    #   Define s_c = s - mean(s).  Fit in centered basis:
+    #       y_shift = a_c + B_c·s_c + C_c·s_c²
+    #
+    #   Back-transform to original [A, B, C] via expansion of (s_c + s_mean):
+    #       C     = C_c
+    #       B     = B_c - 2·C_c·s_mean
+    #       A     = a_c - B_c·s_mean + C_c·s_mean²
+    #
+    #   When A is fixed (GC case), only [B_c, C_c] are fit; back-transform:
+    #       C     = C_c
+    #       B     = B_c - 2·C_c·s_mean
+    #   (A stays fixed; no correction needed because the A subtraction was in
+    #    the original basis and centering only affects the remaining columns.)
+    #
+    #   np.linalg.lstsq (SVD) already handles mild collinearity between s and
+    #   s² well for the typical liquid-phase range, so centering is optional.
     y_shift = y_arr - D_fixed * s_arr**3
     if A_fixed is not None:
         y_shift = y_shift - A_fixed
