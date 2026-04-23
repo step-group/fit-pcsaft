@@ -66,18 +66,23 @@ def _apply_induced_association(
       - kappa_ab     = kappa_ab of the self-associating component (first full site)
       - na = 1.0, nb = 1.0  (2B scheme)
 
-    Raises ValueError if both or neither component is self-associating.
+    If both components are already self-associating, induced association is not applicable
+    and the records are returned unchanged (a note is printed).
+    Raises ValueError if neither component is self-associating.
     """
     import json
+    import warnings
 
     assoc1 = _is_self_associating(record1)
     assoc2 = _is_self_associating(record2)
 
     if assoc1 and assoc2:
-        raise ValueError(
-            "induced_assoc=True requires exactly one self-associating component, "
-            "but both components have association sites with epsilon_k_ab > 0."
+        warnings.warn(
+            "induced_association=True has no effect: both components are already "
+            "self-associating. Records returned unchanged.",
+            stacklevel=3,
         )
+        return record1, record2
     if not assoc1 and not assoc2:
         raise ValueError(
             "induced_assoc=True requires exactly one self-associating component, "
