@@ -60,6 +60,7 @@ class ViscosityFitResult:
     n_points: int
     input_name: str = ""
     a_fixed: bool = False
+    d_fixed: bool = True
     groups: Optional[dict] = None
     a_gc_used: Optional[float] = None
     # Internal data stored for plotting / export (not shown in __str__)
@@ -172,12 +173,13 @@ class ViscosityFitResult:
                 a_src = "(fixed from a_gc)"
         else:
             a_src = "(fit)"
+        d_src = "(fixed from molar-mass correlation)" if self.d_fixed else "(fit)"
         lines = [
             "Entropy scaling viscosity parameters [A, B, C, D]:",
             f"  A: {A:+.6f}  {a_src}",
             f"  B: {B:+.6f}  (fit)",
             f"  C: {C:+.6f}  (fit)",
-            f"  D: {D:+.6f}  (fixed from molar-mass correlation)",
+            f"  D: {D:+.6f}  {d_src}",
             "",
             "Fitting quality:",
             f"  ARD viscosity: {self.ard:.2f}%  (n={self.n_points})",
@@ -300,6 +302,7 @@ def fit_viscosity_entropy_scaling(
     viscosity_unit: "si.SIObject" = si.PASCAL * si.SECOND,
     groups: "dict[str, int] | None" = None,
     a_gc: "float | None" = None,
+    fix_d: bool = True,
     loss: str = "linear",
     f_scale: float = 0.1,
 ) -> ViscosityFitResult:
@@ -341,6 +344,11 @@ def fit_viscosity_entropy_scaling(
         Pre-computed A_gc value (before the 0.5·ln(1/m) shift).  Use when
         group parameters come from an external source.  Ignored if ``groups``
         is given.
+    fix_d : bool
+        If ``True`` (default), fix D from the molar-mass correlation
+        (LL 2018, eq. 14).  If ``False``, D is also regressed from data —
+        useful when the molar-mass correlation is a poor fit or for
+        associating compounds where the cubic term behaves differently.
     loss : str
         Loss function: ``'linear'`` (default, fast lstsq) or any robust loss
         accepted by ``scipy.optimize.least_squares`` (``'huber'``, ``'cauchy'``,
@@ -439,10 +447,10 @@ def fit_viscosity_entropy_scaling(
             continue
 
     n = len(s_vals)
-    min_pts = 2 if A_fixed is not None else 3
-    if n < min_pts:
+    n_free_params = (2 if fix_d else 3) + (0 if A_fixed is not None else 1)
+    if n < n_free_params:
         raise RuntimeError(
-            f"Only {n} valid data points (need ≥ {min_pts}). "
+            f"Only {n} valid data points (need ≥ {n_free_params}). "
             "Check that T/P conditions are within the EOS validity range."
         )
 
@@ -452,42 +460,49 @@ def fit_viscosity_entropy_scaling(
     y_arr = np.log(eta_exp_arr / eta_CE_arr)
 
     # --- Shifted-y linear solve (LL 2018 faithful) ---------------------------
-    # D is fixed from the molar-mass correlation; subtract its contribution.
-    # A is fixed from GC when available; subtract and fit only [B, C].
-    # Without GC source, fit [A, B, C] (D still fixed).
+    # Four cases: {A fixed | A free} × {D fixed | D free}.
     #
-    # CENTERING NOTE (for conditioning — not applied here, document for reuse):
+    # A-fixed: raw monomial basis — no intercept column so κ ≤ 80 (safe).
+    #   D-fixed: fit [B, C]    via [s, s²]
+    #   D-free:  fit [B, C, D] via [s, s², s³]
     #
-    #   Define s_c = s - mean(s).  Fit in centered basis:
-    #       y_shift = a_c + B_c·s_c + C_c·s_c²
+    # A-free: Chebyshev basis over t ∈ [−1,1] — intercept in [1,s,s²] drives
+    #   κ > 7000 on narrow-span datasets; Chebyshev keeps κ ≤ 8 universally.
+    #   D-fixed: fit [A,B,C]   via T0–T2 (degree 2)
+    #   D-free:  fit [A,B,C,D] via T0–T3 (degree 3)
     #
-    #   Back-transform to original [A, B, C] via expansion of (s_c + s_mean):
-    #       C     = C_c
-    #       B     = B_c - 2·C_c·s_mean
-    #       A     = a_c - B_c·s_mean + C_c·s_mean²
-    #
-    #   When A is fixed (GC case), only [B_c, C_c] are fit; back-transform:
-    #       C     = C_c
-    #       B     = B_c - 2·C_c·s_mean
-    #   (A stays fixed; no correction needed because the A subtraction was in
-    #    the original basis and centering only affects the remaining columns.)
-    #
-    #   np.linalg.lstsq (SVD) already handles mild collinearity between s and
-    #   s² well for the typical liquid-phase range, so centering is optional.
-    y_shift = y_arr - D_fixed * s_arr**3
+    # Chebyshev back-transform (t=a·s+b, a=2/(s_hi−s_lo), b=−(s_hi+s_lo)/(s_hi−s_lo)):
+    #   A = c0+c1b+c2(2b²−1)+c3(4b³−3b)
+    #   B = a(c1+4c2b+3c3(4b²−1))
+    #   C = 2a²(c2+6c3b)
+    #   D = 4a³c3         (c3=0 and dropped when D is fixed)
+    if fix_d:
+        y_shift = y_arr - D_fixed * s_arr**3
+    else:
+        y_shift = y_arr.copy()
+
     if A_fixed is not None:
         y_shift = y_shift - A_fixed
-        Phi_fit = np.column_stack([s_arr, s_arr**2])
-        x0 = np.array([-2.6, -0.5])
+        if fix_d:
+            Phi_fit = np.column_stack([s_arr, s_arr**2])
+            x0 = np.array([-2.6, -0.5])
+        else:
+            Phi_fit = np.column_stack([s_arr, s_arr**2, s_arr**3])
+            x0 = np.array([-2.6, -0.5, -0.1])
     else:
-        Phi_fit = np.column_stack([np.ones(n), s_arr, s_arr**2])
-        x0 = np.array([-1.2, -2.6, -0.5])
+        s_lo, s_hi = float(s_arr.min()), float(s_arr.max())
+        _a = 2.0 / (s_hi - s_lo)
+        _b = -(s_hi + s_lo) / (s_hi - s_lo)
+        t_cheb = _a * s_arr + _b
+        cheb_deg = 2 if fix_d else 3
+        Phi_fit = np.polynomial.chebyshev.chebvander(t_cheb, cheb_deg)
+        x0 = np.array([-1.2, -2.6, -0.5]) if fix_d else np.array([-1.2, -2.6, -0.5, -0.1])
 
     if loss == "linear":
         theta, *_ = np.linalg.lstsq(Phi_fit, y_shift, rcond=None)
     else:
-        def _residuals(t: np.ndarray) -> np.ndarray:
-            return Phi_fit @ t - y_shift
+        def _residuals(p: np.ndarray) -> np.ndarray:
+            return Phi_fit @ p - y_shift
 
         theta = scipy.optimize.least_squares(
             _residuals, x0=x0, loss=loss, f_scale=f_scale, method="trf",
@@ -495,10 +510,21 @@ def fit_viscosity_entropy_scaling(
 
     if A_fixed is not None:
         A = A_fixed
-        B, C = theta.tolist()
+        if fix_d:
+            B, C = theta.tolist()
+            D = D_fixed
+        else:
+            B, C, D = theta.tolist()
     else:
-        A, B, C = theta.tolist()
-    D = D_fixed
+        if fix_d:
+            c0, c1, c2 = theta.tolist()
+            c3 = 0.0
+        else:
+            c0, c1, c2, c3 = theta.tolist()
+        A = c0 + c1*_b + c2*(2.0*_b**2 - 1.0) + c3*(4.0*_b**3 - 3.0*_b)
+        B = _a * (c1 + 4.0*c2*_b + 3.0*c3*(4.0*_b**2 - 1.0))
+        C = 2.0*_a**2 * (c2 + 6.0*c3*_b)
+        D = 4.0*_a**3 * c3 if not fix_d else D_fixed
 
     viscosity_list = [float(A), float(B), float(C), float(D)]
     eos_final = _rebuild_eos_with_viscosity(source, viscosity_list)
@@ -550,6 +576,7 @@ def fit_viscosity_entropy_scaling(
         n_points=n,
         input_name=compound_name,
         a_fixed=(A_fixed is not None),
+        d_fixed=fix_d,
         groups=(dict(groups) if groups is not None else None),
         a_gc_used=a_gc_val,
         _T_K=[float(T) * float(temperature_unit / si.KELVIN) for T in T_data],
