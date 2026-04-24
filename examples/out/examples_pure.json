@@ -1,6 +1,41 @@
 [
   {
     "identifier": {
+      "cas": "74-98-6",
+      "name": "propane",
+      "iupac_name": "propane",
+      "smiles": "CCC",
+      "inchi": "InChI=1S/C3H8/c1-3-2/h3H2,1-2H3",
+      "formula": "C3H8"
+    },
+    "molarweight": 44.1,
+    "m": 2.0088389081946616,
+    "sigma": 3.730476280935515,
+    "epsilon_k": 210.7128619289104
+  },
+  {
+    "identifier": {
+      "cas": "67-64-1",
+      "name": "acetone",
+      "iupac_name": "propan-2-one",
+      "smiles": "CC(=O)C",
+      "inchi": "InChI=1S/C3H6O/c1-3(2)4/h1-2H3",
+      "formula": "C3H6O"
+    },
+    "molarweight": 58.08,
+    "m": 3.205747153286719,
+    "sigma": 3.0911021569227795,
+    "epsilon_k": 210.61842765089784,
+    "mu": 3.073082404345041,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 0.0
+      }
+    ]
+  },
+  {
+    "identifier": {
       "cas": "64-17-5",
       "name": "ethanol",
       "iupac_name": "ethanol",
@@ -23,8 +58,23 @@
   },
   {
     "identifier": {
+      "cas": "124-38-9",
+      "name": "carbon dioxide",
+      "iupac_name": "carbon dioxide",
+      "smiles": "C(=O)=O",
+      "inchi": "InChI=1S/CO2/c2-1-3",
+      "formula": "CO2"
+    },
+    "molarweight": 44.009,
+    "m": 1.5364075974529907,
+    "sigma": 3.164715993637368,
+    "epsilon_k": 161.307384722743,
+    "q": 4.4
+  },
+  {
+    "identifier": {
       "cas": "112-30-1",
-      "name": "decan-1-ol",
+      "name": "1-decanol",
       "iupac_name": "decan-1-ol",
       "smiles": "CCCCCCCCCCO",
       "inchi": "InChI=1S/C10H22O/c1-2-3-4-5-6-7-8-9-10-11/h11H,2-10H2,1H3",
@@ -60,28 +110,6 @@
   },
   {
     "identifier": {
-      "cas": "97-53-0",
-      "name": "eugenol",
-      "iupac_name": "2-methoxy-4-prop-2-enylphenol",
-      "smiles": "COC1=C(C=CC(=C1)CC=C)O",
-      "inchi": "InChI=1S/C10H12O2/c1-3-4-8-5-6-9(11)10(7-8)12-2/h3,5-7,11H,1,4H2,2H3",
-      "formula": "C10H12O2"
-    },
-    "molarweight": 164.2,
-    "m": 4.628635437623809,
-    "sigma": 3.5756973201531035,
-    "epsilon_k": 221.25109647458672,
-    "association_sites": [
-      {
-        "na": 2.0,
-        "nb": 1.0,
-        "kappa_ab": 0.1857971302380298,
-        "epsilon_k_ab": 2498.176984469522
-      }
-    ]
-  },
-  {
-    "identifier": {
       "cas": "108-88-3",
       "name": "toluene",
       "iupac_name": "toluene",
@@ -94,54 +122,5 @@
     "sigma": 3.5148490581487746,
     "epsilon_k": 260.64827285879034,
     "q": 5.5
-  },
-  {
-    "identifier": {
-      "cas": "124-38-9",
-      "name": "carbon dioxide",
-      "iupac_name": "carbon dioxide",
-      "smiles": "C(=O)=O",
-      "inchi": "InChI=1S/CO2/c2-1-3",
-      "formula": "CO2"
-    },
-    "molarweight": 44.009,
-    "m": 1.5364075974529907,
-    "sigma": 3.164715993637368,
-    "epsilon_k": 161.307384722743,
-    "q": 4.4
-  },
-  {
-    "identifier": {
-      "cas": "67-64-1",
-      "name": "acetone",
-      "iupac_name": "propan-2-one",
-      "smiles": "CC(=O)C",
-      "inchi": "InChI=1S/C3H6O/c1-3(2)4/h1-2H3",
-      "formula": "C3H6O"
-    },
-    "molarweight": 58.08,
-    "m": 3.2709273010511484,
-    "sigma": 3.099599692922516,
-    "epsilon_k": 230.09366668662932,
-    "association_sites": [
-      {
-        "na": 1.0,
-        "nb": 0.0
-      }
-    ]
-  },
-  {
-    "identifier": {
-      "cas": "74-98-6",
-      "name": "propane",
-      "iupac_name": "propane",
-      "smiles": "CCC",
-      "inchi": "InChI=1S/C3H8/c1-3-2/h3H2,1-2H3",
-      "formula": "C3H8"
-    },
-    "molarweight": 44.1,
-    "m": 2.0088389081946616,
-    "sigma": 3.730476280935515,
-    "epsilon_k": 210.7128619289104
   }
 ]

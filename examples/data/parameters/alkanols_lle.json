@@ -1,0 +1,68 @@
+[
+  {
+    "identifier": {
+      "cas": "111-27-3",
+      "name": "1-hexanol",
+      "iupac_name": "hexan-1-ol",
+      "smiles": "CCCCCCO",
+      "inchi": "InChI=1S/C6H14O/c1-2-3-4-5-6-7/h7H,2-6H2,1H3",
+      "formula": "C6H14O"
+    },
+    "molarweight": 102.17,
+    "m": 2.6895,
+    "sigma": 4.0593,
+    "epsilon_k": 294.85,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.002417,
+        "epsilon_k_ab": 2942.29
+      }
+    ]
+  },
+  {
+    "identifier": {
+      "cas": "111-87-5",
+      "name": "1-octanol",
+      "iupac_name": "octan-1-ol",
+      "smiles": "CCCCCCCCO",
+      "inchi": "InChI=1S/C8H18O/c1-2-3-4-5-6-7-8-9/h9H,2-8H2,1H3",
+      "formula": "C8H18O"
+    },
+    "molarweight": 130.23,
+    "m": 3.5191,
+    "sigma": 4.0169,
+    "epsilon_k": 284.91,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.002427,
+        "epsilon_k_ab": 2949.35
+      }
+    ]
+  },
+  {
+    "identifier": {
+      "cas": "111-87-5",
+      "name": "1-octanol-alt",
+      "iupac_name": "octan-1-ol",
+      "smiles": "CCCCCCCCO",
+      "inchi": "InChI=1S/C8H18O/c1-2-3-4-5-6-7-8-9/h9H,2-8H2,1H3",
+      "formula": "C8H18O"
+    },
+    "molarweight": 130.230,
+    "m": 4.0012,
+    "sigma": 3.8282,
+    "epsilon_k": 268.73,
+    "association_sites": [
+      {
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.003110,
+        "epsilon_k_ab": 2804.3
+      }
+    ]
+  }
+]

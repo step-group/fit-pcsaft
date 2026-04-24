@@ -24,7 +24,7 @@ def main() -> None:
         density_path=density_path,
         hvap_path=hvap_path,
         na=1,
-        mu=0.0,  # fit dipole moment
+        mu=None,  # fit dipole moment
     )
     print(result)
     result.to_json(out_dir / "examples_pure.json")

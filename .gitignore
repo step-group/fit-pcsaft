@@ -1,4 +1,5 @@
 /feos
+/examples/out/
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -11,3 +12,7 @@ wheels/
 .venv
 
 test_feos_params.py
+
+# Benchmark runtime artifacts
+benchmarks/*.log
+benchmarks/dashboard.html

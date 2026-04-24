@@ -18,7 +18,7 @@ density_path = data_dir / "density" / "1-decanol.csv"
 
 def main() -> None:
     result = fit_pure(
-        id="decan-1-ol",
+        id="1-decanol",
         psat_path=psat_path,
         density_path=density_path,
         na=1,
