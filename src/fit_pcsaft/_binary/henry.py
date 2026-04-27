@@ -167,4 +167,7 @@ def fit_kij_henry(
         scipy_result=result,
         time_elapsed=time_elapsed,
         _solvent_record=record2,
+        _record1=record1,
+        _record2=record2,
+        _henry_unit="molfrac" if use_molfrac else None,
     )

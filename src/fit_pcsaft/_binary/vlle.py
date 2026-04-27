@@ -32,6 +32,34 @@ from fit_pcsaft._csv import SCHEMA_VLLE, load_csv
 _N_KIJ_SCAN = 13
 
 
+def _predict_vlle_point(
+    record1, record2, kij_val: float, T_K: float, P_Pa: float,
+    x1_I_init: float = 0.01, x1_II_init: float = 0.90,
+) -> "tuple[float, float, float, float]":
+    """Predict heteroazeotrope at (T_K, P_Pa). Returns (T_pred, x1_I, x1_II, y1) or (nan*4) on failure."""
+    import feos
+
+    try:
+        eos = _build_binary_eos(record1, record2, kij_val)
+        ha = feos.PhaseEquilibrium.heteroazeotrope(
+            eos,
+            P_Pa * si.PASCAL,
+            x_init=(float(np.clip(x1_I_init, 1e-6, 1.0 - 1e-6)),
+                    float(np.clip(x1_II_init, 1e-6, 1.0 - 1e-6))),
+            tp_init=T_K * si.KELVIN,
+        )
+        T_pred     = float(ha.vapor.temperature / si.KELVIN)
+        x1_I_pred  = float(ha.liquid1.molefracs[0])
+        x1_II_pred = float(ha.liquid2.molefracs[0])
+        y1_pred    = float(ha.vapor.molefracs[0])
+        if x1_I_pred > x1_II_pred:
+            x1_I_pred, x1_II_pred = x1_II_pred, x1_I_pred
+        return T_pred, x1_I_pred, x1_II_pred, y1_pred
+    except Exception:
+        nan = float("nan")
+        return nan, nan, nan, nan
+
+
 def fit_kij_vlle(
     id1: str,
     id2: str,
@@ -119,39 +147,23 @@ def fit_kij_vlle(
 
     def _residuals_point(kij_val: float, i: int) -> np.ndarray:
         """Residual vector for a single VLLE data point."""
-        T_K = float(T_arr[i]) * t_scale
-        P_si = float(P_arr[i]) * p_scale * si.PASCAL
-        penalty = np.ones(n_per_point)
-        try:
-            eos = _build_binary_eos(record1, record2, kij_val)
-            # Use experimental compositions as warm-start if available
-            x_I_init  = float(data["x1_I"][i])  if has_xI  else 0.01
-            x_II_init = float(data["x1_II"][i]) if has_xII else 0.90
-            import feos as _feos
-            ha = _feos.PhaseEquilibrium.heteroazeotrope(
-                eos, P_si,
-                x_init=(float(np.clip(x_I_init,  1e-6, 1.0 - 1e-6)),
-                        float(np.clip(x_II_init, 1e-6, 1.0 - 1e-6))),
-                tp_init=T_K * si.KELVIN,
-            )
-            T_pred  = float(ha.vapor.temperature / si.KELVIN)
-            x1_I_pred  = float(ha.liquid1.molefracs[0])
-            x1_II_pred = float(ha.liquid2.molefracs[0])
-            y1_pred    = float(ha.vapor.molefracs[0])
-            # Ensure phase I < phase II
-            if x1_I_pred > x1_II_pred:
-                x1_I_pred, x1_II_pred = x1_II_pred, x1_I_pred
-
-            resids = [(T_pred - T_K) / T_K]
-            if has_xI:
-                resids.append(x1_I_pred  - float(data["x1_I"][i]))
-            if has_xII:
-                resids.append(x1_II_pred - float(data["x1_II"][i]))
-            if has_y1:
-                resids.append(y1_pred    - float(data["y1"][i]))
-            return np.array(resids)
-        except Exception:
-            return penalty
+        T_K   = float(T_arr[i]) * t_scale
+        P_Pa  = float(P_arr[i]) * p_scale
+        x_I_init  = float(data["x1_I"][i])  if has_xI  else 0.01
+        x_II_init = float(data["x1_II"][i]) if has_xII else 0.90
+        T_pred, x1_I_pred, x1_II_pred, y1_pred = _predict_vlle_point(
+            record1, record2, kij_val, T_K, P_Pa, x_I_init, x_II_init
+        )
+        if np.isnan(T_pred):
+            return np.ones(n_per_point)
+        resids = [(T_pred - T_K) / T_K]
+        if has_xI:
+            resids.append(x1_I_pred  - float(data["x1_I"][i]))
+        if has_xII:
+            resids.append(x1_II_pred - float(data["x1_II"][i]))
+        if has_y1:
+            resids.append(y1_pred    - float(data["y1"][i]))
+        return np.array(resids)
 
     # --- Per-point k_ij fitting → polynomial ----------------------------------
     n_rows = len(T_arr)

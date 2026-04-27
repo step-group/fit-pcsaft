@@ -50,6 +50,8 @@ class BinaryFitResult:
     time_elapsed: float
     # Henry-specific: pure solvent record (needed for molfrac plot)
     _solvent_record: object = None
+    # Henry-specific: "molfrac" when K=y1/x1 data; None otherwise (data in MPa)
+    _henry_unit: object = None
     # LLE-specific: pure records needed to rebuild EOS at each T with k_ij(T)
     _record1: object = None
     _record2: object = None
@@ -67,6 +69,218 @@ class BinaryFitResult:
     def kij_at(self, T: float) -> float:
         """Evaluate the k_ij polynomial at temperature T [K]."""
         return _kij_at_T(self.kij_coeffs, T, self.kij_t_ref)
+
+    def residuals(self) -> "pl.DataFrame":
+        """Per-point residuals as a tidy polars DataFrame.
+
+        Schema: ``property, T, P, x1, side, exp, model, rd_pct, ard_pct``.
+
+        Assumes CSV data in default units (T in K, P in kPa, H in MPa).
+        Rebuild EOS at ``k_ij(T)`` per row for T-dependent polynomials.
+        """
+        import polars as pl
+        import si_units as si
+        import feos
+
+        from fit_pcsaft._binary._utils import _build_binary_eos
+
+        nan = float("nan")
+        eq = self.equilibrium_type
+        _tokens = frozenset(eq.replace("_", "+").split("+"))
+        rows: list = []
+
+        def _rd(model, exp):
+            if np.isfinite(model) and np.isfinite(exp) and exp != 0:
+                return (model - exp) / exp * 100.0
+            return nan
+
+        def _row(prop, T, P, x1, exp, model):
+            rd = _rd(model, exp)
+            rows.append({
+                "property": prop,
+                "T":        float(T),
+                "P":        float(P) if P is not None else nan,
+                "x1":       float(x1) if x1 is not None else nan,
+                "exp":      float(exp),
+                "model":    float(model),
+                "rd_pct":   rd,
+                "ard_pct":  abs(rd) if np.isfinite(rd) else nan,
+            })
+
+        # --- VLE ----------------------------------------------------------
+        if "vle" in _tokens:
+            from fit_pcsaft._binary.vle import _bubble_point
+            from fit_pcsaft._binary._plot import _normalize_result_for_type
+            vle_data = _normalize_result_for_type(self, "vle").data
+            T_arr  = vle_data["T"].astype(float)
+            P_arr  = vle_data["P"].astype(float)
+            x1_arr = vle_data["x1"].astype(float)
+            y1_arr = vle_data["y1"].astype(float) if "y1" in vle_data else None
+            tu = si.KELVIN
+            pu = si.KILO * si.PASCAL
+            for i, (T, P, x1) in enumerate(zip(T_arr, P_arr, x1_arr)):
+                kij = _kij_at_T(self.kij_coeffs, T, self.kij_t_ref)
+                P_pred = nan
+                y1_pred = nan
+                if self._record1 is not None and self._record2 is not None:
+                    try:
+                        eos_i = _build_binary_eos(self._record1, self._record2, kij)
+                        bp = _bubble_point(eos_i, T, x1, P, tu, pu)
+                        P_pred = float(bp.liquid.pressure() / pu)
+                        y1_pred = float(bp.vapor.molefracs[0])
+                    except Exception:
+                        pass
+                _row("vle_P", T, P, x1, P, P_pred)
+                if y1_arr is not None:
+                    _row("vle_y1", T, P, x1, y1_arr[i], y1_pred)
+
+        # --- LLE ----------------------------------------------------------
+        if "lle" in _tokens:
+            from fit_pcsaft._binary.lle import _LLE_FEEDS
+            from fit_pcsaft._binary._plot import _normalize_result_for_type
+            lle_data = _normalize_result_for_type(self, "lle").data
+            T_arr    = lle_data["T"].astype(float)
+            has_xI   = "x1_I"  in lle_data
+            has_xII  = "x1_II" in lle_data
+            x1_I_arr  = lle_data["x1_I"].astype(float)  if has_xI  else np.full(len(T_arr), nan)
+            x1_II_arr = lle_data["x1_II"].astype(float) if has_xII else np.full(len(T_arr), nan)
+            for T, x1_I_exp, x1_II_exp in zip(T_arr, x1_I_arr, x1_II_arr):
+                kij = _kij_at_T(self.kij_coeffs, T, self.kij_t_ref)
+                x1_I_pred = nan
+                x1_II_pred = nan
+                if self._record1 is not None and self._record2 is not None:
+                    try:
+                        eos_i = _build_binary_eos(self._record1, self._record2, kij)
+                        for z1 in _LLE_FEEDS:
+                            try:
+                                feed = np.array([z1, 1.0 - z1]) * si.MOL
+                                state = feos.State(
+                                    eos_i, T * si.KELVIN,
+                                    pressure=1.0 * si.BAR, moles=feed,
+                                    density_initialization="liquid",
+                                )
+                                pe = state.tp_flash(max_iter=1000)
+                                xa = float(pe.liquid.molefracs[0])
+                                xb = float(pe.vapor.molefracs[0])
+                                if abs(xa - xb) > 1e-4:
+                                    x1_I_pred, x1_II_pred = min(xa, xb), max(xa, xb)
+                                    break
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+                if has_xI:
+                    _row("lle_x1_I", T, nan, nan, x1_I_exp, x1_I_pred)
+                if has_xII:
+                    _row("lle_x1_II", T, nan, nan, x1_II_exp, x1_II_pred)
+
+        # --- SLE ----------------------------------------------------------
+        if "sle" in _tokens:
+            from fit_pcsaft._binary.sle import _predict_x1_for
+            T_arr   = self.data["T"].astype(float)
+            x1_arr  = self.data["x1"].astype(float)
+            eutectic = not np.isnan(self.tm2_K)
+            si_idx2  = 1 - self.solid_index
+            for T, x1_exp in zip(T_arr, x1_arr):
+                kij = _kij_at_T(self.kij_coeffs, T, self.kij_t_ref)
+                x1_pred = nan
+                if self._record1 is not None and self._record2 is not None:
+                    try:
+                        eos_i = _build_binary_eos(self._record1, self._record2, kij)
+                        x1_p1 = _predict_x1_for(
+                            eos_i, T, x1_exp, self.solid_index, self.tm_K, self.delta_hfus_J
+                        )
+                        if eutectic:
+                            x1_p2 = _predict_x1_for(
+                                eos_i, T, x1_exp, si_idx2, self.tm2_K, self.delta_hfus2_J
+                            )
+                            if np.isnan(x1_p1) or (
+                                np.isfinite(x1_p2) and abs(x1_p2 - x1_exp) < abs(x1_p1 - x1_exp)
+                            ):
+                                x1_pred = x1_p2
+                            else:
+                                x1_pred = x1_p1
+                        else:
+                            x1_pred = x1_p1
+                    except Exception:
+                        pass
+                _row("sle_x1", T, nan, nan, x1_exp, x1_pred)
+
+        # --- Henry --------------------------------------------------------
+        if "henry" in _tokens:
+            T_arr = self.data["T"].astype(float)
+            H_arr = self.data["H"].astype(float)
+            use_molfrac = self._henry_unit == "molfrac"
+            eos_solvent = None
+            if use_molfrac and self._solvent_record is not None:
+                try:
+                    eos_solvent = feos.EquationOfState.pcsaft(
+                        feos.Parameters.new_pure(self._solvent_record)
+                    )
+                except Exception:
+                    pass
+            for T, H_exp in zip(T_arr, H_arr):
+                kij = _kij_at_T(self.kij_coeffs, T, self.kij_t_ref)
+                H_pred = nan
+                if self._record1 is not None and self._record2 is not None:
+                    try:
+                        eos_i = _build_binary_eos(self._record1, self._record2, kij)
+                        H_pa = feos.State.henrys_law_constant_binary(
+                            eos_i, T * si.KELVIN
+                        ) / si.PASCAL
+                        if use_molfrac and eos_solvent is not None:
+                            vp = feos.PhaseEquilibrium.vapor_pressure(
+                                eos_solvent, T * si.KELVIN
+                            )
+                            H_pred = H_pa / (vp[0] / si.PASCAL)
+                        else:
+                            H_pred = H_pa / (si.MEGA * si.PASCAL / si.PASCAL)
+                    except Exception:
+                        pass
+                _row("henry_H", T, nan, nan, H_exp, H_pred)
+
+        # --- VLLE ---------------------------------------------------------
+        if "vlle" in _tokens:
+            from fit_pcsaft._binary.vlle import _predict_vlle_point
+            from fit_pcsaft._binary._plot import _normalize_result_for_type
+            vlle_data = _normalize_result_for_type(self, "vlle").data
+            T_arr = vlle_data["T"].astype(float)
+            P_arr = vlle_data["P"].astype(float)
+            has_xI  = "x1_I"  in vlle_data
+            has_xII = "x1_II" in vlle_data
+            has_y1  = "y1"    in vlle_data
+            for i in range(len(T_arr)):
+                T = float(T_arr[i])
+                P = float(P_arr[i])
+                kij = _kij_at_T(self.kij_coeffs, T, self.kij_t_ref)
+                x_I_init  = float(vlle_data["x1_I"][i])  if has_xI  else 0.01
+                x_II_init = float(vlle_data["x1_II"][i]) if has_xII else 0.90
+                T_pred = nan
+                x1_I_pred = nan
+                x1_II_pred = nan
+                y1_pred = nan
+                if self._record1 is not None and self._record2 is not None:
+                    T_pred, x1_I_pred, x1_II_pred, y1_pred = _predict_vlle_point(
+                        self._record1, self._record2, kij,
+                        T, P * 1e3,  # T in K, P kPa → Pa
+                        x_I_init, x_II_init,
+                    )
+                _row("vlle_T", T, P, nan, T, T_pred)
+                if has_xI:
+                    _row("vlle_x1_I", T, P, nan, float(vlle_data["x1_I"][i]), x1_I_pred)
+                if has_xII:
+                    _row("vlle_x1_II", T, P, nan, float(vlle_data["x1_II"][i]), x1_II_pred)
+                if has_y1:
+                    _row("vlle_y1", T, P, nan, float(vlle_data["y1"][i]), y1_pred)
+
+        schema = {
+            "property": pl.Utf8, "T": pl.Float64, "P": pl.Float64,
+            "x1": pl.Float64, "exp": pl.Float64, "model": pl.Float64,
+            "rd_pct": pl.Float64, "ard_pct": pl.Float64,
+        }
+        if not rows:
+            return pl.DataFrame(schema=schema)
+        return pl.DataFrame(rows).cast(schema)
 
     def to_json(self, path: "Path | str") -> None:
         """Append or update k_ij entry in a JSON file.
@@ -162,17 +376,8 @@ class BinaryFitResult:
         eq = self.equilibrium_type
         _tokens = frozenset(eq.replace("_", "+").split("+"))
 
-        # --- experimental CSV ---
-        _EXP_META = {"T_kij", "kij_pointwise", "ard_pointwise", "ard_pointwise_poly", "source"}
-        exp_rows = {
-            k: v.tolist()
-            for k, v in self.data.items()
-            if k not in _EXP_META and not k.startswith("ard_") and hasattr(v, "tolist")
-        }
-        if exp_rows:
-            n = max(len(v) for v in exp_rows.values())
-            padded = {k: v + [None] * (n - len(v)) for k, v in exp_rows.items()}
-            pl.DataFrame(padded).write_csv(path / f"{stem}_exp.csv")
+        # --- experimental CSV (tidy: one row per data point) ---
+        self.residuals().write_csv(path / f"{stem}_exp.csv")
 
         # --- helpers ---
         def _write_model(curves: dict, suffix: str = "model") -> None:
@@ -319,6 +524,38 @@ class BinaryFitResult:
         elif _tokens == {"vlle"}:
             _write_model(_vlle_curves(self, pressure_unit))
 
+        elif _tokens == {"henry"}:
+            T_data = self.data["T"].astype(float)
+            T_min, T_max = float(T_data.min()), float(T_data.max())
+            T_pad = max((T_max - T_min) * 0.05, 2.0)
+            T_grid = np.linspace(T_min - T_pad, T_max + T_pad, 120)
+            use_molfrac = self._henry_unit == "molfrac"
+            eos_solvent = None
+            if use_molfrac and self._solvent_record is not None:
+                try:
+                    eos_solvent = feos.EquationOfState.pcsaft(
+                        feos.Parameters.new_pure(self._solvent_record)
+                    )
+                except Exception:
+                    pass
+            H_model = []
+            for T_i in T_grid:
+                try:
+                    kij = _kij_at_T(self.kij_coeffs, float(T_i), self.kij_t_ref)
+                    from fit_pcsaft._binary._utils import _build_binary_eos as _beos
+                    eos_i = _beos(self._record1, self._record2, kij)
+                    H_pa = feos.State.henrys_law_constant_binary(
+                        eos_i, T_i * si.KELVIN
+                    ) / si.PASCAL
+                    if use_molfrac and eos_solvent is not None:
+                        vp = feos.PhaseEquilibrium.vapor_pressure(eos_solvent, T_i * si.KELVIN)
+                        H_model.append(H_pa / (vp[0] / si.PASCAL))
+                    else:
+                        H_model.append(H_pa / (si.MEGA * si.PASCAL / si.PASCAL))
+                except Exception:
+                    H_model.append(float("nan"))
+            _write_model({"T": T_grid.tolist(), "H": H_model})
+
         elif "vle" in _tokens:
             # VLE+LLE (and variants)
             vle_c = _vle_curves(self.eos, pressure_unit)
@@ -338,6 +575,29 @@ class BinaryFitResult:
 
         elif "lle" in _tokens:
             _write_model(_lle_curves(self))
+
+        # --- pointwise k_ij vs T CSV ---
+        if "T_kij" in self.data and "kij_pointwise" in self.data:
+            T_kij = self.data["T_kij"].tolist()
+            kij_pw = self.data["kij_pointwise"].tolist()
+            kij_poly = [float(_kij_at_T(self.kij_coeffs, T, self.kij_t_ref)) for T in T_kij]
+            ard_pw = (
+                self.data["ard_pointwise"].tolist()
+                if "ard_pointwise" in self.data
+                else [float("nan")] * len(T_kij)
+            )
+            source = (
+                self.data["source"].tolist()
+                if "source" in self.data
+                else [None] * len(T_kij)
+            )
+            pl.DataFrame({
+                "T_kij": T_kij,
+                "kij_pointwise": kij_pw,
+                "kij_poly": kij_poly,
+                "source": source,
+                "ard_pct": ard_pw,
+            }).write_csv(path / f"{stem}_kij_vs_T.csv")
 
     def plot(self, path=None, temperature_unit=None, pressure_unit=None, henry_unit=None, plot_unfitted: bool = False):
         """Plot binary equilibrium diagram with experimental data overlay.

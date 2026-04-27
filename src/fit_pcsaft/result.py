@@ -237,8 +237,10 @@ class FitResult:
 
         Writes two files into *path* (created if it doesn't exist):
 
-        * ``{name}_exp.csv``   — experimental data used for fitting
-        * ``{name}_model.csv`` — phase envelope from PC-SAFT
+        * ``{name}_exp.csv``   — per-point residuals (long/tidy):
+          ``property, T, exp, model, rd_pct, ard_pct``
+        * ``{name}_model.csv`` — smooth phase envelope:
+          ``T, inv_T, p_sat, ln_psat, rho_liq, rho_vap, hvap``
 
         Parameters
         ----------
@@ -253,34 +255,14 @@ class FitResult:
         n_points : int, optional
             Number of points along the phase envelope. Default: 501.
         """
-        import polars as pl
-
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         name = self.input_name or self.compound.identifier.name
 
-        # --- experimental CSV ---
-        n_psat = len(self.data.T_psat)
-        n_rho  = len(self.data.T_rho)
-        n_hvap = len(self.data.T_hvap)
-        n_exp  = max(n_psat, n_rho, n_hvap)
-
-        def _pad(arr, n):
-            if len(arr) == n:
-                return arr.tolist()
-            return arr.tolist() + [None] * (n - len(arr))
-
-        exp_data = {
-            "T_psat": _pad(self.data.T_psat, n_exp),
-            "p_psat": _pad(self.data.p_psat, n_exp),
-            "T_rho":  _pad(self.data.T_rho,  n_exp),
-            "rho":    _pad(self.data.rho,     n_exp),
-        }
-        if n_hvap > 0:
-            exp_data["T_hvap"] = _pad(self.data.T_hvap, n_exp)
-            exp_data["hvap"]   = _pad(self.data.hvap,   n_exp)
-
-        pl.DataFrame(exp_data).write_csv(path / f"{name}_exp.csv")
+        # --- experimental CSV (long/tidy: one row per data point) ---
+        _compute_per_point_rd(self.eos, self.data, self.units).write_csv(
+            path / f"{name}_exp.csv"
+        )
 
         # --- model curve CSV ---
         _model_curve_df(
@@ -468,8 +450,10 @@ class EvalResult:
 
         Writes two files into *path* (created if it doesn't exist):
 
-        * ``{name}_exp.csv``   — experimental data used for evaluation
-        * ``{name}_model.csv`` — phase envelope from PC-SAFT
+        * ``{name}_exp.csv``   — per-point residuals (long/tidy):
+          ``property, T, exp, model, rd_pct, ard_pct``
+        * ``{name}_model.csv`` — smooth phase envelope:
+          ``T, inv_T, p_sat, ln_psat, rho_liq, rho_vap, hvap``
 
         Parameters
         ----------
@@ -484,33 +468,14 @@ class EvalResult:
         n_points : int, optional
             Number of points along the phase envelope. Default: 501.
         """
-        import polars as pl
-
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         name = self.input_name or self.compound.identifier.name
 
-        n_psat = len(self.data.T_psat)
-        n_rho  = len(self.data.T_rho)
-        n_hvap = len(self.data.T_hvap)
-        n_exp  = max(n_psat, n_rho, n_hvap)
-
-        def _pad(arr, n):
-            if len(arr) == n:
-                return arr.tolist()
-            return arr.tolist() + [None] * (n - len(arr))
-
-        exp_data = {
-            "T_psat": _pad(self.data.T_psat, n_exp),
-            "p_psat": _pad(self.data.p_psat, n_exp),
-            "T_rho":  _pad(self.data.T_rho,  n_exp),
-            "rho":    _pad(self.data.rho,     n_exp),
-        }
-        if n_hvap > 0:
-            exp_data["T_hvap"] = _pad(self.data.T_hvap, n_exp)
-            exp_data["hvap"]   = _pad(self.data.hvap,   n_exp)
-
-        pl.DataFrame(exp_data).write_csv(path / f"{name}_exp.csv")
+        # --- experimental CSV (long/tidy: one row per data point) ---
+        _compute_per_point_rd(self.eos, self.data, self.units).write_csv(
+            path / f"{name}_exp.csv"
+        )
 
         _model_curve_df(
             self.eos, self.data, self.units, T_min, T_max, n_points
@@ -622,6 +587,7 @@ def _model_curve_df(eos, data, units, T_min, T_max, n_points):
     tu = units.temperature
     pu = units.pressure
     du = units.density
+    eu = units.enthalpy
 
     def _bounds(arr, override_min, override_max):
         """Return (lo, hi) in data units, or (None, None) if dataset empty."""
@@ -649,12 +615,20 @@ def _model_curve_df(eos, data, units, T_min, T_max, n_points):
         return [v if lo <= t <= hi else None for t, v in zip(T_col, col_vals)]
 
     import math
-    p_sat_kpa    = (phase_diagram.vapor.pressure      / pu).tolist()
+    p_sat_vals   = (phase_diagram.vapor.pressure      / pu).tolist()
     rho_liq_vals = (phase_diagram.liquid.mass_density / du).tolist()
     rho_vap_vals = (phase_diagram.vapor.mass_density  / du).tolist()
+    try:
+        hvap_arr = (
+            phase_diagram.vapor.molar_enthalpy(feos.Contributions.Residual)
+            - phase_diagram.liquid.molar_enthalpy(feos.Contributions.Residual)
+        ) / eu
+        hvap_vals = hvap_arr.tolist()
+    except Exception:
+        hvap_vals = [None] * len(T_col)
 
     masked_ln_psat = _mask(
-        [math.log(v) if v is not None and v > 0 else None for v in p_sat_kpa],
+        [math.log(v) if v is not None and v > 0 else None for v in p_sat_vals],
         psat_lo, psat_hi,
     )
     masked_inv_T = _mask(
@@ -666,9 +640,11 @@ def _model_curve_df(eos, data, units, T_min, T_max, n_points):
         pl.DataFrame({
             "T":        T_col,
             "inv_T":    masked_inv_T,
+            "p_sat":    _mask(p_sat_vals, psat_lo, psat_hi),
             "ln_psat":  masked_ln_psat,
             "rho_liq":  _mask(rho_liq_vals, rho_lo, rho_hi),
             "rho_vap":  _mask(rho_vap_vals, rho_lo, rho_hi),
+            "hvap":     _mask(hvap_vals, hvap_lo, hvap_hi),
         })
         .filter(pl.col("T") <= overall_max)
     )

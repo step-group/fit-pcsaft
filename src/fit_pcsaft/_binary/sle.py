@@ -21,6 +21,49 @@ _R = si.RGAS / (si.JOULE / (si.MOL * si.KELVIN))
 _N_KIJ_SCAN = 13
 
 
+def _liquid_state(eos, T_K: float, x1: float):
+    import feos
+
+    return feos.State(
+        eos,
+        temperature=T_K * si.KELVIN,
+        pressure=1.0 * si.BAR,
+        molefracs=np.array([x1, 1.0 - x1]),
+        density_initialization="liquid",
+    )
+
+
+def _predict_x1_for(eos, T_K: float, x1_start: float, si_idx: int, Tm: float, dHfus: float) -> float:
+    """Solve Schröder-van Laar fixed-point iteration for one solid component."""
+    rhs = -(dHfus / _R) * (1.0 / T_K - 1.0 / Tm)
+    if si_idx == 0:
+        x_iter = float(np.clip(x1_start, 1e-6, 1.0 - 1e-6))
+        for _ in range(50):
+            try:
+                liq = _liquid_state(eos, T_K, x_iter)
+                ln_gamma = float(liq.ln_symmetric_activity_coefficient()[0])
+            except Exception:
+                return float("nan")
+            x_new = float(np.clip(np.exp(rhs - ln_gamma), 1e-9, 1.0 - 1e-9))
+            if abs(x_new - x_iter) < 1e-9:
+                return x_new
+            x_iter = x_new
+        return x_iter
+    else:
+        x_iter = float(np.clip(1.0 - x1_start, 1e-6, 1.0 - 1e-6))
+        for _ in range(50):
+            try:
+                liq = _liquid_state(eos, T_K, 1.0 - x_iter)
+                ln_gamma = float(liq.ln_symmetric_activity_coefficient()[1])
+            except Exception:
+                return float("nan")
+            x_new = float(np.clip(np.exp(rhs - ln_gamma), 1e-9, 1.0 - 1e-9))
+            if abs(x_new - x_iter) < 1e-9:
+                return 1.0 - x_new
+            x_iter = x_new
+        return 1.0 - x_iter
+
+
 def fit_kij_sle(
     id1: str,
     id2: str,
@@ -121,36 +164,6 @@ def fit_kij_sle(
     dHfus2_J = float(delta_hfus2 / (si.JOULE / si.MOL)) if eutectic else float("nan")
     solid_index2 = 1 - solid_index  # the other solid
     t_scale = float(temperature_unit / si.KELVIN)
-
-    def _predict_x1_for(eos, T_K, x1_start, si_idx, Tm, dHfus):
-        """Solve Schröder-van Laar for a given solid component index."""
-        rhs = -(dHfus / _R) * (1.0 / T_K - 1.0 / Tm)
-        if si_idx == 0:
-            x_iter = float(np.clip(x1_start, 1e-6, 1.0 - 1e-6))
-            for _ in range(50):
-                try:
-                    liq = _liquid_state(eos, T_K, x_iter)
-                    ln_gamma = float(liq.ln_symmetric_activity_coefficient()[0])
-                except Exception:
-                    return float("nan")
-                x_new = float(np.clip(np.exp(rhs - ln_gamma), 1e-9, 1.0 - 1e-9))
-                if abs(x_new - x_iter) < 1e-9:
-                    return x_new
-                x_iter = x_new
-            return x_iter
-        else:
-            x_iter = float(np.clip(1.0 - x1_start, 1e-6, 1.0 - 1e-6))
-            for _ in range(50):
-                try:
-                    liq = _liquid_state(eos, T_K, 1.0 - x_iter)
-                    ln_gamma = float(liq.ln_symmetric_activity_coefficient()[1])
-                except Exception:
-                    return float("nan")
-                x_new = float(np.clip(np.exp(rhs - ln_gamma), 1e-9, 1.0 - 1e-9))
-                if abs(x_new - x_iter) < 1e-9:
-                    return 1.0 - x_new
-                x_iter = x_new
-            return 1.0 - x_iter
 
     def _predict_x1(eos, T_K: float, x1_start: float) -> float:
         return _predict_x1_for(eos, T_K, x1_start, solid_index, Tm_K, dHfus_J)
@@ -277,6 +290,8 @@ def fit_kij_sle(
             t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
             t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
             data_full=data_full,
+            _record1=record1,
+            _record2=record2,
         )
 
     # --- Global polynomial fit (default) -------------------------------------
@@ -334,16 +349,6 @@ def fit_kij_sle(
         t_filter_min_K=float(t_min / si.KELVIN) if t_min is not None else float("nan"),
         t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
         data_full=data_full,
-    )
-
-
-def _liquid_state(eos, T_K: float, x1: float):
-    import feos
-
-    return feos.State(
-        eos,
-        temperature=T_K * si.KELVIN,
-        pressure=1.0 * si.BAR,
-        molefracs=np.array([x1, 1.0 - x1]),
-        density_initialization="liquid",
+        _record1=record1,
+        _record2=record2,
     )
