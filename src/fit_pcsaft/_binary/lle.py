@@ -46,6 +46,7 @@ def fit_kij_lle(
     require_both_phases: bool = True,
     kij_per_point: bool = False,
     induced_assoc: bool = False,
+    ucst_target: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE tieline data.
 
@@ -90,6 +91,11 @@ def fit_kij_lle(
         self-associating component (with epsilon_k_ab > 0). The non-associating
         component is assigned epsilon_k_ab = 0 and kappa_ab copied from the
         self-associating component, with na = nb = 1 (2B scheme).
+    ucst_target : bool
+        If True, fit k_ij using only the highest temperature data point (closest
+        to the UCST). Useful when the primary goal is to reproduce the critical
+        solution temperature rather than the full phase envelope shape. The warm-
+        start anchor is still computed from the lowest available temperature.
 
     Returns
     -------
@@ -134,12 +140,17 @@ def fit_kij_lle(
         aggregated = [(T, xi, xii) for T, xi, xii in aggregated
                       if xi is not None and xii is not None]
 
+    T_anchor_K = min(t for t, _, __ in aggregated)  # lowest T — warm-start seed, computed before ucst filter
+
+    if ucst_target:
+        T_ucst = max(t for t, _, __ in aggregated)
+        aggregated = [(T, xi, xii) for T, xi, xii in aggregated if abs(T - T_ucst) < 1e-3]
+
     T_fitted = []
     kij_fitted = []
     cost_fitted = []
     fitted_point_meta = []  # (exp_I, exp_II, feeds) for post-poly ARD re-evaluation
     total_nfev = 0
-    T_anchor_K = min(t for t, _, __ in aggregated)  # lowest T — always converges, used as warm-start seed
 
     for T_K, exp_I, exp_II in aggregated:
         feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS

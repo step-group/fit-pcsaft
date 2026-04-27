@@ -109,6 +109,7 @@ class BinaryKijFitter:
         t_min=None,
         t_max=None,
         require_both_phases: bool = True,
+        ucst_target: bool = False,
     ) -> "BinaryKijFitter":
         """Register an LLE tie-line dataset."""
         self._sources.append(
@@ -120,6 +121,7 @@ class BinaryKijFitter:
                 t_min=t_min,
                 t_max=t_max,
                 require_both_phases=require_both_phases,
+                ucst_target=ucst_target,
             )
         )
         return self
@@ -253,6 +255,7 @@ class BinaryKijFitter:
                     require_both_phases=src["require_both_phases"],
                     kij_per_point=True,
                     induced_assoc=self.induced_assoc,
+                    ucst_target=src["ucst_target"],
                 )
                 for k in ("T", "x1_I", "x1_II"):
                     if k in res.data:
