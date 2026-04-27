@@ -152,6 +152,7 @@ class ViscosityFitResult:
         rows = []
         for T, P, eta_e, phase in zip(self._T_K, self._P_MPa, self._eta_exp_Pa_s, phases):
             eta_p = float("nan")
+            P_used = P  # will be overwritten with the actual pressure when no_P_col
             if self.eos is not None:
                 try:
                     is_liquid = isinstance(phase, str) and phase.lower() == "liquid"
@@ -163,9 +164,11 @@ class ViscosityFitResult:
                             if not P_sat:
                                 raise ValueError("no P_sat")
                             kw["pressure"] = P_sat[0]
+                            P_used = float(P_sat[0] / (si.MEGA * si.PASCAL))
                             kw["density_initialization"] = "liquid"
                         else:
                             kw["pressure"] = 0.1 * si.MEGA * si.PASCAL
+                            P_used = 0.1
                             if is_vapor:
                                 kw["density_initialization"] = "vapor"
                     else:
@@ -180,7 +183,7 @@ class ViscosityFitResult:
             ard = abs(rd) if np.isfinite(rd) else float("nan")
             rows.append({
                 "property": "viscosity",
-                "T": T, "P": P,
+                "T": T, "P": P_used,
                 "exp": eta_e, "model": eta_p,
                 "rd_pct": rd, "ard_pct": ard,
             })
