@@ -1507,7 +1507,47 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
     _draw_locus_and_scatter(ax_T, T_exp, T_loc,      "$T$ / K")
     _draw_locus_and_scatter(ax_P, P_exp, P_loc_plot, f"$p$ / {p_lbl}")
 
-    # LLE binodal on the T-x panel (when LLE data is present)
+    # --- VLE continuation above the heteroazeotrope (T-x panel, median pressure) ---
+    if result._record1 is not None and result._record2 is not None:
+        P_ref_pa  = float(np.nanmedian(P_exp)) * p_scale   # Pa
+        P_ref_obj = P_ref_pa * si.PASCAL
+        T_ref_init = float(np.nanmedian(T_exp))             # K
+        ha_ref = _find_heteroazeotrope(
+            result, P_ref_obj, x_I_init, x_II_init, T_ref_init
+        )
+        if ha_ref is not None:
+            T_het, x1_I_het, x1_II_het, _y1_het = ha_ref
+            xb1, Tb1, yd1 = _vle_branch_isobaric(
+                result, P_ref_obj, x1_I_het, 1e-5, T_het, npoints=80
+            )
+            xb2, Tb2, yd2 = _vle_branch_isobaric(
+                result, P_ref_obj, x1_II_het, 1.0 - 1e-5, T_het, npoints=80
+            )
+
+            def _above_het_vlle(xs, Ts, ys=None):
+                mask = [t >= T_het for t in Ts]
+                xf = [x for x, ok in zip(xs, mask) if ok]
+                Tf = [t for t, ok in zip(Ts, mask) if ok]
+                return (xf, Tf, [y for y, ok in zip(ys, mask) if ok]) if ys else (xf, Tf)
+
+            xb1, Tb1, yd1 = _above_het_vlle(xb1, Tb1, yd1)
+            xb2, Tb2, yd2 = _above_het_vlle(xb2, Tb2, yd2)
+
+            _p_ref_lbl = f"{P_ref_pa / p_scale:.1f} {p_lbl}"
+            if xb1:
+                ax_T.plot(xb1, Tb1, color=_EXP_COLOR_1, linestyle="-",
+                          label=f"VLE bubble ({_p_ref_lbl})")
+            if xb2:
+                ax_T.plot(xb2, Tb2, color=_EXP_COLOR_1, linestyle="-")
+            if yd1:
+                ax_T.plot(yd1, Tb1[:len(yd1)], color=_EXP_COLOR_2, linestyle="-",
+                          label=f"VLE dew ({_p_ref_lbl})")
+            if yd2:
+                ax_T.plot(yd2, Tb2[:len(yd2)], color=_EXP_COLOR_2, linestyle="-")
+            ax_T.hlines(T_het, x1_I_het, x1_II_het, colors=_GRAY, linewidth=1.2,
+                        linestyle="-", label=f"3-phase ({T_het:.1f} K, {_p_ref_lbl})")
+
+    # --- LLE binodal on the T-x panel (when LLE data is present) ---------------
     has_lle = "lle_T" in data
     if has_lle and result._record1 is not None and result._record2 is not None:
         lle_T = data["lle_T"].astype(float) * t_scale
@@ -1517,10 +1557,6 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
                    + (np.nanmean(data["lle_x1_II"]) if "lle_x1_II" in data else 0.90)),
             0.05, 0.95,
         ))
-        # Upper T for the binodal: use the LLE data max (not VLLE temps), plus
-        # a small pad so the UCST region is visible.  _lle_curve_kij_T extends
-        # 500 K past its T_max argument to find the UCST naturally, so we clip
-        # the returned curve to lle_T.max() + T_pad to avoid bogus extrapolation.
         _lle_T_max = float(lle_T.max())
         T_c, x_I_c, x_II_c = _lle_curve_kij_T(
             result, z1,
@@ -1528,8 +1564,6 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
             _lle_T_max + T_pad,
             npoints=301,
         )
-        # Clip to the LLE data range + small margin so we never plot hundreds of
-        # Kelvin of unconstrained extrapolation.
         _T_max_show = _lle_T_max + T_pad
         if len(T_c) > 0:
             _T_c = np.asarray(T_c)
@@ -1537,26 +1571,45 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
             T_c    = _T_c[_keep]
             x_I_c  = np.asarray(x_I_c)[_keep]
             x_II_c = np.asarray(x_II_c)[_keep]
+
+        # Match LLE branch colors to the VLLE locus phase convention.
+        # _lle_curve_kij_T returns x_I_c = min-x1 branch, x_II_c = max-x1 branch.
+        # xI_loc follows the experimental phase-I label, which may be the large-x1 branch.
+        # Swap so that "phase I" color always refers to the same physical phase.
+        if valid.any() and len(x_I_c) > 0:
+            _mean_vlle_I = float(np.nanmean(xI_loc[valid]))
+            _swap_lle = (
+                abs(float(np.nanmean(x_II_c)) - _mean_vlle_I)
+                < abs(float(np.nanmean(x_I_c)) - _mean_vlle_I)
+            )
+        else:
+            _swap_lle = False
+        _lle_I_curve = x_II_c if _swap_lle else x_I_c
+        _lle_II_curve = x_I_c if _swap_lle else x_II_c
+        _lle_I_key    = "lle_x1_II" if _swap_lle else "lle_x1_I"
+        _lle_II_key   = "lle_x1_I"  if _swap_lle else "lle_x1_II"
+
         if len(T_c) > 0 and np.max(np.abs(x_I_c - x_II_c)) > 1e-4:
-            ax_T.plot(x_I_c, T_c, color=_EXP_COLOR_1, linestyle="--",
+            ax_T.plot(_lle_I_curve, T_c, color=_EXP_COLOR_1, linestyle="--",
                       label="PC-SAFT LLE (phase I)", alpha=0.7)
-            ax_T.plot(x_II_c, T_c, color=_EXP_COLOR_2, linestyle="--",
+            ax_T.plot(_lle_II_curve, T_c, color=_EXP_COLOR_2, linestyle="--",
                       label="PC-SAFT LLE (phase II)", alpha=0.7)
-        if "lle_x1_I" in data:
-            vals = data["lle_x1_I"].astype(float)
+        if _lle_I_key in data:
+            vals = data[_lle_I_key].astype(float)
             valid_lle = ~np.isnan(vals)
             ax_T.scatter(vals[valid_lle], lle_T[valid_lle],
                          s=30, marker="s", facecolors="white",
                          edgecolors=_EXP_COLOR_1, linewidths=1.0, zorder=4,
                          label="Exp. LLE phase I")
-        if "lle_x1_II" in data:
-            vals = data["lle_x1_II"].astype(float)
+        if _lle_II_key in data:
+            vals = data[_lle_II_key].astype(float)
             valid_lle = ~np.isnan(vals)
             ax_T.scatter(vals[valid_lle], lle_T[valid_lle],
                          s=30, marker="D", facecolors="white",
                          edgecolors=_EXP_COLOR_2, linewidths=1.0, zorder=4,
                          label="Exp. LLE phase II")
-        ax_T.legend(fontsize="x-small")
+
+    ax_T.legend(fontsize="x-small", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
 
     fig.suptitle(f"VLLE locus: {result.id1} + {result.id2}", y=1.01)
     plt.tight_layout(rect=[0, 0.15, 1, 1])
