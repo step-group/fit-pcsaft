@@ -1,20 +1,6 @@
 [
   {
     "identifier": {
-      "cas": "74-98-6",
-      "name": "propane",
-      "iupac_name": "propane",
-      "smiles": "CCC",
-      "inchi": "InChI=1S/C3H8/c1-3-2/h3H2,1-2H3",
-      "formula": "C3H8"
-    },
-    "molarweight": 44.1,
-    "m": 2.0088389081946616,
-    "sigma": 3.730476280935515,
-    "epsilon_k": 210.7128619289104
-  },
-  {
-    "identifier": {
       "cas": "67-64-1",
       "name": "acetone",
       "iupac_name": "propan-2-one",
@@ -122,5 +108,19 @@
     "sigma": 3.5148490581487746,
     "epsilon_k": 260.64827285879034,
     "q": 5.5
+  },
+  {
+    "identifier": {
+      "cas": "74-98-6",
+      "name": "propane",
+      "iupac_name": "propane",
+      "smiles": "CCC",
+      "inchi": "InChI=1S/C3H8/c1-3-2/h3H2,1-2H3",
+      "formula": "C3H8"
+    },
+    "molarweight": 44.1,
+    "m": 2.0088389081946616,
+    "sigma": 3.730476280935515,
+    "epsilon_k": 210.7128619289104
   }
 ]

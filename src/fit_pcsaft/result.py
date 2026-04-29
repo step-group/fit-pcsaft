@@ -9,52 +9,94 @@ import numpy as np
 from fit_pcsaft._types import Compound, ModelSpec, PureData, Units
 
 
-def _compute_per_point_rd(eos, data, units):
-    """Compute per-point signed RD% and ARD% for all experimental datasets."""
-    import polars as pl
+def _predict_per_property(eos, data, units):
+    """Return (model_arr, exp_arr) per property, NaN where feos raises.
 
+    Returns dict keyed by "psat", "rho", "hvap". Each value is a tuple
+    (model: np.ndarray, exp: np.ndarray) of equal length. Empty datasets
+    produce zero-length arrays. Never raises.
+    """
     tu = units.temperature
     pu = units.pressure
     du = units.density
     eu = units.enthalpy
 
+    def _psat_model(T_vals, p_exp_vals):
+        model = np.full(len(T_vals), np.nan)
+        for i, T in enumerate(T_vals):
+            try:
+                model[i] = float(feos.PhaseEquilibrium.vapor_pressure(eos, float(T) * tu)[0] / pu)
+            except Exception:
+                pass
+        return model, np.asarray(p_exp_vals, dtype=float)
+
+    def _rho_model(T_vals, rho_exp_vals):
+        model = np.full(len(T_vals), np.nan)
+        for i, T in enumerate(T_vals):
+            try:
+                model[i] = float(
+                    feos.PhaseEquilibrium.pure(eos, float(T) * tu).liquid.mass_density() / du
+                )
+            except Exception:
+                pass
+        return model, np.asarray(rho_exp_vals, dtype=float)
+
+    def _hvap_model(T_vals, hvap_exp_vals):
+        model = np.full(len(T_vals), np.nan)
+        for i, T in enumerate(T_vals):
+            try:
+                vle = feos.PhaseEquilibrium.pure(eos, float(T) * tu)
+                model[i] = float(
+                    (vle.vapor.molar_enthalpy(feos.Contributions.Residual)
+                     - vle.liquid.molar_enthalpy(feos.Contributions.Residual)) / eu
+                )
+            except Exception:
+                pass
+        return model, np.asarray(hvap_exp_vals, dtype=float)
+
+    return {
+        "psat": _psat_model(data.T_psat, data.p_psat),
+        "rho":  _rho_model(data.T_rho, data.rho),
+        "hvap": _hvap_model(data.T_hvap, data.hvap),
+    }
+
+
+def _compute_pure_metrics(eos, data, units):
+    """Compute per-property Metrics from an EOS + experimental data.
+
+    Returns dict keyed by "psat", "rho", "hvap". Properties with no input rows
+    return Metrics.empty(0).
+    """
+    from fit_pcsaft._metrics import compute_metrics_from_arrays
+    preds = _predict_per_property(eos, data, units)
+    return {
+        prop: compute_metrics_from_arrays(model, exp, n_total=len(exp))
+        for prop, (model, exp) in preds.items()
+    }
+
+
+def _compute_per_point_rd(eos, data, units):
+    """Compute per-point signed RD% and ARD% for all experimental datasets."""
+    import polars as pl
+
+    preds = _predict_per_property(eos, data, units)
+
     rows = []
-
-    for T_val, p_exp in zip(data.T_psat, data.p_psat):
-        try:
-            p_model = float(feos.PhaseEquilibrium.vapor_pressure(eos, float(T_val) * tu)[0] / pu)
-            rd = (p_model - float(p_exp)) / float(p_exp) * 100.0
-        except Exception:
-            p_model = float("nan")
-            rd = float("nan")
-        rows.append({"property": "psat", "T": float(T_val), "exp": float(p_exp),
-                     "model": p_model, "rd_pct": rd, "ard_pct": abs(rd)})
-
-    for T_val, rho_exp in zip(data.T_rho, data.rho):
-        try:
-            rho_model = float(
-                feos.PhaseEquilibrium.pure(eos, float(T_val) * tu).liquid.mass_density() / du
-            )
-            rd = (rho_model - float(rho_exp)) / float(rho_exp) * 100.0
-        except Exception:
-            rho_model = float("nan")
-            rd = float("nan")
-        rows.append({"property": "rho", "T": float(T_val), "exp": float(rho_exp),
-                     "model": rho_model, "rd_pct": rd, "ard_pct": abs(rd)})
-
-    for T_val, hvap_exp in zip(data.T_hvap, data.hvap):
-        try:
-            vle = feos.PhaseEquilibrium.pure(eos, float(T_val) * tu)
-            hvap_model = float(
-                (vle.vapor.molar_enthalpy(feos.Contributions.Residual)
-                 - vle.liquid.molar_enthalpy(feos.Contributions.Residual)) / eu
-            )
-            rd = (hvap_model - float(hvap_exp)) / float(hvap_exp) * 100.0
-        except Exception:
-            hvap_model = float("nan")
-            rd = float("nan")
-        rows.append({"property": "hvap", "T": float(T_val), "exp": float(hvap_exp),
-                     "model": hvap_model, "rd_pct": rd, "ard_pct": abs(rd)})
+    prop_labels = {"psat": (data.T_psat, data.p_psat),
+                   "rho":  (data.T_rho,  data.rho),
+                   "hvap": (data.T_hvap, data.hvap)}
+    for prop, (model_arr, exp_arr) in preds.items():
+        T_arr = prop_labels[prop][0]
+        for T_val, exp_val, model_val in zip(T_arr, exp_arr, model_arr):
+            rd = (float(model_val) - float(exp_val)) / float(exp_val) * 100.0 if np.isfinite(model_val) else float("nan")
+            rows.append({
+                "property": prop,
+                "T": float(T_val),
+                "exp": float(exp_val),
+                "model": float(model_val),
+                "rd_pct": rd,
+                "ard_pct": abs(rd) if np.isfinite(rd) else float("nan"),
+            })
 
     if not rows:
         return pl.DataFrame(schema={
@@ -88,14 +130,9 @@ class FitResult:
         units : Units
             Units used for experimental data
 
-        ard_psat : float
-            Average relative deviation for vapor pressure (%)
-
-        ard_rho : float
-            Average relative deviation for liquid density (%)
-
-        ard_hvap : float
-            Average relative deviation for enthalpy of vaporization (%). nan if no hvap data.
+        metrics : dict
+            Per-property Metrics panels keyed by "psat", "rho", "hvap".
+            Access via result.metrics["psat"].aard_pct, .rmsd_pct, .r2, etc.
 
         scipy_result : object
             Raw scipy OptimizeResult from least_squares
@@ -113,12 +150,35 @@ class FitResult:
     compound: Compound
     spec: ModelSpec
     units: Units
-    ard_psat: float
-    ard_rho: float
-    ard_hvap: float
+    metrics: dict
     scipy_result: object
     time_elapsed: float
     input_name: str = ""
+
+    # --- backwards-compat shims -------------------------------------------
+    @property
+    def ard_psat(self) -> float:
+        return self.metrics["psat"].aard_pct
+
+    @property
+    def ard_rho(self) -> float:
+        return self.metrics["rho"].aard_pct
+
+    @property
+    def ard_hvap(self) -> float:
+        return self.metrics["hvap"].aard_pct
+
+    @property
+    def metrics_psat(self):
+        return self.metrics["psat"]
+
+    @property
+    def metrics_rho(self):
+        return self.metrics["rho"]
+
+    @property
+    def metrics_hvap(self):
+        return self.metrics["hvap"]
 
     def to_json(self, path: "Path | str") -> None:
         """Append or update fitted parameters in a feos-compatible JSON parameter file.
@@ -340,6 +400,20 @@ class FitResult:
         from fit_pcsaft._plot import _plot_residuals_pure
         return _plot_residuals_pure(self, path=path)
 
+    def metrics_table(self):
+        """Per-property metrics as a tidy polars DataFrame (one row per property)."""
+        import polars as pl
+        rows = []
+        for prop in ("psat", "rho", "hvap"):
+            m = self.metrics[prop]
+            rows.append({
+                "property": prop, "n": m.n, "n_total": m.n_total,
+                "aard_pct": m.aard_pct, "rmsd_pct": m.rmsd_pct,
+                "bias_pct": m.bias_pct, "mard_pct": m.mard_pct,
+                "mae": m.mae, "rmsd": m.rmsd, "r2": m.r2,
+            })
+        return pl.DataFrame(rows)
+
     def __str__(self) -> str:
         """Pretty-print fitted parameters and quality metrics."""
         mu = self.params.get("mu", self.spec.mu or 0.0)
@@ -373,20 +447,13 @@ class FitResult:
             lines.append(f"\nAssociation scheme:        {scheme} (na={na}, nb={nb})")
 
         rms = np.sqrt(2.0 * self.scipy_result.cost / len(self.scipy_result.fun))
-        ard_total = sum(
-            v for v in [self.ard_psat, self.ard_rho, self.ard_hvap] if not np.isnan(v)
-        )
-        quality_lines = [
-            "",
-            "Fitting quality:",
-            f"  ARD vapor pressure:      {self.ard_psat:.2f}%  (n={n_psat})",
-            f"  ARD liquid density:      {self.ard_rho:.2f}%  (n={n_rho})",
-        ]
-        if n_hvap > 0:
-            quality_lines.append(
-                f"  ARD enthalpy of vap.:    {self.ard_hvap:.2f}%  (n={n_hvap})"
-            )
-        quality_lines.append(f"  ARD total:               {ard_total:.2f}%")
+        quality_lines = ["", "Fitting quality:"]
+        for prop, label in [("psat", "Vapor pressure   "),
+                            ("rho",  "Liquid density   "),
+                            ("hvap", "Hvap             ")]:
+            m = self.metrics[prop]
+            if m.n_total > 0:
+                quality_lines.append(f"  {label} {m}")
         quality_lines.extend(
             [
                 f"  RMS weighted resid.:     {rms:.4f}",
@@ -418,12 +485,8 @@ class EvalResult:
             Model specification (mu, q, na, nb)
         units : Units
             Units for experimental data
-        ard_psat : float
-            Average relative deviation for vapor pressure (%)
-        ard_rho : float
-            Average relative deviation for liquid density (%)
-        ard_hvap : float
-            Average relative deviation for enthalpy of vaporization (%). nan if no data.
+        metrics : dict
+            Per-property Metrics panels keyed by "psat", "rho", "hvap".
         input_name : str
             Compound name as supplied by the user
     """
@@ -434,10 +497,33 @@ class EvalResult:
     compound: Compound
     spec: ModelSpec
     units: Units
-    ard_psat: float
-    ard_rho: float
-    ard_hvap: float
+    metrics: dict
     input_name: str = ""
+
+    # --- backwards-compat shims -------------------------------------------
+    @property
+    def ard_psat(self) -> float:
+        return self.metrics["psat"].aard_pct
+
+    @property
+    def ard_rho(self) -> float:
+        return self.metrics["rho"].aard_pct
+
+    @property
+    def ard_hvap(self) -> float:
+        return self.metrics["hvap"].aard_pct
+
+    @property
+    def metrics_psat(self):
+        return self.metrics["psat"]
+
+    @property
+    def metrics_rho(self):
+        return self.metrics["rho"]
+
+    @property
+    def metrics_hvap(self):
+        return self.metrics["hvap"]
 
     def to_csv(
         self,
@@ -528,6 +614,20 @@ class EvalResult:
         from fit_pcsaft._plot import _plot_residuals_pure
         return _plot_residuals_pure(self, path=path)
 
+    def metrics_table(self):
+        """Per-property metrics as a tidy polars DataFrame (one row per property)."""
+        import polars as pl
+        rows = []
+        for prop in ("psat", "rho", "hvap"):
+            m = self.metrics[prop]
+            rows.append({
+                "property": prop, "n": m.n, "n_total": m.n_total,
+                "aard_pct": m.aard_pct, "rmsd_pct": m.rmsd_pct,
+                "bias_pct": m.bias_pct, "mard_pct": m.mard_pct,
+                "mae": m.mae, "rmsd": m.rmsd, "r2": m.r2,
+            })
+        return pl.DataFrame(rows)
+
     def __str__(self) -> str:
         mu = self.params.get("mu", self.spec.mu or 0.0)
         q = self.spec.q
@@ -557,18 +657,13 @@ class EvalResult:
             scheme = _assoc_scheme_name(na, nb)
             lines.append(f"\nAssociation scheme:        {scheme} (na={na}, nb={nb})")
 
-        ard_total = sum(
-            v for v in [self.ard_psat, self.ard_rho, self.ard_hvap] if not np.isnan(v)
-        )
-        lines += [
-            "",
-            "ARD% vs experimental data:",
-            f"  ARD vapor pressure:      {self.ard_psat:.2f}%  (n={n_psat})",
-            f"  ARD liquid density:      {self.ard_rho:.2f}%  (n={n_rho})",
-        ]
-        if n_hvap > 0:
-            lines.append(f"  ARD enthalpy of vap.:    {self.ard_hvap:.2f}%  (n={n_hvap})")
-        lines.append(f"  ARD total:               {ard_total:.2f}%")
+        lines += ["", "Fitting quality:"]
+        for prop, label in [("psat", "Vapor pressure   "),
+                            ("rho",  "Liquid density   "),
+                            ("hvap", "Hvap             ")]:
+            m = self.metrics[prop]
+            if m.n_total > 0:
+                lines.append(f"  {label} {m}")
 
         return "\n".join(lines)
 

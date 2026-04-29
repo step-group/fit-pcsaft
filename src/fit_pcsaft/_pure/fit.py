@@ -121,7 +121,7 @@ def _predict_hvap(eos, T_hvap, temperature_unit, enthalpy_unit) -> Optional[np.n
         return None
 
 
-def _compute_ard_metrics(
+def _compute_pure_metrics(
     params_fitted: np.ndarray,
     data: PureData,
     compound: Compound,
@@ -129,25 +129,16 @@ def _compute_ard_metrics(
     units: Units,
     eos=None,
 ):
-    """Compute ARD% metrics for fitted parameters."""
+    """Compute per-property Metrics for fitted parameters.
+
+    Returns (eos, metrics_dict) where metrics_dict is keyed by
+    "psat"/"rho"/"hvap". Each value is a Metrics object; failures are
+    handled per-point rather than voiding the entire property.
+    """
+    from fit_pcsaft.result import _compute_pure_metrics as _result_metrics
     if eos is None:
         eos = _build_eos(params_fitted, compound, spec)
-
-    def ard(pred, ref):
-        return (
-            100.0 * np.mean(np.abs((pred - ref) / ref)) if pred is not None else np.nan
-        )
-
-    p_pred = _predict_psat(eos, data.T_psat, units.temperature, units.pressure)
-    rho_pred = _predict_rho(eos, data.T_rho, units.temperature, units.density)
-    hvap_pred = _predict_hvap(eos, data.T_hvap, units.temperature, units.enthalpy)
-
-    return (
-        eos,
-        ard(p_pred, data.p_psat),
-        ard(rho_pred, data.rho),
-        ard(hvap_pred, data.hvap),
-    )
+    return eos, _result_metrics(eos, data, units)
 
 
 def _extract_params_dict(
@@ -389,7 +380,7 @@ def fit_pure(
 
     params_fitted = result.x**2
 
-    eos_final, ard_psat, ard_rho, ard_hvap = _compute_ard_metrics(
+    eos_final, metrics = _compute_pure_metrics(
         params_fitted,
         data,
         compound,
@@ -406,9 +397,7 @@ def fit_pure(
         compound=compound,
         spec=spec,
         units=units,
-        ard_psat=ard_psat,
-        ard_rho=ard_rho,
-        ard_hvap=ard_hvap,
+        metrics=metrics,
         scipy_result=result,
         time_elapsed=time_elapsed,
         input_name=id,
@@ -545,7 +534,7 @@ def fit_pure_de(
         message=de_result.message,
     )
 
-    eos_final, ard_psat, ard_rho, ard_hvap = _compute_ard_metrics(
+    eos_final, metrics = _compute_pure_metrics(
         params_fitted,
         data,
         compound,
@@ -562,9 +551,7 @@ def fit_pure_de(
         compound=compound,
         spec=spec,
         units=units,
-        ard_psat=ard_psat,
-        ard_rho=ard_rho,
-        ard_hvap=ard_hvap,
+        metrics=metrics,
         scipy_result=scipy_result,
         time_elapsed=time_elapsed,
         input_name=id,
@@ -677,9 +664,7 @@ def eval_pure(
         params_vec += [params["kappa_ab"], params["epsilon_k_ab"]]
     params_vec = np.array(params_vec, dtype=float)
 
-    eos, ard_psat, ard_rho, ard_hvap = _compute_ard_metrics(
-        params_vec, data, compound, spec, units
-    )
+    eos, metrics = _compute_pure_metrics(params_vec, data, compound, spec, units)
 
     return EvalResult(
         params=dict(params),
@@ -688,8 +673,6 @@ def eval_pure(
         compound=compound,
         spec=spec,
         units=units,
-        ard_psat=ard_psat,
-        ard_rho=ard_rho,
-        ard_hvap=ard_hvap,
+        metrics=metrics,
         input_name=id,
     )
