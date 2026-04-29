@@ -47,6 +47,7 @@ def fit_kij_lle(
     kij_per_point: bool = False,
     induced_assoc: bool = False,
     ucst_target: bool = False,
+    relative_residuals: bool = True,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE tieline data.
 
@@ -169,6 +170,7 @@ def fit_kij_lle(
                 pressure,
                 feeds,
                 T_anchor_K=T_anchor_K,
+                relative_residuals=relative_residuals,
             )
 
         # Coarse scan to find best initial k_ij guess (avoids getting trapped in
@@ -233,6 +235,7 @@ def fit_kij_lle(
                 pressure,
                 feeds,
                 T_anchor_K=T_anchor_K,
+                relative_residuals=relative_residuals,
             )
             ard_poly.append(100.0 * float(np.mean(np.abs(r))))
         except Exception:
@@ -366,11 +369,13 @@ def _residuals_at_T(
     pressure,
     feeds: "list[float]",
     T_anchor_K: "float | None" = None,
+    relative_residuals: bool = True,
 ) -> np.ndarray:
     """Residual vector for least_squares at a single temperature.
 
-    Returns relative composition errors on each available phase.
-    A penalty of [1.0, ...] is returned on tp_flash failure.
+    Returns composition errors on each available phase — relative
+    ((x_pred-x)/x) when relative_residuals=True, absolute (x_pred-x)
+    otherwise. A penalty of [1.0, ...] is returned on tp_flash failure.
 
     When T_anchor_K is provided and T_K > T_anchor_K, a warm-start PE is built
     at T_anchor_K using the *same* EOS (same k_ij) and passed as initial_state.
@@ -417,9 +422,9 @@ def _residuals_at_T(
             pred_I, pred_II = min(x_a, x_b), max(x_a, x_b)
             resids = []
             if exp_I is not None:
-                resids.append((pred_I - exp_I) / max(exp_I, 1e-6))
+                resids.append((pred_I - exp_I) / max(exp_I, 1e-6) if relative_residuals else pred_I - exp_I)
             if exp_II is not None:
-                resids.append((pred_II - exp_II) / max(exp_II, 1e-6))
+                resids.append((pred_II - exp_II) / max(exp_II, 1e-6) if relative_residuals else pred_II - exp_II)
             return np.array(resids)
         except Exception:
             continue

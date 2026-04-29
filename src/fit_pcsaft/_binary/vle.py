@@ -36,6 +36,7 @@ def fit_kij_vle(
     scipy_kwargs: "dict | None" = None,
     kij_per_point: bool = False,
     induced_assoc: bool = False,
+    relative_residuals: bool = True,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from VLE bubble-point data.
 
@@ -129,6 +130,7 @@ def fit_kij_vle(
                 return _residuals_vle_point(
                     kij_arr, T_csv, P, x1, y1,
                     record1, record2, temperature_unit, pressure_unit,
+                    relative_residuals=relative_residuals,
                 )
 
             kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
@@ -329,11 +331,13 @@ def _bubble_point(eos, T_K: float, x1: float, P_guess: float, temperature_unit, 
 def _residuals_vle_point(
     kij_arr, T_csv: float, P_i: float, x1_i: float, y1_i: "float | None",
     record1, record2, temperature_unit, pressure_unit,
+    relative_residuals: bool = True,
 ) -> np.ndarray:
     """Residual vector for a single VLE data point.
 
-    Returns [rel_P_error] when y1 is absent, [rel_P_error, abs_y1_error] when
-    y1 is present. Returns a penalty vector of ones on any failure.
+    Returns [P_error] when y1 is absent, [P_error, abs_y1_error] when y1 is
+    present. P_error is relative ((P_pred-P)/P) when relative_residuals=True,
+    absolute (P_pred-P) otherwise. Returns a penalty vector of ones on failure.
     """
     n_r = 2 if y1_i is not None else 1
     penalty = np.ones(n_r)
@@ -341,7 +345,8 @@ def _residuals_vle_point(
         eos = _build_binary_eos(record1, record2, float(kij_arr[0]))
         bp = _bubble_point(eos, T_csv, x1_i, P_i, temperature_unit, pressure_unit)
         P_pred = bp.liquid.pressure() / pressure_unit
-        resids = [(P_pred - P_i) / P_i]
+        P_err = (P_pred - P_i) / P_i if relative_residuals else (P_pred - P_i)
+        resids = [P_err]
         if y1_i is not None:
             resids.append(float(bp.vapor.molefracs[0]) - y1_i)
         return np.array(resids)

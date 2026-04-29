@@ -74,6 +74,7 @@ def fit_kij_vlle(
     t_max: "si.SIObject | None" = None,
     scipy_kwargs: "dict | None" = None,
     induced_assoc: bool = False,
+    relative_residuals: bool = True,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from VLLE heteroazeotrope data.
 
@@ -156,7 +157,7 @@ def fit_kij_vlle(
         )
         if np.isnan(T_pred):
             return np.ones(n_per_point)
-        resids = [(T_pred - T_K) / T_K]
+        resids = [(T_pred - T_K) / T_K if relative_residuals else T_pred - T_K]
         if has_xI:
             resids.append(x1_I_pred  - float(data["x1_I"][i]))
         if has_xII:

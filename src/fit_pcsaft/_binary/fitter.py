@@ -86,6 +86,7 @@ class BinaryKijFitter:
         pressure_unit=si.KILO * si.PASCAL,
         t_min=None,
         t_max=None,
+        relative_residuals: bool = True,
     ) -> "BinaryKijFitter":
         """Register a VLE bubble-point dataset."""
         self._sources.append(
@@ -96,6 +97,7 @@ class BinaryKijFitter:
                 pressure_unit=pressure_unit,
                 t_min=t_min,
                 t_max=t_max,
+                relative_residuals=relative_residuals,
             )
         )
         return self
@@ -110,6 +112,7 @@ class BinaryKijFitter:
         t_max=None,
         require_both_phases: bool = True,
         ucst_target: bool = False,
+        relative_residuals: bool = True,
     ) -> "BinaryKijFitter":
         """Register an LLE tie-line dataset."""
         self._sources.append(
@@ -122,6 +125,7 @@ class BinaryKijFitter:
                 t_max=t_max,
                 require_both_phases=require_both_phases,
                 ucst_target=ucst_target,
+                relative_residuals=relative_residuals,
             )
         )
         return self
@@ -134,6 +138,7 @@ class BinaryKijFitter:
         pressure_unit=si.KILO * si.PASCAL,
         t_min=None,
         t_max=None,
+        relative_residuals: bool = True,
     ) -> "BinaryKijFitter":
         """Register a VLLE heteroazeotrope dataset."""
         self._sources.append(
@@ -144,6 +149,7 @@ class BinaryKijFitter:
                 pressure_unit=pressure_unit,
                 t_min=t_min,
                 t_max=t_max,
+                relative_residuals=relative_residuals,
             )
         )
         return self
@@ -160,6 +166,7 @@ class BinaryKijFitter:
         temperature_unit=si.KELVIN,
         t_min=None,
         t_max=None,
+        relative_residuals: bool = True,
     ) -> "BinaryKijFitter":
         """Register an SLE solubility dataset."""
         self._sources.append(
@@ -174,6 +181,7 @@ class BinaryKijFitter:
                 temperature_unit=temperature_unit,
                 t_min=t_min,
                 t_max=t_max,
+                relative_residuals=relative_residuals,
             )
         )
         return self
@@ -234,6 +242,7 @@ class BinaryKijFitter:
                     t_max=src["t_max"],
                     kij_per_point=True,
                     induced_assoc=self.induced_assoc,
+                    relative_residuals=src["relative_residuals"],
                 )
                 for k in ("T", "P", "x1", "y1"):
                     if k in res.data:
@@ -256,6 +265,7 @@ class BinaryKijFitter:
                     kij_per_point=True,
                     induced_assoc=self.induced_assoc,
                     ucst_target=src["ucst_target"],
+                    relative_residuals=src["relative_residuals"],
                 )
                 for k in ("T", "x1_I", "x1_II"):
                     if k in res.data:
@@ -275,6 +285,7 @@ class BinaryKijFitter:
                     t_min=src["t_min"],
                     t_max=src["t_max"],
                     induced_assoc=self.induced_assoc,
+                    relative_residuals=src["relative_residuals"],
                 )
                 for k in ("T", "P", "x1_I", "x1_II", "y1"):
                     if k in res.data:
