@@ -1365,29 +1365,57 @@ def _vlle_locus(
     x_II = float("nan")
 
     T_out, xI_out, xII_out, y1_out = [], [], [], []
+    # Last two successful (T, ln P) pairs for extrapolation when warm-start fails.
+    _prev_ok: "list[tuple[float, float]]" = []
 
     for P_si in P_arr_si:
-        try:
-            T_guess = T_K if not np.isnan(T_K) else T_init
-            x_I_g = x_I if not np.isnan(x_I) else x_I_init
-            x_II_g = x_II if not np.isnan(x_II) else x_II_init
-            kij = _kij_at_T(result.kij_coeffs, T_guess, result.kij_t_ref)
-            eos = _build_binary_eos(result._record1, result._record2, kij)
-            ha = feos.PhaseEquilibrium.heteroazeotrope(
-                eos, float(P_si) * si.PASCAL,
-                x_init=(float(np.clip(x_I_g, 1e-4, 1.0 - 1e-4)),
-                        float(np.clip(x_II_g, 1e-4, 1.0 - 1e-4))),
-                tp_init=T_guess * si.KELVIN,
-            )
-            T_K = float(ha.vapor.temperature / si.KELVIN)
-            x_I = float(ha.liquid1.molefracs[0])
-            x_II = float(ha.liquid2.molefracs[0])
-            y1 = float(ha.vapor.molefracs[0])
+        T_guess = T_K if not np.isnan(T_K) else T_init
+        x_I_g = x_I if not np.isnan(x_I) else x_I_init
+        x_II_g = x_II if not np.isnan(x_II) else x_II_init
+
+        # Build candidate T guesses: warm-start first, then extrapolation + T_init.
+        T_candidates: "list[float]" = [T_guess]
+        if len(_prev_ok) >= 2:
+            T1, lnP1 = _prev_ok[-1]
+            T2, lnP2 = _prev_ok[-2]
+            dlnP = lnP1 - lnP2
+            if abs(dlnP) > 1e-8:
+                T_extrap = T1 + (T1 - T2) / dlnP * (np.log(float(P_si)) - lnP1)
+                T_extrap = float(np.clip(T_extrap, 200.0, 700.0))
+                if abs(T_extrap - T_guess) > 3.0:
+                    T_candidates.append(T_extrap)
+        if abs(T_init - T_guess) > 3.0:
+            T_candidates.append(T_init)
+
+        success = False
+        for T_try in T_candidates:
+            try:
+                kij = _kij_at_T(result.kij_coeffs, T_try, result.kij_t_ref)
+                eos = _build_binary_eos(result._record1, result._record2, kij)
+                ha = feos.PhaseEquilibrium.heteroazeotrope(
+                    eos, float(P_si) * si.PASCAL,
+                    x_init=(float(np.clip(x_I_g, 1e-4, 1.0 - 1e-4)),
+                            float(np.clip(x_II_g, 1e-4, 1.0 - 1e-4))),
+                    tp_init=T_try * si.KELVIN,
+                )
+                T_K = float(ha.vapor.temperature / si.KELVIN)
+                x_I = float(ha.liquid1.molefracs[0])
+                x_II = float(ha.liquid2.molefracs[0])
+                y1 = float(ha.vapor.molefracs[0])
+                _prev_ok.append((T_K, np.log(float(P_si))))
+                if len(_prev_ok) > 2:
+                    _prev_ok.pop(0)
+                success = True
+                break
+            except Exception:
+                pass
+
+        if success:
             # No swap: keep feos' liquid1/liquid2 order; _plot_vlle will align
             # the two branches to the experimental phase convention by proximity.
             T_out.append(T_K); xI_out.append(x_I)
             xII_out.append(x_II); y1_out.append(y1)
-        except Exception:
+        else:
             T_K = float("nan")
             T_out.append(float("nan")); xI_out.append(float("nan"))
             xII_out.append(float("nan")); y1_out.append(float("nan"))
@@ -1506,6 +1534,39 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
 
     _draw_locus_and_scatter(ax_T, T_exp, T_loc,      "$T$ / K")
     _draw_locus_and_scatter(ax_P, P_exp, P_loc_plot, f"$p$ / {p_lbl}")
+
+    # --- Model markers at experimental pressures (T-x panel) -----------------
+    # The VLLE locus in T-x space can appear as a nearly-horizontal smear when
+    # the model predicts nearly constant T across pressures.  Plot the model
+    # compositions interpolated at each experimental P, placed at the observed T,
+    # to show the model-data comparison regardless of model T accuracy.
+    if valid.any() and (has_xI or has_xII or has_y1):
+        _P_v  = P_locus_si[valid]
+        _srt  = np.argsort(_P_v)
+        _P_s  = _P_v[_srt]
+        _xI_s  = xI_loc[valid][_srt]
+        _xII_s = xII_loc[valid][_srt]
+        _y1_s  = y1_loc[valid][_srt]
+        _P_exp_pa = P_exp * p_scale
+        _ok = (_P_exp_pa >= _P_s[0]) & (_P_exp_pa <= _P_s[-1])
+        if _ok.any():
+            _xI_pred  = np.interp(_P_exp_pa[_ok], _P_s, _xI_s)
+            _xII_pred = np.interp(_P_exp_pa[_ok], _P_s, _xII_s)
+            _y1_pred  = np.interp(_P_exp_pa[_ok], _P_s, _y1_s)
+            _T_ok     = T_exp[_ok]
+            _kw_mp = dict(zorder=7, alpha=0.75)
+            _first_lbl = "PC-SAFT (at exp. $p$)"
+            if has_xI:
+                ax_T.scatter(_xI_pred, _T_ok, s=35, marker="o",
+                             color=_EXP_COLOR_1, label=_first_lbl, **_kw_mp)
+                _first_lbl = None
+            if has_xII:
+                ax_T.scatter(_xII_pred, _T_ok, s=35, marker="s",
+                             color=_EXP_COLOR_2, label=_first_lbl, **_kw_mp)
+                _first_lbl = None
+            if has_y1:
+                ax_T.scatter(_y1_pred, _T_ok, s=35, marker="^",
+                             color=_color_vap, label=_first_lbl, **_kw_mp)
 
     # --- VLE continuation above the heteroazeotrope (T-x panel, median pressure) ---
     if result._record1 is not None and result._record2 is not None:
