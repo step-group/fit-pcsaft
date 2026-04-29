@@ -188,10 +188,13 @@ def _build_eos_kij0(result):
     """Return a new EOS with k_ij=0.0, or None if the parameters are unavailable."""
     import feos
 
+    if result._record1 is None or result._record2 is None:
+        return None
     try:
-        pure_records = result.eos.parameters.pure_records
-        params = feos.Parameters.new_binary(pure_records, k_ij=0.0)
-        return feos.EquationOfState.pcsaft(params)
+        params = feos.Parameters.new_binary(
+            [result._record1, result._record2], k_ij=0.0
+        )
+        return feos.EquationOfState.pcsaft(params, max_iter_cross_assoc=100)
     except Exception:
         return None
 
