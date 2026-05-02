@@ -45,3 +45,5 @@ class FitConfig:
     w_rho: float = 2.0
     w_hvap: float = 1.0
     extrapolate_psat: bool = False
+    loss: str = "linear"
+    f_scale: dict = field(default_factory=lambda: {"psat": 1.0, "rho": 1.0, "hvap": 1.0})

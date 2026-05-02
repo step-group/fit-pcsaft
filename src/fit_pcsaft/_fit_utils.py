@@ -157,6 +157,56 @@ def _build_eos(
 
 _EPS_2PT = np.sqrt(np.finfo(float).eps)  # ~1.49e-8
 
+_VALID_PURE_PROPS = frozenset({"psat", "rho", "hvap"})
+
+
+def _normalize_f_scale(
+    f_scale,
+    loss: str,
+    active_properties: set,
+) -> dict:
+    """Normalize f_scale to a fully-populated dict[str, float] for active properties.
+
+    Rules:
+    - None + linear loss   → 1.0 for every active property (identity, no effect)
+    - None + robust loss   → raise (user must choose a meaningful margin)
+    - float                → broadcast to every active property
+    - dict                 → validate keys; fill missing with 1.0 (linear) or raise (robust)
+    """
+    if f_scale is None:
+        if loss != "linear":
+            raise ValueError(
+                f"loss='{loss}' requires f_scale (e.g. f_scale=0.05 for a 5% "
+                "relative-deviation soft margin, or a dict per property)."
+            )
+        return {p: 1.0 for p in active_properties}
+
+    if isinstance(f_scale, (int, float)):
+        val = float(f_scale)
+        if val <= 0:
+            raise ValueError(f"f_scale must be positive, got {val}")
+        return {p: val for p in active_properties}
+
+    if isinstance(f_scale, dict):
+        unknown = set(f_scale) - _VALID_PURE_PROPS
+        if unknown:
+            raise ValueError(
+                f"Unknown f_scale key(s): {sorted(unknown)}. "
+                f"Valid keys: {sorted(_VALID_PURE_PROPS)}."
+            )
+        for k, v in f_scale.items():
+            if v <= 0:
+                raise ValueError(f"f_scale['{k}'] must be positive, got {v}")
+        missing = active_properties - set(f_scale)
+        if missing and loss != "linear":
+            raise ValueError(
+                f"loss='{loss}' requires f_scale for every active property. "
+                f"Missing: {sorted(missing)}."
+            )
+        return {p: f_scale.get(p, 1.0) for p in active_properties}
+
+    raise TypeError(f"f_scale must be float, dict, or None; got {type(f_scale).__name__}")
+
 
 def _make_cost_fn(
     data: PureData,
@@ -181,9 +231,9 @@ def _make_cost_fn(
     n_rho = len(T_rho)
     n_hvap = len(T_hvap)
     n_total = n_psat + n_rho + n_hvap
-    psat_cost_scale = np.sqrt(config.w_psat / n_psat)
-    rho_cost_scale = np.sqrt(config.w_rho / n_rho) if n_rho > 0 else 0.0
-    hvap_cost_scale = np.sqrt(config.w_hvap / n_hvap) if n_hvap > 0 else 0.0
+    psat_cost_scale = np.sqrt(config.w_psat / n_psat) / config.f_scale["psat"]
+    rho_cost_scale = np.sqrt(config.w_rho / n_rho) / config.f_scale["rho"] if n_rho > 0 else 0.0
+    hvap_cost_scale = np.sqrt(config.w_hvap / n_hvap) / config.f_scale["hvap"] if n_hvap > 0 else 0.0
     inv_d_psat = 1.0 / d_psat
     inv_d_rho = 1.0 / d_rho if n_rho > 0 else None
     inv_d_hvap = 1.0 / d_hvap if n_hvap > 0 else None

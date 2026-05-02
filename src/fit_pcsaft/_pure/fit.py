@@ -13,6 +13,7 @@ from fit_pcsaft._fit_utils import (
     _build_eos,
     _fetch_compound,
     _make_f_and_df_numerical,
+    _normalize_f_scale,
 )
 from fit_pcsaft._pure.jacobian import _make_f_and_df
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
@@ -179,6 +180,8 @@ def _setup_pure_fit(
     temperature_unit,
     density_unit,
     enthalpy_unit,
+    loss: str = "linear",
+    f_scale=None,
 ):
     """Load data, fetch compound, build cost function. Shared by fit_pure and fit_pure_de."""
     fit_mu = mu is None
@@ -217,11 +220,15 @@ def _setup_pure_fit(
         density=density_unit,
         enthalpy=enthalpy_unit,
     )
+    active = {"psat", "rho"} | ({"hvap"} if hvap_path is not None else set())
+    f_scale_dict = _normalize_f_scale(f_scale, loss, active)
     config = FitConfig(
         w_psat=psat_weight,
         w_rho=density_weight,
         w_hvap=hvap_weight,
         extrapolate_psat=extrapolate_psat,
+        loss=loss,
+        f_scale=f_scale_dict,
     )
 
     use_numerical_jac = q != 0.0 or hvap_path is not None
@@ -256,7 +263,7 @@ def fit_pure(
     hvap_weight: float = 1.0,
     extrapolate_psat: bool = False,
     loss: str = "linear",
-    f_scale: float = 1.0,
+    f_scale: "float | dict | None" = None,
     pressure_unit: si.SIObject = si.KILO * si.PASCAL,
     temperature_unit: si.SIObject = si.KELVIN,
     density_unit: si.SIObject = si.KILOGRAM / (si.METER**3),
@@ -300,9 +307,12 @@ def fit_pure(
             Loss function for scipy least_squares: 'linear', 'huber', 'soft_l1',
             'cauchy', 'arctan' (default: 'linear'). Non-linear losses automatically
             switch the solver from LM to TRF.
-        f_scale : float
-            Soft margin for robust loss functions (default: 1.0). Only used when
-            loss != 'linear'.
+        f_scale : float | dict[str, float] | None
+            Soft margin for robust loss functions (default: None). Must be set when
+            loss != 'linear'. A float broadcasts to every active property; a dict
+            (keys: 'psat', 'rho', 'hvap') allows per-property margins.
+            Under robust loss the effective inlier boundary in user-space
+            relative deviation is f_scale_p * sqrt(N_p / w_p).
         pressure_unit : si.SIObject
             Unit for pressure in CSV (default: kPa)
         temperature_unit : si.SIObject
@@ -336,6 +346,8 @@ def fit_pure(
             temperature_unit=temperature_unit,
             density_unit=density_unit,
             enthalpy_unit=enthalpy_unit,
+            loss=loss,
+            f_scale=f_scale,
         )
     )
 
@@ -355,8 +367,9 @@ def fit_pure(
         "max_nfev": 10_000,
     }
     if use_trf:
+        # f_scale is pre-applied in cost_fn (residuals divided by f_scale_p);
+        # pass loss= to scipy but omit f_scale= (scipy's default of 1.0 is correct).
         ls_kwargs["loss"] = loss
-        ls_kwargs["f_scale"] = f_scale
     if scipy_kwargs:
         ls_kwargs.update(scipy_kwargs)
 
@@ -417,6 +430,8 @@ def fit_pure_de(
     density_weight: float = 2.0,
     hvap_weight: float = 1.0,
     extrapolate_psat: bool = False,
+    loss: str = "linear",
+    f_scale: "float | dict | None" = None,
     bounds: Optional[list] = None,
     pressure_unit: si.SIObject = si.KILO * si.PASCAL,
     temperature_unit: si.SIObject = si.KELVIN,
@@ -496,6 +511,8 @@ def fit_pure_de(
             temperature_unit=temperature_unit,
             density_unit=density_unit,
             enthalpy_unit=enthalpy_unit,
+            loss=loss,
+            f_scale=f_scale,
         )
     )
 
@@ -504,8 +521,25 @@ def fit_pure_de(
 
     # DE searches in actual param space; cost_fn expects sqrt-transformed params
     # (it squares them internally). Wrapping with sqrt bridges the two spaces.
+    # f_scale is pre-applied in cost_fn residuals; apply matching robust loss here.
+    _loss = config.loss
+
     def de_objective(x: np.ndarray) -> float:
-        return float(np.sum(cost_fn(np.sqrt(x)) ** 2))
+        r = cost_fn(np.sqrt(x))
+        if _loss == "linear":
+            return float(np.sum(r**2))
+        z = r**2
+        if _loss == "huber":
+            rho = np.where(z <= 1.0, z, 2.0 * np.sqrt(z) - 1.0)
+        elif _loss == "soft_l1":
+            rho = 2.0 * (np.sqrt(1.0 + z) - 1.0)
+        elif _loss == "cauchy":
+            rho = np.log1p(z)
+        elif _loss == "arctan":
+            rho = np.arctan(z)
+        else:
+            rho = z
+        return float(np.sum(rho))
 
     de_defaults = {
         "maxiter": 1000,

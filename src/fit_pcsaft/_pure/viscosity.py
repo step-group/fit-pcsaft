@@ -349,7 +349,7 @@ def fit_viscosity_entropy_scaling(
     a_gc: "float | None" = None,
     fix_d: bool = True,
     loss: str = "linear",
-    f_scale: float = 0.1,
+    f_scale: "float | dict | None" = 0.1,
 ) -> ViscosityFitResult:
     """Fit entropy scaling viscosity correlation ``[A, B, C, D]`` to experimental data.
 
@@ -543,6 +543,21 @@ def fit_viscosity_entropy_scaling(
         Phi_fit = np.polynomial.chebyshev.chebvander(t_cheb, cheb_deg)
         x0 = np.array([-1.2, -2.6, -0.5]) if fix_d else np.array([-1.2, -2.6, -0.5, -0.1])
 
+    if f_scale is None:
+        _f_scale_scalar = 1.0
+    elif isinstance(f_scale, dict):
+        unknown = set(f_scale) - {"viscosity"}
+        if unknown:
+            raise ValueError(
+                f"Unknown f_scale key(s) for viscosity: {sorted(unknown)}. "
+                "Valid key: 'viscosity'."
+            )
+        _f_scale_scalar = float(f_scale.get("viscosity", 1.0))
+    else:
+        _f_scale_scalar = float(f_scale)
+    if _f_scale_scalar <= 0:
+        raise ValueError(f"f_scale must be positive, got {_f_scale_scalar}")
+
     if loss == "linear":
         theta, *_ = np.linalg.lstsq(Phi_fit, y_shift, rcond=None)
     else:
@@ -550,7 +565,7 @@ def fit_viscosity_entropy_scaling(
             return Phi_fit @ p - y_shift
 
         theta = scipy.optimize.least_squares(
-            _residuals, x0=x0, loss=loss, f_scale=f_scale, method="trf",
+            _residuals, x0=x0, loss=loss, f_scale=_f_scale_scalar, method="trf",
         ).x
 
     if A_fixed is not None:
