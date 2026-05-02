@@ -16,3 +16,6 @@ test_feos_params.py
 # Benchmark runtime artifacts
 benchmarks/*.log
 benchmarks/dashboard.html
+
+# Git worktrees
+.worktrees/
