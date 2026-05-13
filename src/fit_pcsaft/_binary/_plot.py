@@ -717,9 +717,8 @@ def _plot_kij_vs_T(
     ax.set_xlabel("$T$ / K")
     ax.set_ylabel("$k_{ij}$")
     ax.set_title(f"$k_{{ij}}(T)$: {id1} + {id2} ({equilibrium_type.upper()})")
-    ax.legend(fontsize="small", loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3)
     sns.despine(offset=10)
-    plt.tight_layout(rect=[0, 0.15, 1, 1])
+    plt.tight_layout()
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")

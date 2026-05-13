@@ -122,5 +122,20 @@
     "m": 2.0088389081946616,
     "sigma": 3.730476280935515,
     "epsilon_k": 210.7128619289104
+  },
+  {
+    "identifier": {
+      "cas": "111-13-7",
+      "name": "2-octanone",
+      "iupac_name": "octan-2-one",
+      "smiles": "CCCCCCC(=O)C",
+      "inchi": "InChI=1S/C8H16O/c1-3-4-5-6-7-8(2)9/h3-7H2,1-2H3",
+      "formula": "C8H16O"
+    },
+    "molarweight": 128.21,
+    "m": 4.509860112023487,
+    "sigma": 3.610508738535448,
+    "epsilon_k": 249.97625387651397,
+    "mu": 2.950873192692365
   }
 ]

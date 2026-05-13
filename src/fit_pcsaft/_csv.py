@@ -198,6 +198,20 @@ def load_csv(path: "Path | str", schema: CsvSchema) -> dict[str, np.ndarray]:
             f"Expected canonical names: {list(schema.required)}"
         )
 
+    # Check for NaN values in required columns (common symptom of ragged CSVs
+    # where citation text in extra columns spills into numeric columns).
+    for col in schema.required:
+        if col in result:
+            nan_mask = np.isnan(result[col])
+            if nan_mask.any():
+                bad_rows = np.where(nan_mask)[0].tolist()
+                raise ValueError(
+                    f"Column '{col}' in {path} has NaN values at row(s) {bad_rows} "
+                    f"(0-indexed, excluding header). "
+                    f"This usually means the CSV has ragged rows where text in extra "
+                    f"columns was mis-parsed. Fix the file and try again."
+                )
+
     return result
 
 
