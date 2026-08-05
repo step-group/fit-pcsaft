@@ -85,17 +85,19 @@ wheels = [
 
 [[package]]
 name = "feos"
-version = "0.9.6"
+version = "0.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "numpy" },
     { name = "si-units" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/c1/1c70c19a7d4a11a8594e75c6bb3d504453645ed8d0b378af91857468660d/feos-0.9.6-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:0186882109ebae09b8bc96084b154be7c0fa9cf8f86a5f581ebf37003e2c21da", size = 17303703, upload-time = "2026-07-03T13:38:07.847Z" },
-    { url = "https://files.pythonhosted.org/packages/d0/23/2cd33c053ede76722979db1e49dfdd09dcd62002a3fbbabf3bc31608f309/feos-0.9.6-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:c1bd7001360fff95414c5012cde814970f96ec399c96adbf3b9f3f35f6e61311", size = 15214331, upload-time = "2026-07-03T13:38:10.153Z" },
-    { url = "https://files.pythonhosted.org/packages/77/71/ac149ab7f3419ac88cc265a2a0146c483cbe6e193aa39265adc760509c4b/feos-0.9.6-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:3c9ae8499b52cc012143a57541ed458c7884c3d848053d03ca2adf3661dcec6a", size = 17793760, upload-time = "2026-07-03T13:38:12.284Z" },
-    { url = "https://files.pythonhosted.org/packages/a2/93/b4ebfe1dbb97ea623a3b675fcde634f438fca386004ae34fdfe3f43649eb/feos-0.9.6-cp310-abi3-win32.whl", hash = "sha256:bdba9c3a87cb75db3d3df6a22c588878f0a148015014b3467550afa9c54d30bb", size = 17273652, upload-time = "2026-07-03T13:38:14.6Z" },
-    { url = "https://files.pythonhosted.org/packages/8a/4f/0d5fdb022d55725473150a0022ce8e5067a026f9c0c61cacaf68aea1f6c9/feos-0.9.6-cp310-abi3-win_amd64.whl", hash = "sha256:a788af69343f3699e5ecd0f0ef817b1cf3b7dc97e3f7a2f829727638d0b0b65f", size = 18423438, upload-time = "2026-07-03T13:38:16.86Z" },
+    { url = "https://files.pythonhosted.org/packages/62/4a/e88e936d7e10065483c84580dabb35eb4ef5e5c4e45d83e1e7f284b07321/feos-0.10.1-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:64e0b571cd3262759f8c8a0fba0631b333fd9f4a1dddc2b0f25314a1dc8fde7a", size = 20990583, upload-time = "2026-07-24T10:18:16.347Z" },
+    { url = "https://files.pythonhosted.org/packages/48/8d/cd69b75baceff275dfbced722695de8751164ee0321d3dacb79dd2431883/feos-0.10.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:a7ce2e175bf37257872a9487cccdb5cf7f680fad7df0849ba3909011add02142", size = 18556492, upload-time = "2026-07-24T10:18:19.133Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/3b/527a6362311e56d61ba2c1a6f138089cd1897f67fde53dd6101c44b03de5/feos-0.10.1-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:f5b2c07771aeac98845c39d7702e92ef12cfce758882d0c09c9a4d645535947d", size = 21442347, upload-time = "2026-07-24T10:18:21.933Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/ff/472e27a2c6b44f71c1d24e71507c0b07cd3fe9b4772b60047a03ae7096c6/feos-0.10.1-cp310-abi3-pyemscripten_2026_0_wasm32.whl", hash = "sha256:fa305b0a8bad727c5e490a369425e46df00d78f106646c7f777bcf252ef55f4e", size = 11841967, upload-time = "2026-07-24T10:18:24.469Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/87/1307bc7589bc046ffd303ad5558196c0d5f2b0147795a835f0480f3513f6/feos-0.10.1-cp310-abi3-win32.whl", hash = "sha256:60efb4af53e69bfecbfe7d0a3c7d51cacad4e0f17d87df36222ff9aecc05ae17", size = 20864673, upload-time = "2026-07-24T10:18:27.56Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/9a/b7093b662a821355c1199eb9acf0ea39269e3851c199e5dccf62843588a3/feos-0.10.1-cp310-abi3-win_amd64.whl", hash = "sha256:6fcc78cc6c9e4445dd2526546f31159a6d635e255c5dacb4e3fcf1917e589767", size = 22144752, upload-time = "2026-07-24T10:18:31.071Z" },
 ]
 
 [[package]]
@@ -120,7 +122,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "feos", specifier = ">=0.9.4,<0.10.0" },
+    { name = "feos", specifier = ">=0.9.4" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "polars", specifier = ">=1.38.1" },
     { name = "pubchempy", specifier = "==1.0.5" },
