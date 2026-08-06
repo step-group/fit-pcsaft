@@ -94,3 +94,53 @@ def test_kij_polynomial_recovers_trend_despite_outlier():
     coeffs, _ = _fit_kij_polynomial(T, kij, ard, kij_order=1, kij_t_ref=t_ref)
 
     np.testing.assert_allclose(coeffs, true_c, rtol=5e-2, atol=1e-4)
+
+
+def test_make_core_caches_compute_between_fun_and_jac(monkeypatch):
+    """scipy calls fun(x) then jac(x) at the same x; that must cost one AD call."""
+    import feos
+
+    from fit_pcsaft._pure.jacobian import _make_core
+    from fit_pcsaft._types import Compound, FitConfig, PureData
+
+    calls = {"n": 0}
+    real = feos.Property.vapor_pressure_derivatives
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(feos.Property, "vapor_pressure_derivatives", counting)
+
+    data = PureData(
+        T_psat=np.array([300.0, 320.0, 340.0]),
+        p_psat=np.array([8.86, 30.0, 70.0]),
+        T_rho=np.array([]), rho=np.array([]),
+        T_hvap=np.array([]), hvap=np.array([]),
+    )
+    compound = Compound(identifier=feos.Identifier(cas="64-17-5"), mw=46.07)
+    config = FitConfig(
+        w_psat=3.0, w_rho=2.0, w_hvap=1.0, extrapolate_psat=False,
+        loss="linear", f_scale={"psat": 1.0, "rho": 1.0},
+    )
+
+    # Task 4 replaces this with a `make_row` callable returning a 1-D row.
+    # Until then, match the current build_arrays contract: (pa_psat, pa_rho),
+    # non-associating with mu fixed at 0.0, n_psat=3, n_rho=0.
+    def build_arrays(p):
+        return np.column_stack([np.tile(p, (3, 1)), np.zeros((3, 1))]), None
+
+    fun, jac = _make_core(
+        data, compound, config,
+        feos.EquationOfStateAD.PcSaftNonAssoc,
+        ["m", "sigma", "epsilon_k"],
+        build_arrays,
+    )
+
+    x = np.sqrt(np.array([2.3827, 3.1771, 198.24]))
+    f = fun(x)
+    J = jac(x)
+
+    assert calls["n"] == 1, f"expected 1 feos AD call, got {calls['n']}"
+    assert f.shape == (3,)
+    assert J.shape == (3, 3)

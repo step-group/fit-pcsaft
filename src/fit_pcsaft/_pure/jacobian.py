@@ -268,13 +268,24 @@ def _make_core(
 
         return f_psat, J_psat, p_pred, rho_pred
 
+    # scipy calls fun(x) then jac(x) at the same x on every iteration.
+    # Caching the last (x, result) halves the feos AD evaluations.
+    _cache_x = None
+    _cache_out = None
+
+    def _cached(params_vec):
+        nonlocal _cache_x, _cache_out
+        if _cache_x is not None and np.array_equal(params_vec, _cache_x):
+            return _cache_out
+        _cache_out = _compute(params_vec)
+        _cache_x = np.array(params_vec, copy=True)
+        return _cache_out
+
     def fun(params_vec):
-        f, _, _, _ = _compute(params_vec)
-        return f
+        return _cached(params_vec)[0]
 
     def jac(params_vec):
-        _, J, _, _ = _compute(params_vec)
-        return J
+        return _cached(params_vec)[1]
 
     return fun, jac
 
