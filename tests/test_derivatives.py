@@ -100,8 +100,10 @@ def test_make_core_caches_compute_between_fun_and_jac(monkeypatch):
     """scipy calls fun(x) then jac(x) at the same x; that must cost one AD call."""
     import feos
 
+    import si_units as si
+
     from fit_pcsaft._pure.jacobian import _make_core
-    from fit_pcsaft._types import Compound, FitConfig, PureData
+    from fit_pcsaft._types import Compound, FitConfig, PureData, Units
 
     calls = {"n": 0}
     real = feos.Property.vapor_pressure_derivatives
@@ -123,18 +125,18 @@ def test_make_core_caches_compute_between_fun_and_jac(monkeypatch):
         w_psat=3.0, w_rho=2.0, w_hvap=1.0, extrapolate_psat=False,
         loss="linear", f_scale={"psat": 1.0, "rho": 1.0},
     )
-
-    # Task 4 replaces this with a `make_row` callable returning a 1-D row.
-    # Until then, match the current build_arrays contract: (pa_psat, pa_rho),
-    # non-associating with mu fixed at 0.0, n_psat=3, n_rho=0.
-    def build_arrays(p):
-        return np.column_stack([np.tile(p, (3, 1)), np.zeros((3, 1))]), None
+    units = Units(
+        temperature=si.KELVIN,
+        pressure=si.KILO * si.PASCAL,
+        density=si.KILOGRAM / si.METER**3,
+        enthalpy=si.KILO * si.JOULE / si.MOL,
+    )
 
     fun, jac = _make_core(
-        data, compound, config,
+        data, compound, units, config,
         feos.EquationOfStateAD.PcSaftNonAssoc,
         ["m", "sigma", "epsilon_k"],
-        build_arrays,
+        lambda p: np.array([p[0], p[1], p[2], 0.0]),
     )
 
     x = np.sqrt(np.array([2.3827, 3.1771, 198.24]))
@@ -144,3 +146,193 @@ def test_make_core_caches_compute_between_fun_and_jac(monkeypatch):
     assert calls["n"] == 1, f"expected 1 feos AD call, got {calls['n']}"
     assert f.shape == (3,)
     assert J.shape == (3, 3)
+
+
+# --------------------------------------------------------------------------
+# feos AD contract tests
+#
+# These document feos behaviour, not ours. They exist so that a feos upgrade
+# which changes any of these assumptions fails loudly instead of silently
+# corrupting a Jacobian.
+# --------------------------------------------------------------------------
+
+_ETHANOL = dict(m=2.3827, sigma=3.1771, epsilon_k=198.24,
+                kappa_ab=0.032384, epsilon_k_ab=2653.4)
+_ETHANOL_ROW = [_ETHANOL["m"], _ETHANOL["sigma"], _ETHANOL["epsilon_k"], 0.0,
+                _ETHANOL["kappa_ab"], _ETHANOL["epsilon_k_ab"], 1.0, 1.0]
+_ASSOC_NAMES = ["m", "sigma", "epsilon_k", "kappa_ab", "epsilon_k_ab"]
+
+
+def test_feos_exposes_hvap_derivatives():
+    """Contract check: the AD call feos gives us, in the units it gives us."""
+    import feos
+
+    vals, grad, conv = feos.Property.enthalpy_of_vaporization_derivatives(
+        feos.EquationOfStateAD.PcSaftFull, _ASSOC_NAMES,
+        np.array(_ETHANOL_ROW), np.array([[350.0]]),
+    )
+
+    assert bool(conv[0])
+    assert grad.shape == (1, 5)
+    # J/mol, not kJ/mol
+    assert 3.0e4 < float(vals[0]) < 5.0e4
+
+
+def test_hvap_ad_matches_finite_differences():
+    """AD gradient must match a converged central difference."""
+    import feos
+
+    col = {"m": 0, "sigma": 1, "epsilon_k": 2, "kappa_ab": 4, "epsilon_k_ab": 5}
+
+    def hvap(row):
+        v, _, _ = feos.Property.enthalpy_of_vaporization_derivatives(
+            feos.EquationOfStateAD.PcSaftFull, _ASSOC_NAMES,
+            np.array(row), np.array([[350.0]]),
+        )
+        return float(v[0])
+
+    _, grad, _ = feos.Property.enthalpy_of_vaporization_derivatives(
+        feos.EquationOfStateAD.PcSaftFull, _ASSOC_NAMES,
+        np.array(_ETHANOL_ROW), np.array([[350.0]]),
+    )
+
+    for k, name in enumerate(_ASSOC_NAMES):
+        if name == "sigma":
+            continue  # structurally zero, see test_hvap_is_invariant_in_sigma
+        i = col[name]
+        h = abs(_ETHANOL_ROW[i]) * 1e-6
+        up, dn = list(_ETHANOL_ROW), list(_ETHANOL_ROW)
+        up[i] += h
+        dn[i] -= h
+        fd = (hvap(up) - hvap(dn)) / (2 * h)
+        np.testing.assert_allclose(grad[0][k], fd, rtol=1e-6)
+
+
+def test_hvap_is_invariant_in_sigma():
+    """Documents a real property, not a bug.
+
+    sigma sets only the length scale, so molar residual enthalpy at VLE is
+    invariant under corresponding-states scaling. psat moves, Hvap does not.
+    A future change that makes this column nonzero is a regression.
+    """
+    import feos
+
+    shifted = list(_ETHANOL_ROW)
+    shifted[1] += 0.05
+
+    def hvap(row):
+        v, _, _ = feos.Property.enthalpy_of_vaporization_derivatives(
+            feos.EquationOfStateAD.PcSaftFull, ["m"],
+            np.array(row), np.array([[350.0]]),
+        )
+        return float(v[0])
+
+    np.testing.assert_allclose(hvap(_ETHANOL_ROW), hvap(shifted), rtol=1e-12)
+
+
+def test_quadrupole_is_not_differentiable():
+    """Guard the constraint that keeps the q != 0 numerical fallback alive."""
+    import feos
+
+    _, grad, _ = feos.Property.vapor_pressure_derivatives(
+        feos.EquationOfStateAD.PcSaftFull, ["q"],
+        np.array(_ETHANOL_ROW), np.array([[350.0]]),
+    )
+
+    assert float(grad[0][0]) == 0.0, "if q became differentiable, drop the fallback"
+
+
+# --------------------------------------------------------------------------
+# End-to-end: the AD path against the numerical path it replaces
+# --------------------------------------------------------------------------
+
+
+def _ethanol_compound():
+    import feos
+
+    from fit_pcsaft._types import Compound
+
+    return Compound(identifier=feos.Identifier(cas="64-17-5"), mw=46.07)
+
+
+def _units(pressure=None):
+    import si_units as si
+
+    from fit_pcsaft._types import Units
+
+    return Units(
+        temperature=si.KELVIN,
+        pressure=pressure if pressure is not None else si.KILO * si.PASCAL,
+        density=si.KILOGRAM / si.METER**3,
+        enthalpy=si.KILO * si.JOULE / si.MOL,
+    )
+
+
+_X_ETHANOL = np.sqrt(np.array([
+    _ETHANOL["m"], _ETHANOL["sigma"], _ETHANOL["epsilon_k"],
+    _ETHANOL["kappa_ab"], _ETHANOL["epsilon_k_ab"],
+]))
+
+
+def test_analytical_and_numerical_jacobians_agree_with_hvap():
+    """The new AD hvap path must match the numerical path it replaces."""
+    from fit_pcsaft._fit_utils import _make_f_and_df_numerical
+    from fit_pcsaft._pure.jacobian import _make_f_and_df
+    from fit_pcsaft._types import FitConfig, ModelSpec, PureData
+
+    data = PureData(
+        T_psat=np.array([300.0, 330.0, 360.0]),
+        p_psat=np.array([8.86, 30.0, 90.0]),
+        T_rho=np.array([300.0, 330.0]),
+        rho=np.array([780.0, 750.0]),
+        T_hvap=np.array([300.0, 350.0]),
+        hvap=np.array([42.3, 38.4]),
+    )
+    spec = ModelSpec(mu=0.0, na=1, nb=1, q=0.0)
+    config = FitConfig(
+        w_psat=3.0, w_rho=2.0, w_hvap=1.0, extrapolate_psat=False,
+        loss="linear", f_scale={"psat": 1.0, "rho": 1.0, "hvap": 1.0},
+    )
+
+    compound, units = _ethanol_compound(), _units()
+    f_ad, J_ad, _ = _make_f_and_df(data, compound, spec, units, config)
+    f_num, J_num, _ = _make_f_and_df_numerical(data, compound, spec, units, config)
+
+    np.testing.assert_allclose(f_ad(_X_ETHANOL), f_num(_X_ETHANOL), rtol=1e-8)
+    # Forward differences on an iterative solver: loose but decisive.
+    np.testing.assert_allclose(
+        J_ad(_X_ETHANOL), J_num(_X_ETHANOL), rtol=2e-3, atol=1e-6
+    )
+
+
+def test_analytical_path_respects_pressure_units():
+    """bar vs kPa must change the residuals by exactly the unit ratio."""
+    import si_units as si
+
+    from fit_pcsaft._pure.jacobian import _make_f_and_df
+    from fit_pcsaft._types import FitConfig, ModelSpec, PureData
+
+    T = np.array([300.0, 330.0])
+    p_kpa = np.array([8.86, 30.0])
+
+    def build(p_unit, p_vals):
+        data = PureData(
+            T_psat=T, p_psat=p_vals,
+            T_rho=np.array([]), rho=np.array([]),
+            T_hvap=np.array([]), hvap=np.array([]),
+        )
+        config = FitConfig(
+            w_psat=3.0, w_rho=2.0, w_hvap=1.0, extrapolate_psat=False,
+            loss="linear", f_scale={"psat": 1.0, "rho": 1.0},
+        )
+        return _make_f_and_df(
+            data, _ethanol_compound(),
+            ModelSpec(mu=0.0, na=1, nb=1, q=0.0),
+            _units(pressure=p_unit), config,
+        )
+
+    f_kpa, _, _ = build(si.KILO * si.PASCAL, p_kpa)
+    f_bar, _, _ = build(si.BAR, p_kpa / 100.0)
+
+    # Same physical data expressed in two units -> identical relative residuals.
+    np.testing.assert_allclose(f_kpa(_X_ETHANOL), f_bar(_X_ETHANOL), rtol=1e-9)

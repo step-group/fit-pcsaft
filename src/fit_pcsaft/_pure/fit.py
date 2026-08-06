@@ -250,15 +250,13 @@ def _setup_pure_fit(
         f_scale=f_scale_dict,
     )
 
-    use_numerical_jac = q != 0.0 or hvap_path is not None
+    # hvap now has AD (feos.Property.enthalpy_of_vaporization_derivatives).
+    # q does not: feos silently accepts 'q' in parameter_names and returns a
+    # zero gradient column, so a quadrupolar fit must stay on finite differences.
+    use_numerical_jac = q != 0.0
     if use_numerical_jac:
-        reasons = []
-        if q != 0.0:
-            reasons.append("q != 0 (quadrupole term not in analytical Jacobian)")
-        if hvap_path is not None:
-            reasons.append("hvap data provided (no AD available for Hvap)")
         print(
-            f"Note: {'; '.join(reasons)} — "
+            "Note: q != 0 (quadrupole has no feos AD support) — "
             "falling back to numerical Jacobian (2-point).\n"
         )
         cost_fn, jac_fn, errors = _make_f_and_df_numerical(
@@ -307,8 +305,8 @@ def fit_pure(
         density_path : Path | str
             Path to liquid density CSV (T, rhoL)
         hvap_path : Path | str or None
-            Path to enthalpy of vaporization CSV (T, Hvap). Optional. When provided,
-            forces numerical Jacobian (no AD available for Hvap).
+            Path to enthalpy of vaporization CSV (T, Hvap). Optional. Uses the
+            analytical (AD) Jacobian, same as psat and density.
         mu : float or None
             Dipole moment. If None, mu is fitted. If float, fixed (default: 0.0).
         q : float
