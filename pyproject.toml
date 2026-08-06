@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 license = "MIT AND (Apache-2.0 OR BSD-2-Clause)"
 authors = [{ name = "Maximilian Fleckenstein", email = "maximilianfv@uc.cl" }]
 dependencies = [
-  "feos>=0.9.4",
+  "feos>=0.10.1",
   "matplotlib>=3.10.8",
   "polars>=1.38.1",
   "pubchempy==1.0.5",

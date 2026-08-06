@@ -28,6 +28,7 @@ _COL_ALIASES: dict[str, str] = {
     "temperature":           "T",
     "Temperature ( K )":     "T",
     "Temperature (K)":       "T",
+    "T (K)":                 "T",
     "T_K":                   "T",
     "t":                     "T",
     "t_K":                   "T",

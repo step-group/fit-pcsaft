@@ -78,7 +78,7 @@ def main() -> None:
         result.eos,
         temperature=298.15 * si.KELVIN,
         pressure=0.1 * si.MEGA * si.PASCAL,
-        total_moles=si.MOL,
+        composition=si.MOL,
         density_initialization="liquid",
     )
     eta_pred = state.viscosity() / (si.PASCAL * si.SECOND)

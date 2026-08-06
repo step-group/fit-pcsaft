@@ -156,7 +156,7 @@ class BinaryFitResult:
                                 feed = np.array([z1, 1.0 - z1]) * si.MOL
                                 state = feos.State(
                                     eos_i, T * si.KELVIN,
-                                    pressure=1.0 * si.BAR, moles=feed,
+                                    pressure=1.0 * si.BAR, composition=feed,
                                     density_initialization="liquid",
                                 )
                                 pe = state.tp_flash(max_iter=1000)

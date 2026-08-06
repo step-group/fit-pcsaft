@@ -397,7 +397,7 @@ def _residuals_at_T(
                 eos,
                 T_anchor_K * si.KELVIN,
                 pressure=pressure,
-                moles=feed_a,
+                composition=feed_a,
                 density_initialization="liquid",
             )
             anchor_pe = s_a.tp_flash(max_iter=500)
@@ -411,7 +411,7 @@ def _residuals_at_T(
                 eos,
                 T_K * si.KELVIN,
                 pressure=pressure,
-                moles=feed,
+                composition=feed,
                 density_initialization="liquid",
             )
             pe = feed_state.tp_flash(initial_state=anchor_pe, max_iter=1000)

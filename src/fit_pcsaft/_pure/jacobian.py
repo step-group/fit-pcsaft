@@ -1,6 +1,6 @@
 """Combined cost + Jacobian for pure component PC-SAFT fitting.
 
-feos.vapor_pressure_derivatives / equilibrium_liquid_density_derivatives
+feos.Property.vapor_pressure_derivatives / equilibrium_liquid_density_derivatives
 return (values, jacobian, mask) in a single vectorized AD call.
 
 Structure
@@ -201,7 +201,7 @@ def _make_core(
         pa_psat, pa_rho = build_arrays(p)
 
         try:
-            derivs_psat = feos.vapor_pressure_derivatives(
+            derivs_psat = feos.Property.vapor_pressure_derivatives(
                 eos_ad, fit_params, pa_psat, temps_array_psat
             )
         except Exception:
@@ -209,7 +209,8 @@ def _make_core(
 
         mask_psat = derivs_psat[2]
         p_pred = np.full(n_psat, np.nan)
-        p_pred[mask_psat] = derivs_psat[0] / 1000.0  # Pa → kPa
+        # feos >=0.10 returns full-length arrays; select the converged entries.
+        p_pred[mask_psat] = derivs_psat[0][mask_psat] / 1000.0  # Pa → kPa
 
         if not mask_psat.all():
             if config.extrapolate_psat and mask_psat.sum() >= 2:
@@ -223,13 +224,13 @@ def _make_core(
 
         f_psat = psat_cost_scale * (p_pred * inv_d_psat - 1.0)
         jac_full_psat = np.zeros((n_psat, n_params))
-        jac_full_psat[mask_psat] = derivs_psat[1]
+        jac_full_psat[mask_psat] = derivs_psat[1][mask_psat]
         J_psat = jac_full_psat * psat_jac_scale[:, np.newaxis] * chain[np.newaxis, :]
 
         rho_pred = None
         if n_rho > 0:
             try:
-                derivs_rho = feos.equilibrium_liquid_density_derivatives(
+                derivs_rho = feos.Property.equilibrium_liquid_density_derivatives(
                     eos_ad, fit_params, pa_rho, temps_array_rho
                 )
             except Exception:
@@ -237,14 +238,14 @@ def _make_core(
 
             mask_rho = derivs_rho[2]
             rho_pred = np.full(n_rho, np.nan)
-            rho_pred[mask_rho] = derivs_rho[0] * mw  # kmol/m³ → kg/m³
+            rho_pred[mask_rho] = derivs_rho[0][mask_rho] * mw  # kmol/m³ → kg/m³
 
             if not mask_rho.all():
                 return _penalty_f, _penalty_J, None, None
 
             f_rho = rho_cost_scale * (rho_pred * inv_d_rho - 1.0)
             jac_full_rho = np.zeros((n_rho, n_params))
-            jac_full_rho[mask_rho] = derivs_rho[1]
+            jac_full_rho[mask_rho] = derivs_rho[1][mask_rho]
             J_rho = jac_full_rho * rho_jac_scale[:, np.newaxis] * chain[np.newaxis, :]
 
             return (

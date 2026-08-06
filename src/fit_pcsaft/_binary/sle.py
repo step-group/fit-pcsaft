@@ -28,7 +28,7 @@ def _liquid_state(eos, T_K: float, x1: float):
         eos,
         temperature=T_K * si.KELVIN,
         pressure=1.0 * si.BAR,
-        molefracs=np.array([x1, 1.0 - x1]),
+        composition=np.array([x1, 1.0 - x1]),
         density_initialization="liquid",
     )
 
