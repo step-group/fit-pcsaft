@@ -183,8 +183,16 @@ def _fit_kij_polynomial(
             pred = sum(c * dT**j for j, c in enumerate(coeffs))
             return w_sqrt * (pred - kij_arr)
 
+        # The residual is linear in coeffs, so the Jacobian is the weighted
+        # Vandermonde matrix and is constant. Exact and free; scipy's default
+        # '2-point' would rebuild it numerically on every iteration.
+        _poly_jac_const = w_sqrt[:, None] * np.vander(
+            dT, effective_order + 1, increasing=True
+        )
+
         rob = _lsq(
             _poly_resid, x0_poly,
+            jac=lambda coeffs: _poly_jac_const,
             loss="cauchy", f_scale=0.01,
             ftol=1e-8, xtol=1e-8, gtol=1e-8,
         )

@@ -568,8 +568,12 @@ def fit_viscosity_entropy_scaling(
         def _residuals(p: np.ndarray) -> np.ndarray:
             return Phi_fit @ p - y_shift
 
+        # _residuals is linear in p, so its Jacobian is exactly Phi_fit and is
+        # constant across iterations. scipy's default '2-point' would
+        # approximate a matrix we already hold.
         theta = scipy.optimize.least_squares(
-            _residuals, x0=x0, loss=loss, f_scale=_f_scale_scalar, method="trf",
+            _residuals, x0=x0, jac=lambda p: Phi_fit,
+            loss=loss, f_scale=_f_scale_scalar, method="trf",
         ).x
 
     if A_fixed is not None:

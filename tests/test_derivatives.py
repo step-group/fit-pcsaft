@@ -50,3 +50,47 @@ def test_default_step_is_above_the_noise_floor():
 
     default_h = inspect.signature(_make_binary_jac_fn).parameters["h"].default
     assert 1e-9 <= default_h <= 1e-3
+
+
+def test_kij_polynomial_jacobian_formula():
+    """The weighted Vandermonde must equal the numerical Jacobian of _poly_resid.
+
+    Guards column order (increasing powers of dT) and orientation. Getting
+    either wrong silently produces a wrong k_ij(T) polynomial.
+    """
+    from scipy.optimize._numdiff import approx_derivative
+
+    t_ref = 298.15
+    T = np.linspace(280.0, 360.0, 7)
+    dT = T - t_ref
+    kij_arr = -0.048 + 3.0e-4 * dT
+    w_sqrt = np.linspace(0.4, 1.0, 7)
+    order = 2
+
+    def poly_resid(coeffs):
+        pred = sum(c * dT**j for j, c in enumerate(coeffs))
+        return w_sqrt * (pred - kij_arr)
+
+    analytic = w_sqrt[:, None] * np.vander(dT, order + 1, increasing=True)
+    x = np.array([-0.05, 2.0e-4, 1.0e-7])
+
+    np.testing.assert_allclose(
+        analytic, approx_derivative(poly_resid, x), rtol=1e-5, atol=1e-9
+    )
+
+
+def test_kij_polynomial_recovers_trend_despite_outlier():
+    """Equivalence guard: the Cauchy polish must still reject a gross outlier."""
+    from fit_pcsaft._binary._utils import _fit_kij_polynomial
+
+    t_ref = 298.15
+    T = np.linspace(280.0, 360.0, 9)
+    true_c = np.array([-0.048, 3.0e-4])
+    kij = true_c[0] + true_c[1] * (T - t_ref)
+    kij[4] += 0.25                      # gross outlier
+    ard = np.full(len(T), 1.0)
+    ard[4] = 50.0                       # and it is flagged as unreliable
+
+    coeffs, _ = _fit_kij_polynomial(T, kij, ard, kij_order=1, kij_t_ref=t_ref)
+
+    np.testing.assert_allclose(coeffs, true_c, rtol=5e-2, atol=1e-4)
