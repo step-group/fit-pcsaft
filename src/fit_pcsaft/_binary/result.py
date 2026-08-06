@@ -136,7 +136,7 @@ class BinaryFitResult:
 
         # --- LLE ----------------------------------------------------------
         if "lle" in _tokens:
-            from fit_pcsaft._binary.lle import _LLE_FEEDS
+            from fit_pcsaft._binary.lle import _LLE_FEEDS, _exp_feeds
             from fit_pcsaft._binary._plot import _normalize_result_for_type
             lle_data = _normalize_result_for_type(self, "lle").data
             T_arr    = lle_data["T"].astype(float)
@@ -151,12 +151,20 @@ class BinaryFitResult:
                 if self._record1 is not None and self._record2 is not None:
                     try:
                         eos_i = _build_binary_eos(self._record1, self._record2, kij)
-                        for z1 in _LLE_FEEDS:
+                        # Same feed list and pressure as the fit path. With the
+                        # grid alone at 1 bar this reported NaN at temperatures
+                        # where the fit converged fine, which reads as a model
+                        # failure rather than a reporting gap.
+                        exp_feeds = _exp_feeds(
+                            x1_I_exp if np.isfinite(x1_I_exp) else None,
+                            x1_II_exp if np.isfinite(x1_II_exp) else None,
+                        )
+                        for z1 in exp_feeds + _LLE_FEEDS:
                             try:
                                 feed = np.array([z1, 1.0 - z1]) * si.MOL
                                 state = feos.State(
                                     eos_i, T * si.KELVIN,
-                                    pressure=1.0 * si.BAR, composition=feed,
+                                    pressure=1.01325 * si.BAR, composition=feed,
                                     density_initialization="liquid",
                                 )
                                 pe = state.tp_flash(max_iter=1000)

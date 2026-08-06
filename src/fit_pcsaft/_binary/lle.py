@@ -10,8 +10,10 @@ import si_units as si
 from scipy.optimize import least_squares
 
 from fit_pcsaft._binary._utils import (
+    LOG_PENALTY,
     _apply_induced_association,
     _build_binary_eos,
+    _comp_resid,
     _fit_kij_polynomial,
     _kij_at_T,
     _load_pure_records,
@@ -49,6 +51,7 @@ def fit_kij_lle(
     induced_assoc: bool = False,
     ucst_target: bool = False,
     relative_residuals: bool = True,
+    log_residuals: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE tieline data.
 
@@ -72,6 +75,12 @@ def fit_kij_lle(
         Reference temperature for the k_ij polynomial [K].
     kij_bounds : tuple
         (lower, upper) bounds for k_ij at each temperature.
+    log_residuals : bool
+        Fit ln(x_pred) - ln(x_exp) instead. Default: False. Overrides
+        `relative_residuals`, which is ignored when this is True. Preferred
+        for water-rich branches at x ~ 1e-4, where the relative residual is
+        asymmetric (overshoot unbounded, undershoot floored at -1) and the
+        absolute one is numerically invisible. `ard` is NaN in this mode.
     temperature_unit : si.SIObject
         Unit of T column in CSV (default: K).
     t_min : si.SIObject | None
@@ -158,8 +167,11 @@ def fit_kij_lle(
     for T_K, exp_I, exp_II in aggregated:
         feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS
         n_phases = (1 if exp_I is not None else 0) + (1 if exp_II is not None else 0)
-        # Penalty cost = 0.5 * n_phases * 1.0^2; accept anything below that
-        penalty_cost = 0.5 * n_phases * 0.99
+        # Penalty cost = 0.5 * n_phases * penalty^2; accept anything below that.
+        # It must scale with the penalty: in ln-space an ordinary residual of
+        # 1.0 per phase already exceeds the literal 0.99, so a hardcoded gate
+        # rejects every temperature and the fit dies "No temperatures converged".
+        penalty_cost = 0.5 * n_phases * 0.99 * (LOG_PENALTY**2 if log_residuals else 1.0)
 
         def residuals(kij_arr, T_K=T_K, exp_I=exp_I, exp_II=exp_II, feeds=feeds):
             return _residuals_at_T(
@@ -173,6 +185,7 @@ def fit_kij_lle(
                 feeds,
                 T_anchor_K=T_anchor_K,
                 relative_residuals=relative_residuals,
+                log_residuals=log_residuals,
                 errors=errors,
             )
 
@@ -242,6 +255,7 @@ def fit_kij_lle(
                 feeds,
                 T_anchor_K=T_anchor_K,
                 relative_residuals=relative_residuals,
+                log_residuals=log_residuals,
             )
             ard_poly.append(100.0 * float(np.mean(np.abs(r))))
         except Exception:
@@ -255,8 +269,14 @@ def fit_kij_lle(
     data["ard_pointwise_poly"] = ard_poly_arr            # at polynomial k_ij (stage 2)
 
     # Reported ARD: post-polynomial, excluding machine-precision near-zeros
-    meaningful = ard_poly_arr[ard_poly_arr > 0.01]
-    ard = float(meaningful.mean()) if len(meaningful) > 0 else float(np.mean(ard_poly_arr))
+    if log_residuals:
+        # The > 0.01 gate and the 100 * mean|resid| scaling are both defined on
+        # a relative linear-x residual. Reporting them off log residuals would
+        # be a different quantity wearing the same name.
+        ard = float("nan")
+    else:
+        meaningful = ard_poly_arr[ard_poly_arr > 0.01]
+        ard = float(meaningful.mean()) if len(meaningful) > 0 else float(np.mean(ard_poly_arr))
 
     # Residuals for the polynomial fit (k_ij poly vs point-wise k_ij values)
     poly_resid_vals = kij_fitted_arr - np.array(
@@ -376,13 +396,15 @@ def _residuals_at_T(
     feeds: "list[float]",
     T_anchor_K: "float | None" = None,
     relative_residuals: bool = True,
+    log_residuals: bool = False,
     errors: "list | None" = None,
 ) -> np.ndarray:
     """Residual vector for least_squares at a single temperature.
 
-    Returns composition errors on each available phase — relative
-    ((x_pred-x)/x) when relative_residuals=True, absolute (x_pred-x)
-    otherwise. A penalty of [1.0, ...] is returned on tp_flash failure.
+    Returns composition errors on each available phase — ln(x_pred) - ln(x)
+    when log_residuals=True (which overrides relative_residuals), else
+    relative ((x_pred-x)/x) when relative_residuals=True, else absolute
+    (x_pred-x). A penalty vector is returned on tp_flash failure.
 
     When T_anchor_K is provided and T_K > T_anchor_K, a warm-start PE is built
     at T_anchor_K using the *same* EOS (same k_ij) and passed as initial_state.
@@ -391,7 +413,7 @@ def _residuals_at_T(
     """
     kij = float(kij_arr[0])
     n_resid = (1 if exp_I is not None else 0) + (1 if exp_II is not None else 0)
-    penalty = np.ones(n_resid)
+    penalty = np.full(n_resid, LOG_PENALTY if log_residuals else 1.0)
 
     eos = _build_binary_eos(record1, record2, kij)
 
@@ -430,9 +452,11 @@ def _residuals_at_T(
             pred_I, pred_II = min(x_a, x_b), max(x_a, x_b)
             resids = []
             if exp_I is not None:
-                resids.append((pred_I - exp_I) / max(exp_I, 1e-6) if relative_residuals else pred_I - exp_I)
+                resids.append(_comp_resid(pred_I, exp_I, log_residuals,
+                                          relative=relative_residuals))
             if exp_II is not None:
-                resids.append((pred_II - exp_II) / max(exp_II, 1e-6) if relative_residuals else pred_II - exp_II)
+                resids.append(_comp_resid(pred_II, exp_II, log_residuals,
+                                          relative=relative_residuals))
             return np.array(resids)
         except Exception as exc:
             if errors is not None:
