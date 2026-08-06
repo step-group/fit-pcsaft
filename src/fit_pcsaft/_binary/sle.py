@@ -8,7 +8,9 @@ import si_units as si
 from scipy.optimize import least_squares
 
 from fit_pcsaft._binary._utils import (
+    LOG_PENALTY,
     _build_binary_eos,
+    _comp_resid,
     _fit_kij_polynomial,
     _kij_at_T,
     _load_pure_records,
@@ -83,6 +85,7 @@ def fit_kij_sle(
     t_max: "si.SIObject | None" = None,
     scipy_kwargs: "dict | None" = None,
     kij_per_point: bool = False,
+    log_residuals: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from SLE solubility data.
 
@@ -123,6 +126,13 @@ def fit_kij_sle(
         Reference temperature for the k_ij polynomial [K]. Default: 293.15 K.
     kij_bounds : tuple
         (lower, upper) bounds for the constant term k_ij0.
+    log_residuals : bool
+        Fit ln(x_pred) - ln(x_exp) instead of x_pred - x_exp. Default: False.
+        Use for dilute solubility, where the linear residual is dominated by
+        the concentrated branch. Failed predictions cost LOG_PENALTY instead
+        of 1.0 -- see that constant for why. Under log_residuals the returned
+        ``ard`` is NaN: the |resid| < 0.99 validity gate and the
+        mean|resid|/mean(x) ratio are both defined on linear x.
     temperature_unit : si.SIObject
         Unit of T column in CSV (default: K).
     t_min : si.SIObject | None
@@ -189,19 +199,19 @@ def fit_kij_sle(
             x1_i = float(x1_arr[i])
             eos = eos_map[kij_per_row[i]]
             if eos is None:
-                resids[i] = 1.0
+                resids[i] = LOG_PENALTY if log_residuals else 1.0
                 continue
             try:
                 x1_pred = _predict_x1(eos, T_i, x1_i)
-                resid = 1.0 if np.isnan(x1_pred) else (x1_pred - x1_i)
+                resid = _comp_resid(x1_pred, x1_i, log_residuals)
             except Exception:
-                resid = 1.0
+                resid = LOG_PENALTY if log_residuals else 1.0
             if eutectic:
                 try:
                     x1_pred2 = _predict_x1_branch2(eos, T_i, x1_i)
-                    resid2 = 1.0 if np.isnan(x1_pred2) else (x1_pred2 - x1_i)
+                    resid2 = _comp_resid(x1_pred2, x1_i, log_residuals)
                 except Exception:
-                    resid2 = 1.0
+                    resid2 = LOG_PENALTY if log_residuals else 1.0
                 resid = resid if abs(resid) <= abs(resid2) else resid2
             resids[i] = resid
         return resids
@@ -222,15 +232,15 @@ def fit_kij_sle(
                 try:
                     eos = _build_binary_eos(record1, record2, float(kij_arr[0]))
                     x1_pred = _predict_x1(eos, T_K, x1)
-                    resid = 1.0 if np.isnan(x1_pred) else (x1_pred - x1)
+                    resid = _comp_resid(x1_pred, x1, log_residuals)
                     if eutectic:
                         x1_pred2 = _predict_x1_branch2(eos, T_K, x1)
-                        resid2 = 1.0 if np.isnan(x1_pred2) else (x1_pred2 - x1)
+                        resid2 = _comp_resid(x1_pred2, x1, log_residuals)
                         resid = resid if abs(resid) <= abs(resid2) else resid2
                     return np.array([resid])
                 except Exception as exc:
                     errors.append(exc)
-                    return np.array([1.0])
+                    return np.array([LOG_PENALTY if log_residuals else 1.0])
 
             kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
             best_x0, best_cost = 0.0, np.inf
@@ -250,7 +260,10 @@ def fit_kij_sle(
                     ftol=1e-8, xtol=1e-8, gtol=1e-8, max_nfev=500,
                 )
                 total_nfev += res.nfev
-                if res.cost < 0.5 * 0.99:
+                # "better than a total failure", not the literal 0.99: the gate
+                # must scale with the penalty or every converged log-space fit
+                # is rejected and the fit dies with "No SLE points converged".
+                if res.cost < 0.5 * 0.99 * (LOG_PENALTY**2 if log_residuals else 1.0):
                     T_fitted.append(T_K_i)
                     kij_fitted.append(float(res.x[0]))
                     ard_fitted.append(100.0 * abs(float(res.fun[0])))
@@ -327,14 +340,20 @@ def fit_kij_sle(
 
     # ARD — reuse residuals from final evaluation
     final_resids = fun(kij_coeffs)
-    valid = np.abs(final_resids) < 0.99
-    x1_data_valid = x1_arr.astype(float)[valid]
-    mean_x = np.mean(x1_data_valid) if len(x1_data_valid) > 0 else float("nan")
-    ard = (
-        100.0 * float(np.mean(np.abs(final_resids[valid]))) / mean_x
-        if mean_x > 0
-        else float("nan")
-    )
+    if log_residuals:
+        # The 0.99 validity gate and the mean|resid|/mean(x) ratio are both
+        # defined on linear x. Reporting them off log residuals would be a
+        # different quantity wearing the same name.
+        ard = float("nan")
+    else:
+        valid = np.abs(final_resids) < 0.99
+        x1_data_valid = x1_arr.astype(float)[valid]
+        mean_x = np.mean(x1_data_valid) if len(x1_data_valid) > 0 else float("nan")
+        ard = (
+            100.0 * float(np.mean(np.abs(final_resids[valid]))) / mean_x
+            if mean_x > 0
+            else float("nan")
+        )
 
     return BinaryFitResult(
         kij_coeffs=kij_coeffs,

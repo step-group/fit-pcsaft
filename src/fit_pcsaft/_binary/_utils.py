@@ -111,6 +111,38 @@ def _kij_at_T(coeffs: np.ndarray, T: float, t_ref: float) -> float:
     return result
 
 
+LOG_PENALTY = 10.0
+"""Residual returned for a failed prediction when log_residuals=True.
+
+In linear-x the failure penalty is 1.0, safely larger than any real
+|x_pred - x_exp| (both are mole fractions <= 1). In ln-space that no longer
+holds: |ln(x_pred/x_exp)| = 1.0 is only a factor of e, so a penalty of 1.0
+would make a *failed* flash score better than a converged-but-poor prediction,
+and least_squares would walk k_ij toward the region where the flash breaks.
+10.0 = a factor of 22000, above ln(1000) = 6.9, the worst residual a real
+(if bad) PC-SAFT water model produces on aqueous terpene solubilities.
+"""
+
+
+def _comp_resid(pred: float, exp: float, log_residuals: bool,
+                relative: bool = False) -> float:
+    """One composition residual, in ln-space or linear/relative space.
+
+    log_residuals=True returns ln(pred) - ln(exp) and *overrides* `relative`:
+    a log difference is already a relative measure. Non-finite or non-positive
+    predictions -- and non-positive experimental values, which cannot be
+    logged -- return the failure penalty for the active mode.
+
+    Sign convention matches _metrics.py: positive = model overshoots.
+    """
+    if log_residuals:
+        if not np.isfinite(pred) or pred <= 0.0 or not np.isfinite(exp) or exp <= 0.0:
+            return LOG_PENALTY
+        return float(np.log(pred) - np.log(exp))
+    if not np.isfinite(pred):
+        return 1.0
+    return (pred - exp) / max(exp, 1e-6) if relative else pred - exp
+
 
 def _fit_kij_polynomial(
     T_arr: np.ndarray,
