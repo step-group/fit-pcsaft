@@ -194,8 +194,21 @@ def _fit_kij_polynomial(
     return kij_coeffs, poly_resid
 
 
-def _make_binary_jac_fn(fun, n_params: int, h: float = 1e-012):
-    """Build a central-difference (3-point) Jacobian for a binary cost function."""
+def _make_binary_jac_fn(fun, n_params: int, h: float = 1e-6):
+    """Build a central-difference (3-point) Jacobian for a binary cost function.
+
+    ``h`` is absolute, not relative. The parameters are k_ij polynomial
+    coefficients: c0 is O(0.01-0.5) and higher coefficients are bounded to
+    +/-0.01, so a single absolute step suits every column. Higher-order
+    coefficients multiply dT (tens of kelvin), which amplifies their effect
+    on k_ij rather than shrinking it.
+
+    Do not lower h. The residuals come from an iterative flash/bubble-point
+    solve whose own convergence tolerance sets the noise floor: at h=1e-12
+    this returned 7.50 for an ethanol/water bubble-point derivative whose
+    true value is 4.4259 (69% error). Every h from 1e-8 to 1e-4 agrees to
+    5+ significant digits.
+    """
 
     def jac(x: np.ndarray) -> np.ndarray:
         cols = []
