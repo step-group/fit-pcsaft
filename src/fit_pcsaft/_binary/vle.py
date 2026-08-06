@@ -17,6 +17,7 @@ from fit_pcsaft._binary._utils import (
 )
 from fit_pcsaft._csv import SCHEMA_VLE, load_csv
 from fit_pcsaft._binary.result import BinaryFitResult
+from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 _N_KIJ_SCAN = 13
 
@@ -118,6 +119,7 @@ def fit_kij_vle(
         n_rows = len(T_arr)
         T_fitted, kij_fitted, cost_fitted, fitted_point_meta = [], [], [], []
         total_nfev = 0
+        errors: list = []
 
         for i in range(n_rows):
             T_csv_i = float(T_arr[i])
@@ -131,6 +133,7 @@ def fit_kij_vle(
                     kij_arr, T_csv, P, x1, y1,
                     record1, record2, temperature_unit, pressure_unit,
                     relative_residuals=relative_residuals,
+                    errors=errors,
                 )
 
             kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
@@ -163,7 +166,10 @@ def fit_kij_vle(
                 continue
 
         if len(T_fitted) == 0:
-            raise RuntimeError("No points converged. Try relaxing kij_bounds.")
+            raise RuntimeError(
+                "No points converged. Try relaxing kij_bounds."
+                + _first_error_hint(errors)
+            ) from _first_error(errors)
 
         T_fitted_arr = np.array(T_fitted)
         kij_fitted_arr = np.array(kij_fitted)
@@ -332,6 +338,7 @@ def _residuals_vle_point(
     kij_arr, T_csv: float, P_i: float, x1_i: float, y1_i: "float | None",
     record1, record2, temperature_unit, pressure_unit,
     relative_residuals: bool = True,
+    errors: "list | None" = None,
 ) -> np.ndarray:
     """Residual vector for a single VLE data point.
 
@@ -350,5 +357,7 @@ def _residuals_vle_point(
         if y1_i is not None:
             resids.append(float(bp.vapor.molefracs[0]) - y1_i)
         return np.array(resids)
-    except Exception:
+    except Exception as exc:
+        if errors is not None:
+            errors.append(exc)
         return penalty

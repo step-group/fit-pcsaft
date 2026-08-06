@@ -10,8 +10,11 @@ from scipy.optimize import differential_evolution, least_squares
 
 from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv
 from fit_pcsaft._fit_utils import (
+    _PENALTY,
     _build_eos,
     _fetch_compound,
+    _first_error,
+    _first_error_hint,
     _make_f_and_df_numerical,
     _normalize_f_scale,
 )
@@ -53,6 +56,22 @@ _MU_ASSOC: list[float] = [1.0, 1.5, 1.0, 1.5, 1.0, 1.5, 1.0, 1.5, 1.0, 1.5, 1.0,
 _DE_BOUNDS_BASE = [(1.0, 20.0), (2.0, 6.0), (50.0, 700.0)]  # m, sigma, epsilon_k
 _DE_BOUNDS_MU = (0.0, 10.0)  # mu in Debye
 _DE_BOUNDS_ASSOC = [(1e-4, 0.5), (500.0, 5000.0)]  # kappa_ab, epsilon_k_ab
+
+
+def _check_not_stalled(fun_vec, errors) -> None:
+    """Raise if the cost function returned the penalty sentinel at the solution.
+
+    Both cost paths return ``_PENALTY`` when the EOS cannot be evaluated. The
+    analytical path also returns a zero Jacobian, so the optimizer sees no
+    gradient, stops at nfev=1, and reports success — leaving the initial guess
+    to be written out as if it were a fit.
+    """
+    if len(fun_vec) and np.max(np.abs(fun_vec)) >= 0.1 * _PENALTY:
+        raise RuntimeError(
+            "Fit did not move off the initial guess: the cost function failed at "
+            "every evaluation, so the reported parameters are the starting values, "
+            "not a fit." + _first_error_hint(errors)
+        ) from _first_error(errors)
 
 
 def _get_initial_sets(fit_mu: bool, assoc: bool = False):
@@ -242,11 +261,16 @@ def _setup_pure_fit(
             f"Note: {'; '.join(reasons)} — "
             "falling back to numerical Jacobian (2-point).\n"
         )
-        cost_fn, jac_fn = _make_f_and_df_numerical(data, compound, spec, units, config)
+        cost_fn, jac_fn, errors = _make_f_and_df_numerical(
+            data, compound, spec, units, config
+        )
     else:
-        cost_fn, jac_fn = _make_f_and_df(data, compound, spec, units, config)
+        cost_fn, jac_fn, errors = _make_f_and_df(data, compound, spec, units, config)
 
-    return data, compound, spec, units, config, cost_fn, jac_fn, fit_mu, is_associative
+    return (
+        data, compound, spec, units, config,
+        cost_fn, jac_fn, errors, fit_mu, is_associative,
+    )
 
 
 def fit_pure(
@@ -328,7 +352,7 @@ def fit_pure(
     -------
         FitResult: Fitted parameters, EOS, and fitting quality metrics
     """
-    data, compound, spec, units, config, cost_fn, jac_fn, fit_mu, is_associative = (
+    data, compound, spec, units, config, cost_fn, jac_fn, errors, fit_mu, is_associative = (
         _setup_pure_fit(
             id=id,
             psat_path=psat_path,
@@ -386,10 +410,13 @@ def fit_pure(
         raise RuntimeError(
             "All initial parameter sets failed. Try different starting values or "
             "check that the data covers a valid temperature range."
-        )
+            + _first_error_hint(errors)
+        ) from _first_error(errors)
 
     result = min(results, key=lambda r: r.cost)
     time_elapsed = time.perf_counter() - t0
+
+    _check_not_stalled(result.fun, errors)
 
     params_fitted = result.x**2
 
@@ -493,7 +520,7 @@ def fit_pure_de(
     -------
         FitResult: Fitted parameters, EOS, and fitting quality metrics
     """
-    data, compound, spec, units, config, cost_fn, _, fit_mu, is_associative = (
+    data, compound, spec, units, config, cost_fn, _, errors, fit_mu, is_associative = (
         _setup_pure_fit(
             id=id,
             psat_path=psat_path,
@@ -559,6 +586,7 @@ def fit_pure_de(
 
     # Evaluate residuals once to get a vector compatible with FitResult.__str__
     fun_vec = cost_fn(np.sqrt(params_fitted))
+    _check_not_stalled(fun_vec, errors)
     scipy_result = SimpleNamespace(
         cost=0.5 * float(np.sum(fun_vec**2)),
         fun=fun_vec,

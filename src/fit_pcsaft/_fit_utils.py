@@ -10,6 +10,28 @@ import pubchempy as pcp
 from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
 
+# Sentinel residual returned when the EOS cannot be evaluated at all. Legitimate
+# residuals are relative deviations scaled by sqrt(w/n)/f_scale and stay far below it.
+_PENALTY = 1e10
+
+
+def _first_error_hint(errors: "list | None") -> str:
+    """Format the first swallowed exception for an aggregate-failure message.
+
+    The per-point handlers must keep swallowing (points legitimately fall outside
+    the EOS validity range), so the aggregate failure is the only place that can
+    explain itself.
+    """
+    if not errors:
+        return ""
+    exc = errors[0]
+    return f" First internal failure: {type(exc).__name__}: {exc}"
+
+
+def _first_error(errors: "list | None"):
+    """The exception to chain via ``raise ... from``, or None."""
+    return errors[0] if errors else None
+
 
 def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
     """Fetch compound information from PubChem.
@@ -214,8 +236,13 @@ def _make_cost_fn(
     spec: ModelSpec,
     units: Units,
     config: FitConfig,
+    errors: "list | None" = None,
 ) -> Callable:
-    """Create cost function closure for non-associating optimization."""
+    """Create cost function closure for non-associating optimization.
+
+    ``errors`` collects swallowed exceptions so a fit that never leaves its
+    initial guess can report *why* instead of claiming convergence.
+    """
     T_psat = data.T_psat
     d_psat = data.p_psat
     T_rho = data.T_rho
@@ -243,8 +270,10 @@ def _make_cost_fn(
         """Compute weighted relative residuals."""
         try:
             eos = _build_eos(params_vec**2, compound, spec)
-        except Exception:
-            return np.full(n_total, 1e10)
+        except Exception as exc:
+            if errors is not None:
+                errors.append(exc)
+            return np.full(n_total, _PENALTY)
 
         residuals = []
 
@@ -257,7 +286,9 @@ def _make_cost_fn(
                     feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)[0]
                     / psat_unit
                 )
-            except Exception:
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(exc)
                 success[i] = False
 
         if not success.all():
@@ -267,7 +298,7 @@ def _make_cost_fn(
                 coeffs = np.linalg.lstsq(X, np.log(p_pred[success]), rcond=None)[0]
                 p_pred[~success] = np.exp(coeffs[0] + coeffs[1] * inv_T_psat[~success])
             else:
-                return np.full(n_total, 1e10)
+                return np.full(n_total, _PENALTY)
 
         residuals.append(psat_cost_scale * (p_pred * inv_d_psat - 1.0))
 
@@ -282,8 +313,10 @@ def _make_cost_fn(
                     for T in T_rho
                 ]
                 rho_pred = np.array(rho_pred_vals)
-            except Exception:
-                return np.full(n_total, 1e10)
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(exc)
+                return np.full(n_total, _PENALTY)
 
             residuals.append(rho_cost_scale * (rho_pred * inv_d_rho - 1.0))
 
@@ -301,8 +334,10 @@ def _make_cost_fn(
                         / enthalpy_unit
                     )
                 hvap_pred = np.array(hvap_pred_vals)
-            except Exception:
-                return np.full(n_total, 1e10)
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(exc)
+                return np.full(n_total, _PENALTY)
 
             residuals.append(hvap_cost_scale * (hvap_pred * inv_d_hvap - 1.0))
 
@@ -317,13 +352,16 @@ def _make_f_and_df_numerical(
     spec: ModelSpec,
     units: Units,
     config: FitConfig,
-) -> Tuple[Callable, Callable]:
+) -> Tuple[Callable, Callable, list]:
     """Create cost function + 2-point numerical Jacobian with shared base-eval cache.
 
     Scipy calls f(x) then jac(x) at the same x each iteration. Caching the last
     (x, f(x)) means the Jacobian reuses the base evaluation instead of rerunning feos.
+
+    Returns ``(f, df, errors)``; ``errors`` accumulates swallowed exceptions.
     """
-    _cost = _make_cost_fn(data, compound, spec, units, config)
+    errors: list = []
+    _cost = _make_cost_fn(data, compound, spec, units, config, errors)
 
     # Use standard variables instead of a list hack
     x_cached = None
@@ -359,4 +397,4 @@ def _make_f_and_df_numerical(
 
         return J
 
-    return f, df
+    return f, df, errors

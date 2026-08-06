@@ -18,6 +18,7 @@ from fit_pcsaft._binary._utils import (
 )
 from fit_pcsaft._csv import SCHEMA_LLE, load_csv
 from fit_pcsaft._binary.result import BinaryFitResult
+from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 # 51 feed compositions, sigmoid-spaced to sample densely near x1=0 and x1=1.
 # s(i) = 0.05*i + 6e-5*i^3,  r(i) = exp(s(i)),  x1(i) = 1/(1+r(i))
@@ -152,6 +153,7 @@ def fit_kij_lle(
     cost_fitted = []
     fitted_point_meta = []  # (exp_I, exp_II, feeds) for post-poly ARD re-evaluation
     total_nfev = 0
+    errors: list = []
 
     for T_K, exp_I, exp_II in aggregated:
         feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS
@@ -171,6 +173,7 @@ def fit_kij_lle(
                 feeds,
                 T_anchor_K=T_anchor_K,
                 relative_residuals=relative_residuals,
+                errors=errors,
             )
 
         # Coarse scan to find best initial k_ij guess (avoids getting trapped in
@@ -210,7 +213,10 @@ def fit_kij_lle(
             continue
 
     if len(T_fitted) == 0:
-        raise RuntimeError("No temperatures converged. Try relaxing kij_bounds.")
+        raise RuntimeError(
+            "No temperatures converged. Try relaxing kij_bounds."
+            + _first_error_hint(errors)
+        ) from _first_error(errors)
     effective_order = min(kij_order, len(T_fitted) - 1)
 
     # Stage 2: ARD-weighted polynomial fit to k_ij(T) trend
@@ -370,6 +376,7 @@ def _residuals_at_T(
     feeds: "list[float]",
     T_anchor_K: "float | None" = None,
     relative_residuals: bool = True,
+    errors: "list | None" = None,
 ) -> np.ndarray:
     """Residual vector for least_squares at a single temperature.
 
@@ -401,8 +408,9 @@ def _residuals_at_T(
                 density_initialization="liquid",
             )
             anchor_pe = s_a.tp_flash(max_iter=500)
-        except Exception:
-            pass
+        except Exception as exc:
+            if errors is not None:
+                errors.append(exc)
 
     for z1 in feeds:
         try:
@@ -426,7 +434,9 @@ def _residuals_at_T(
             if exp_II is not None:
                 resids.append((pred_II - exp_II) / max(exp_II, 1e-6) if relative_residuals else pred_II - exp_II)
             return np.array(resids)
-        except Exception:
+        except Exception as exc:
+            if errors is not None:
+                errors.append(exc)
             continue
 
     return penalty

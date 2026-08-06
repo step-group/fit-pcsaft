@@ -16,6 +16,7 @@ from fit_pcsaft._binary._utils import (
 )
 from fit_pcsaft._csv import SCHEMA_SLE, load_csv
 from fit_pcsaft._binary.result import BinaryFitResult
+from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 _R = si.RGAS / (si.JOULE / (si.MOL * si.KELVIN))
 _N_KIJ_SCAN = 13
@@ -211,6 +212,7 @@ def fit_kij_sle(
     if kij_per_point:
         T_fitted, kij_fitted, ard_fitted = [], [], []
         total_nfev = 0
+        errors: list = []
 
         for i in range(n_rows):
             T_K_i = float(T_arr[i]) * t_scale
@@ -226,7 +228,8 @@ def fit_kij_sle(
                         resid2 = 1.0 if np.isnan(x1_pred2) else (x1_pred2 - x1)
                         resid = resid if abs(resid) <= abs(resid2) else resid2
                     return np.array([resid])
-                except Exception:
+                except Exception as exc:
+                    errors.append(exc)
                     return np.array([1.0])
 
             kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
@@ -255,7 +258,10 @@ def fit_kij_sle(
                 continue
 
         if not T_fitted:
-            raise RuntimeError("No SLE points converged. Try relaxing kij_bounds.")
+            raise RuntimeError(
+                "No SLE points converged. Try relaxing kij_bounds."
+                + _first_error_hint(errors)
+            ) from _first_error(errors)
 
         T_fitted_arr  = np.array(T_fitted)
         kij_fitted_arr = np.array(kij_fitted)

@@ -15,6 +15,7 @@ from fit_pcsaft._binary._utils import (
 )
 from fit_pcsaft._binary.result import BinaryFitResult
 from fit_pcsaft._csv import SCHEMA_HENRY, load_csv
+from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 
 def fit_kij_henry(
@@ -94,6 +95,8 @@ def fit_kij_henry(
             )
             p_vap_solvent[i] = vp[0] / si.PASCAL
 
+    errors: list = []
+
     def fun(coeffs: np.ndarray) -> np.ndarray:
         resids = np.empty(n_rows)
         kij_per_row = np.array([_kij_at_T(coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)])
@@ -102,7 +105,8 @@ def fit_kij_henry(
         for kij_val in unique_kijs:
             try:
                 eos_map[kij_val] = _build_binary_eos(record1, record2, float(kij_val))
-            except Exception:
+            except Exception as exc:
+                errors.append(exc)
                 eos_map[kij_val] = None
 
         for i in range(n_rows):
@@ -121,7 +125,8 @@ def fit_kij_henry(
                     else:
                         H_pred = H_feos / henry_unit
                     resids[i] = (H_pred - H_i) / H_i
-                except Exception:
+                except Exception as exc:
+                    errors.append(exc)
                     resids[i] = 1.0
         return resids
 
@@ -151,6 +156,13 @@ def fit_kij_henry(
     eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
 
     final_resids = fun(kij_coeffs)
+    # Every residual sitting exactly on the penalty means no point was ever
+    # evaluated — the k_ij below is fitted to nothing.
+    if len(final_resids) and np.all(final_resids == 1.0):
+        raise RuntimeError(
+            "No Henry's law points could be evaluated; the fitted k_ij is "
+            "meaningless." + _first_error_hint(errors)
+        ) from _first_error(errors)
     valid = np.abs(final_resids) < 0.99
     ard = 100.0 * float(np.mean(np.abs(final_resids[valid]))) if valid.any() else float("nan")
 

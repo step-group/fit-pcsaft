@@ -33,6 +33,7 @@ import si_units as si
 
 from fit_pcsaft._csv import SCHEMA_VISCOSITY, load_csv
 from fit_pcsaft._binary._utils import _apply_induced_association
+from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 from fit_pcsaft._pure.viscosity_gc import compute_a_gc
 
 
@@ -445,6 +446,7 @@ def fit_viscosity_entropy_scaling(
     s_vals: list[float] = []
     eta_CE_vals: list[float] = []
     eta_exp_Pa_s_vals: list[float] = []
+    errors: list = []
     no_pressure_col = P_data is None
 
     for i, (T, eta_exp, phase) in enumerate(zip(T_data, eta_data, phase_data)):
@@ -488,7 +490,8 @@ def fit_viscosity_entropy_scaling(
                 s_vals.append(s)
                 eta_CE_vals.append(eta_CE)
                 eta_exp_Pa_s_vals.append(eta_exp_Pa_s)
-        except Exception:
+        except Exception as exc:
+            errors.append(exc)
             continue
 
     n = len(s_vals)
@@ -497,7 +500,8 @@ def fit_viscosity_entropy_scaling(
         raise RuntimeError(
             f"Only {n} valid data points (need ≥ {n_free_params}). "
             "Check that T/P conditions are within the EOS validity range."
-        )
+            + _first_error_hint(errors)
+        ) from _first_error(errors)
 
     s_arr = np.array(s_vals)
     eta_CE_arr = np.array(eta_CE_vals)

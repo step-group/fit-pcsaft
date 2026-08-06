@@ -27,6 +27,7 @@ Unit assumptions (hardcoded to match feos AD output):
 import feos
 import numpy as np
 
+from fit_pcsaft._fit_utils import _PENALTY
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
 
 # ---------------------------------------------------------------------------
@@ -164,8 +165,14 @@ def _make_core(
     eos_ad,
     fit_params,
     build_arrays,
+    errors: "list | None" = None,
 ):
-    """Build (fun, jac) given the case-specific eos_ad, fit_params, build_arrays."""
+    """Build (fun, jac) given the case-specific eos_ad, fit_params, build_arrays.
+
+    On failure this returns a *zero* Jacobian, which flattens the gradient and
+    makes the optimizer stop immediately reporting success. ``errors`` records
+    why, so the caller's stall guard can explain the bogus "convergence".
+    """
     T_psat = data.T_psat
     d_psat = data.p_psat
     T_rho = data.T_rho
@@ -192,7 +199,7 @@ def _make_core(
     temps_array_psat = np.expand_dims(np.array(T_psat), 1)
     temps_array_rho = np.expand_dims(np.array(T_rho), 1) if n_rho > 0 else None
 
-    _penalty_f = np.full(n_total, 1e10)
+    _penalty_f = np.full(n_total, _PENALTY)
     _penalty_J = np.zeros((n_total, n_params))
 
     def _compute(params_vec):
@@ -204,7 +211,9 @@ def _make_core(
             derivs_psat = feos.Property.vapor_pressure_derivatives(
                 eos_ad, fit_params, pa_psat, temps_array_psat
             )
-        except Exception:
+        except Exception as exc:
+            if errors is not None:
+                errors.append(exc)
             return _penalty_f, _penalty_J, None, None
 
         mask_psat = derivs_psat[2]
@@ -233,7 +242,9 @@ def _make_core(
                 derivs_rho = feos.Property.equilibrium_liquid_density_derivatives(
                     eos_ad, fit_params, pa_rho, temps_array_rho
                 )
-            except Exception:
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(exc)
                 return _penalty_f, _penalty_J, None, None
 
             mask_rho = derivs_rho[2]
@@ -275,7 +286,7 @@ def _make_f_and_df(
     units: Units,
     config: FitConfig,
 ):
-    """Return (fun, jac) for the appropriate PC-SAFT case."""
+    """Return (fun, jac, errors) for the appropriate PC-SAFT case."""
     n_psat = len(data.T_psat)
     n_rho = len(data.T_rho)
     assoc = spec.na is not None and spec.nb is not None and spec.na > 0 and spec.nb > 0
@@ -290,4 +301,8 @@ def _make_f_and_df(
     else:
         eos_ad, fit_params, build_arrays = _setup_nonassoc(spec, n_psat, n_rho)
 
-    return _make_core(data, compound, config, eos_ad, fit_params, build_arrays)
+    errors: list = []
+    fun, jac = _make_core(
+        data, compound, config, eos_ad, fit_params, build_arrays, errors
+    )
+    return fun, jac, errors
