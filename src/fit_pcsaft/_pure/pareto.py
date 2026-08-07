@@ -5,8 +5,14 @@ error and interfacial error are treated as two independent objectives instead of
 being collapsed into one weighted sum, so the whole trade-off curve is available
 and the arbitrariness of a weight choice becomes visible.
 
-    objective 1 (eq 30)  AAD_vle = AARD(psat) + AARD(rho)       [%]
+    objective 1 (eq 30)  AAD_vle = mean(AARD(psat), AARD(rho))  [%]
     objective 2 (eq 31)  AAD_sft = mean|gamma_calc - gamma_exp| [mN/m]
+
+Whether eq 30 averages the two AARDs or sums them is not legible in the
+published equation. It averages: the paper's own water PC-SAFT 2B parameters
+(Table 1) reproduce their AAD_vle = 2.14% (Table 2) only under the mean —
+they give 2.4% as a mean and 4.7% as a sum over a comparable temperature
+range.
 
 Absolute rather than relative deviation for gamma: it goes to zero at the
 critical point, where a relative error diverges and would dominate the fit.
@@ -19,7 +25,10 @@ returning a large objective value rather than a gradient.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -103,7 +112,7 @@ def aad_objectives(
     m_rho = compute_metrics_from_arrays(*preds["rho"])
     if m_psat.n < 0.5 * len(data.T_psat) or m_rho.n < 0.5 * len(data.T_rho):
         return _BIG, _BIG
-    aad_vle = m_psat.aard_pct + m_rho.aard_pct
+    aad_vle = 0.5 * (m_psat.aard_pct + m_rho.aard_pct)
     if not np.isfinite(aad_vle):
         return _BIG, _BIG
 
@@ -121,6 +130,35 @@ def aad_objectives(
         return _BIG, _BIG
 
     return float(aad_vle), float(m_sft.mae)
+
+
+@contextmanager
+def _silence_fd_stderr(active: bool = True):
+    """Redirect file descriptor 2 to /dev/null.
+
+    feos panics inside Rust worker threads when the DFT solver fails to
+    converge ("IterationFailed(...)"). Those panics are already handled — the
+    objective returns _BIG — but Rust writes the panic message straight to fd 2,
+    where no Python-level redirect can reach it. Over thousands of NSGA-II
+    evaluations that is thousands of lines of noise about failures we expect.
+
+    This suppresses the whole fd, so genuine stderr output from the wrapped
+    block is lost too. Pass active=False to keep it when debugging.
+    """
+    if not active:
+        yield
+        return
+    sys.stderr.flush()
+    saved = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved, 2)
+        os.close(devnull)
+        os.close(saved)
 
 
 def _make_problem(compound, spec, data, units, bounds, sft_options):
@@ -270,6 +308,7 @@ def fit_pure_pareto(
     enthalpy_unit: "si.SIObject" = si.KILO * si.JOULE / si.MOL,
     surface_tension_unit: "si.SIObject" = si.MILLI * si.NEWTON / si.METER,
     verbose: bool = True,
+    quiet_solver: bool = True,
 ) -> ParetoResult:
     """Generate the AAD_vle / AAD_sft pareto front with NSGA-II.
 
@@ -280,6 +319,10 @@ def fit_pure_pareto(
 
     Returns a ``ParetoResult``; call ``.select(ref_vle, ref_sft)`` on it to get
     a single ``FitResult``.
+
+    ``quiet_solver`` suppresses fd-level stderr for the duration of the search,
+    hiding the Rust panic messages feos emits from worker threads when the DFT
+    solver fails on an infeasible parameter set. Pass False when debugging.
     """
     from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.optimize import minimize
@@ -310,14 +353,15 @@ def fit_pure_pareto(
         bounds = _default_de_bounds(fit_mu, is_associative)
 
     problem = _make_problem(compound, spec, data, units, bounds, sft_options)
-    res = minimize(
-        problem,
-        NSGA2(pop_size=pop_size),
-        ("n_gen", n_gen),
-        seed=seed,
-        verbose=verbose,
-        save_history=False,
-    )
+    with _silence_fd_stderr(quiet_solver):
+        res = minimize(
+            problem,
+            NSGA2(pop_size=pop_size),
+            ("n_gen", n_gen),
+            seed=seed,
+            verbose=verbose,
+            save_history=False,
+        )
 
     F = np.atleast_2d(np.asarray(res.F, dtype=float))
     X = np.atleast_2d(np.asarray(res.X, dtype=float))
