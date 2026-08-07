@@ -188,3 +188,42 @@ def _plot_residuals_pure(result, path=None):
         fig.savefig(path, dpi=300, bbox_inches="tight")
 
     return fig, ax
+
+
+def _plot_pareto(result, path=None, ref_vle: float = 2.0, ref_sft: float = 0.7):
+    """AAD_sft vs AAD_vle with the selected point and its tangent (paper Fig. 1)."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import seaborn as sns
+
+    from fit_pcsaft._pure.pareto import _argmin_scalarized
+
+    sns.set_context("talk")
+    sns.set_style("ticks")
+
+    F = result.F
+    i = _argmin_scalarized(F, ref_vle, ref_sft)
+
+    fig, ax = plt.subplots(figsize=(7, 5.5))
+    ax.plot(F[:, 0], F[:, 1], "-o", color="#1F77B4", ms=5, lw=1.5,
+            label=result.input_name or "pareto front")
+    ax.scatter([F[i, 0]], [F[i, 1]], s=160, marker="X", color="#E32F2F",
+               zorder=6, label="selected")
+
+    # tangent of slope -ref_sft/ref_vle through the selected point
+    slope = -ref_sft / ref_vle
+    x_span = np.array([F[:, 0].min(), F[:, 0].max()])
+    ax.plot(x_span, F[i, 1] + slope * (x_span - F[i, 0]),
+            ls="--", color="gray", lw=1.0, zorder=1)
+
+    ax.set_xlabel(r"AAD$_\mathrm{vle}$ / %")
+    ax.set_ylabel(r"AAD$_\mathrm{sft}$ / mN m$^{-1}$")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2)
+
+    sns.despine(offset=10)
+    plt.tight_layout(rect=[0, 0.12, 1, 1])
+
+    if path is not None:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+
+    return fig, ax

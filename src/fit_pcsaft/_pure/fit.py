@@ -214,8 +214,14 @@ def _setup_pure_fit(
     sft_weight: float = 1.0,
     surface_tension_unit=si.MILLI * si.NEWTON / si.METER,
     sft_options=None,
+    verbose: bool = True,
 ):
-    """Load data, fetch compound, build cost function. Shared by fit_pure and fit_pure_de."""
+    """Load data, fetch compound, build cost function. Shared by fit_pure and fit_pure_de.
+
+    ``verbose=False`` suppresses the Jacobian-fallback note; callers that only
+    want the loaded data (e.g. the pareto driver, which never uses a Jacobian)
+    should pass it.
+    """
     fit_mu = mu is None
 
     if na is not None and nb is None:
@@ -282,18 +288,20 @@ def _setup_pure_fit(
     # parameter_names and returns a zero gradient column, and feos.Property has
     # no surface_tension_derivatives at all. Both must stay on finite differences.
     if sft_path is not None:
-        print(
-            "Note: surface tension data present (no feos AD for surface tension) — "
-            "falling back to numerical Jacobian (2-point).\n"
-        )
+        if verbose:
+            print(
+                "Note: surface tension data present (no feos AD for surface tension) — "
+                "falling back to numerical Jacobian (2-point).\n"
+            )
         cost_fn, jac_fn, errors = _make_f_and_df_numerical(
             data, compound, spec, units, config
         )
     elif q != 0.0:
-        print(
-            "Note: q != 0 (quadrupole has no feos AD support) — "
-            "falling back to numerical Jacobian (2-point).\n"
-        )
+        if verbose:
+            print(
+                "Note: q != 0 (quadrupole has no feos AD support) — "
+                "falling back to numerical Jacobian (2-point).\n"
+            )
         cost_fn, jac_fn, errors = _make_f_and_df_numerical(
             data, compound, spec, units, config
         )
