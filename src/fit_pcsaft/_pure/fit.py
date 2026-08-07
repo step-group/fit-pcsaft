@@ -12,6 +12,7 @@ from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv, load
 from fit_pcsaft._fit_utils import (
     _PENALTY,
     _build_eos,
+    _build_functional,
     _fetch_compound,
     _first_error,
     _first_error_hint,
@@ -151,14 +152,22 @@ def _compute_pure_metrics(
 ):
     """Compute per-property Metrics for fitted parameters.
 
-    Returns (eos, metrics_dict) where metrics_dict is keyed by
-    "psat"/"rho"/"hvap". Each value is a Metrics object; failures are
+    Returns (eos, functional, metrics_dict) where metrics_dict is keyed by
+    "psat"/"rho"/"hvap"/"sft". Each value is a Metrics object; failures are
     handled per-point rather than voiding the entire property.
+
+    ``functional`` is the feos DFT functional, built only when the data set
+    carries surface tension points; it is None otherwise.
     """
     from fit_pcsaft.result import _compute_pure_metrics as _result_metrics
     if eos is None:
         eos = _build_eos(params_fitted, compound, spec)
-    return eos, _result_metrics(eos, data, units)
+    functional = (
+        _build_functional(params_fitted, compound, spec)
+        if len(data.T_sft) > 0
+        else None
+    )
+    return eos, functional, _result_metrics(eos, data, units, functional=functional)
 
 
 def _extract_params_dict(
@@ -452,7 +461,7 @@ def fit_pure(
 
     params_fitted = result.x**2
 
-    eos_final, metrics = _compute_pure_metrics(
+    eos_final, functional, metrics = _compute_pure_metrics(
         params_fitted,
         data,
         compound,
@@ -473,6 +482,7 @@ def fit_pure(
         scipy_result=result,
         time_elapsed=time_elapsed,
         input_name=id,
+        functional=functional,
     )
 
 
@@ -636,7 +646,7 @@ def fit_pure_de(
         message=de_result.message,
     )
 
-    eos_final, metrics = _compute_pure_metrics(
+    eos_final, functional, metrics = _compute_pure_metrics(
         params_fitted,
         data,
         compound,
@@ -657,6 +667,7 @@ def fit_pure_de(
         scipy_result=scipy_result,
         time_elapsed=time_elapsed,
         input_name=id,
+        functional=functional,
     )
 
 
@@ -777,7 +788,9 @@ def eval_pure(
         params_vec += [params["kappa_ab"], params["epsilon_k_ab"]]
     params_vec = np.array(params_vec, dtype=float)
 
-    eos, metrics = _compute_pure_metrics(params_vec, data, compound, spec, units)
+    eos, functional, metrics = _compute_pure_metrics(
+        params_vec, data, compound, spec, units
+    )
 
     return EvalResult(
         params=dict(params),
@@ -788,4 +801,5 @@ def eval_pure(
         units=units,
         metrics=metrics,
         input_name=id,
+        functional=functional,
     )

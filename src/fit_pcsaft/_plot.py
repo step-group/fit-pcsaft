@@ -144,13 +144,17 @@ def _plot_residuals_pure(result, path=None):
     sns.set_context("talk")
     sns.set_style("ticks")
 
-    df = _compute_per_point_rd(result.eos, result.data, result.units)
+    df = _compute_per_point_rd(
+        result.eos, result.data, result.units,
+        functional=getattr(result, "functional", None),
+    )
     present = set(df["property"].to_list())
 
     _props = [
         ("psat", "Vapor pressure",    "#1F77B4", "o"),
         ("rho",  "Liquid density",    "#E32F2F", "s"),
         ("hvap", "Enthalpy of vap.",  "#2CA02C", "^"),
+        ("sft",  "Surface tension",   "#FF7F0E", "D"),
     ]
 
     fig, ax = plt.subplots(figsize=(9, 5))

@@ -160,6 +160,37 @@ def test_analytical_jacobian_refuses_sft():
         _make_f_and_df(data, HEXANE, HEXANE_SPEC, Units(), _sft_config())
 
 
+def test_metrics_include_sft_aad():
+    from fit_pcsaft.result import _compute_pure_metrics
+
+    data = _hexane_data_with_sft()
+    eos = _build_eos(HEXANE_P, HEXANE, HEXANE_SPEC)
+    func = _build_functional(HEXANE_P, HEXANE, HEXANE_SPEC)
+    metrics = _compute_pure_metrics(eos, data, Units(), functional=func)
+    assert "sft" in metrics
+    # self-consistent data -> zero deviation
+    assert metrics["sft"].mae == pytest.approx(0.0, abs=1e-9)
+    assert metrics["sft"].n == 3
+
+
+def test_metrics_sft_empty_without_functional():
+    from fit_pcsaft.result import _compute_pure_metrics
+    data = _hexane_data_with_sft()
+    eos = _build_eos(HEXANE_P, HEXANE, HEXANE_SPEC)
+    metrics = _compute_pure_metrics(eos, data, Units())
+    assert metrics["sft"].n == 0
+
+
+def test_residuals_df_carries_sft_rows():
+    from fit_pcsaft.result import _compute_per_point_rd
+
+    data = _hexane_data_with_sft()
+    eos = _build_eos(HEXANE_P, HEXANE, HEXANE_SPEC)
+    func = _build_functional(HEXANE_P, HEXANE, HEXANE_SPEC)
+    df = _compute_per_point_rd(eos, data, Units(), functional=func)
+    assert "sft" in set(df["property"].to_list())
+
+
 def test_public_entry_points_accept_sft():
     import inspect
 
