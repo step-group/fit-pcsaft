@@ -210,18 +210,33 @@ def _plot_pareto(result, path=None, ref_vle: float = 2.0, ref_sft: float = 0.7):
     ax.scatter([F[i, 0]], [F[i, 1]], s=160, marker="X", color="#E32F2F",
                zorder=6, label="selected")
 
+    # Axis limits come from the front alone. The tangent below is then clipped
+    # to them: drawn across the full width it runs far past the data (and well
+    # below zero), which rescales the axes and flattens the curve into a line.
+    def _limits(v):
+        lo, hi = float(v.min()), float(v.max())
+        pad = 0.08 * (hi - lo) if hi > lo else max(0.08 * abs(hi), 0.1)
+        return lo - pad, hi + pad
+
+    xlim, ylim = _limits(F[:, 0]), _limits(F[:, 1])
+
     # tangent of slope -ref_sft/ref_vle through the selected point
     slope = -ref_sft / ref_vle
-    x_span = np.array([F[:, 0].min(), F[:, 0].max()])
-    ax.plot(x_span, F[i, 1] + slope * (x_span - F[i, 0]),
-            ls="--", color="gray", lw=1.0, zorder=1)
+    x_at = [F[i, 0] + (y - F[i, 1]) / slope for y in ylim]
+    x_t = np.clip(np.sort(x_at), *xlim)
+    ax.plot(x_t, F[i, 1] + slope * (x_t - F[i, 0]),
+            ls="--", color="gray", lw=1.0, zorder=1,
+            label=rf"tangent, $-$ref$_\mathrm{{sft}}$/ref$_\mathrm{{vle}}$")
 
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
     ax.set_xlabel(r"AAD$_\mathrm{vle}$ / %")
     ax.set_ylabel(r"AAD$_\mathrm{sft}$ / mN m$^{-1}$")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2)
+    ax.set_title(f"Pareto front — {result.input_name}")
+    ax.legend(loc="best", framealpha=0.9)
 
     sns.despine(offset=10)
-    plt.tight_layout(rect=[0, 0.12, 1, 1])
+    plt.tight_layout()
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")

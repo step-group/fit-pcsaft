@@ -16,7 +16,8 @@ experimental points happen to be dense:
   - sft       : IAPWS R1-76
 Regenerate them with examples/data/generate_water_reference.py.
 
-Runtime: a couple of minutes on all cores. fit_pure_pareto defaults to
+Runtime: about 5 minutes on all cores (9600 evaluations -- enough to
+resolve a real curve; smaller budgets give a cluster). fit_pure_pareto defaults to
 n_jobs=-1 (every core bar two); pass n_jobs=1 to force serial. Objective
 evaluations cost about 120 ms at sensible parameters and up to 1 s where the
 VLE solve fails, so wall time falls as the population converges.
@@ -44,8 +45,8 @@ def main() -> None:
         sft_path=data_dir / "surface_tension" / "water.csv",
         na=1,
         nb=1,           # 2B association scheme
-        pop_size=40,
-        n_gen=30,
+        pop_size=80,
+        n_gen=120,
         verbose=False,
     )
     print(result)

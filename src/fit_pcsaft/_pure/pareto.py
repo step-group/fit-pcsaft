@@ -467,10 +467,22 @@ def fit_pure_pareto(
 ) -> ParetoResult:
     """Generate the AAD_vle / AAD_sft pareto front with NSGA-II.
 
-    Cost: ``pop_size * n_gen`` objective evaluations, each roughly
-    ``5 ms * len(sft data)`` plus the bulk properties. 60x60 with 20 gamma
-    points is on the order of 10 minutes single-threaded. Call
-    ``feos.set_num_threads(n)`` beforehand to use more cores.
+    Cost is ``pop_size * n_gen`` objective evaluations, each roughly 120 ms at
+    sensible parameters and up to 1 s where the VLE solve fails. Budget decides
+    front quality far more than anything else; measured on water (2B, 14
+    workers), best-of-front and the largest hole in it:
+
+        evals   points   AAD_vle   AAD_sft   max gap   time
+         1200       32      9.47      1.12      4.37     56s
+         3600       47      2.27      0.70     19.22    127s
+         9600       80      1.44      0.78      2.82    301s
+
+    Below a few thousand evaluations the search is still finding feasible
+    ground rather than resolving the trade-off, and the front is a cluster
+    rather than a curve. The defaults here are a compromise; raise n_gen when
+    the front looks patchy. Note the m-range differed between the 3600 and
+    9600 runs, so even 9600 is not fully converged -- treat a single run as
+    one sample, not the answer.
 
     Returns a ``ParetoResult``; call ``.select(ref_vle, ref_sft)`` on it to get
     a single ``FitResult``.
