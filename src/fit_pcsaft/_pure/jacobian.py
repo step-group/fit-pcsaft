@@ -262,6 +262,13 @@ def _make_f_and_df(
     config: FitConfig,
 ):
     """Return (fun, jac, errors) for the appropriate PC-SAFT case."""
+    if len(data.T_sft) > 0:
+        raise ValueError(
+            "The analytical Jacobian does not support surface tension — feos exposes "
+            "no AD path for it (feos.Property has no surface_tension_derivatives). "
+            "Use the numerical Jacobian."
+        )
+
     assoc = spec.na is not None and spec.nb is not None and spec.na > 0 and spec.nb > 0
     fit_mu = spec.mu is None
 

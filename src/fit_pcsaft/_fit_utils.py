@@ -8,6 +8,7 @@ import polars as pl
 import pubchempy as pcp
 
 from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv
+from fit_pcsaft._pure.surface_tension import predict_surface_tension
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
 
 # Sentinel residual returned when the EOS cannot be evaluated at all. Legitimate
@@ -200,7 +201,7 @@ def _build_functional(
 
 _EPS_2PT = np.sqrt(np.finfo(float).eps)  # ~1.49e-8
 
-_VALID_PURE_PROPS = frozenset({"psat", "rho", "hvap"})
+_VALID_PURE_PROPS = frozenset({"psat", "rho", "hvap", "sft"})
 
 
 def _normalize_f_scale(
@@ -270,6 +271,8 @@ def _make_cost_fn(
     d_rho = data.rho
     T_hvap = data.T_hvap
     d_hvap = data.hvap
+    T_sft = data.T_sft
+    d_sft = data.sft
     temperature_unit = units.temperature
     psat_unit = units.pressure
     rho_unit = units.density
@@ -278,10 +281,19 @@ def _make_cost_fn(
     n_psat = len(T_psat)
     n_rho = len(T_rho)
     n_hvap = len(T_hvap)
-    n_total = n_psat + n_rho + n_hvap
+    n_sft = len(T_sft)
+    n_total = n_psat + n_rho + n_hvap + n_sft
     psat_cost_scale = np.sqrt(config.w_psat / n_psat) / config.f_scale["psat"]
     rho_cost_scale = np.sqrt(config.w_rho / n_rho) / config.f_scale["rho"] if n_rho > 0 else 0.0
     hvap_cost_scale = np.sqrt(config.w_hvap / n_hvap) / config.f_scale["hvap"] if n_hvap > 0 else 0.0
+    # Surface tension uses an ABSOLUTE deviation normalized by the mean
+    # experimental gamma, not a relative one: gamma -> 0 at the critical point,
+    # where a relative residual diverges (Rehner & Gross 2020, eq 31).
+    sft_cost_scale = (
+        np.sqrt(config.w_sft / n_sft) / float(np.mean(d_sft)) / config.f_scale["sft"]
+        if n_sft > 0
+        else 0.0
+    )
     inv_d_psat = 1.0 / d_psat
     inv_d_rho = 1.0 / d_rho if n_rho > 0 else None
     inv_d_hvap = 1.0 / d_hvap if n_hvap > 0 else None
@@ -361,6 +373,24 @@ def _make_cost_fn(
                 return np.full(n_total, _PENALTY)
 
             residuals.append(hvap_cost_scale * (hvap_pred * inv_d_hvap - 1.0))
+
+        # Surface tension residuals (absolute, normalized by mean gamma — a
+        # relative residual diverges as gamma -> 0 at the critical point)
+        if n_sft > 0:
+            try:
+                functional = _build_functional(params_vec**2, compound, spec)
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(exc)
+                return np.full(n_total, _PENALTY)
+
+            sft_pred = predict_surface_tension(
+                functional, T_sft, units, config.sft_options
+            )
+            if not np.isfinite(sft_pred).all():
+                return np.full(n_total, _PENALTY)
+
+            residuals.append(sft_cost_scale * (sft_pred - d_sft))
 
         return np.concatenate(residuals)
 

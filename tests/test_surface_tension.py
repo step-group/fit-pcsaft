@@ -112,3 +112,48 @@ def test_water_2b_forward_check_against_paper():
     aad = float(np.mean(np.abs(model[ok] - exp[ok])))
     print(f"\nwater 2B PC-SAFT AAD_DFT = {aad:.2f} mN/m (paper: 1.59)")
     assert aad < 2.5
+
+
+def _sft_config(w_sft=1.0):
+    from fit_pcsaft._types import FitConfig
+    return FitConfig(w_sft=w_sft,
+                     f_scale={"psat": 1.0, "rho": 1.0, "hvap": 1.0, "sft": 1.0})
+
+
+def _hexane_data_with_sft():
+    from fit_pcsaft._types import PureData
+    T = np.array([300.0, 320.0, 340.0])
+    func = _build_functional(HEXANE_P, HEXANE, HEXANE_SPEC)
+    gamma = predict_surface_tension(func, T, Units())
+    return PureData(
+        T_psat=np.array([300.0, 320.0]),
+        p_psat=np.array([21.9, 43.9]),
+        T_rho=np.array([300.0, 320.0]),
+        rho=np.array([654.9, 635.6]),
+        T_sft=T,
+        sft=gamma,
+    )
+
+
+def test_cost_fn_length_includes_sft():
+    from fit_pcsaft._fit_utils import _make_cost_fn
+    data = _hexane_data_with_sft()
+    cost = _make_cost_fn(data, HEXANE, HEXANE_SPEC, Units(), _sft_config())
+    r = cost(np.sqrt(HEXANE_P))
+    assert r.size == 2 + 2 + 0 + 3
+
+
+def test_sft_residuals_vanish_on_self_consistent_data():
+    """Feeding back the model's own gamma must zero the sft block."""
+    from fit_pcsaft._fit_utils import _make_cost_fn
+    data = _hexane_data_with_sft()
+    cost = _make_cost_fn(data, HEXANE, HEXANE_SPEC, Units(), _sft_config())
+    r = cost(np.sqrt(HEXANE_P))
+    assert np.allclose(r[-3:], 0.0, atol=1e-9)
+
+
+def test_analytical_jacobian_refuses_sft():
+    from fit_pcsaft._pure.jacobian import _make_f_and_df
+    data = _hexane_data_with_sft()
+    with pytest.raises(ValueError, match="surface tension"):
+        _make_f_and_df(data, HEXANE, HEXANE_SPEC, Units(), _sft_config())
