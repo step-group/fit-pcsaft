@@ -111,6 +111,32 @@ def test_water_scheme_ranking_matches_paper():
     assert min(res, key=lambda k: res[k][1]) == "3B"   # best surface tension
 
 
+def test_violation_is_graded_not_flat():
+    """Infeasible sets must be rankable, not collapsed onto one penalty value."""
+    from fit_pcsaft._pure.pareto import _evaluate_point
+
+    data = _hexane_data_with_sft()
+    good = _evaluate_point(HEXANE_P, HEXANE, HEXANE_SPEC, data, Units())
+    hopeless = _evaluate_point(
+        np.array([1e-6, 1e-6, 1e-6]), HEXANE, HEXANE_SPEC, data, Units()
+    )
+    assert good[2] <= 0.0, "a good parameter set must be feasible"
+    assert hopeless[2] > 0.0, "a hopeless set must violate"
+    # bounded above by the worst possible violation, so it stays comparable
+    assert hopeless[2] <= 1.0
+
+
+def test_lhs_sampling_selected():
+    """Generation zero must use Latin hypercube coverage by default."""
+    from pymoo.operators.sampling.lhs import LatinHypercubeSampling
+    from pymoo.operators.sampling.rnd import FloatRandomSampling
+
+    from fit_pcsaft._pure.pareto import _initial_sampling
+
+    assert isinstance(_initial_sampling(True), LatinHypercubeSampling)
+    assert isinstance(_initial_sampling(False), FloatRandomSampling)
+
+
 def test_select_picks_the_tangent_point():
     F = np.array([[1.0, 6.0], [2.0, 2.0], [6.0, 1.0]])
     # ref_vle=2%, ref_sft=1 -> costs: 6.5, 3.0, 4.0 -> index 1

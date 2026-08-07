@@ -12,12 +12,17 @@ with ref_vle = 2% and ref_sft = 0.7 mN/m for water.
 The data files are quasi-data generated from reference correlations, as the
 paper does, so the fit is not biased toward the temperature range where raw
 experimental points happen to be dense:
-  - psat, rho : Wagner & Pruss (1993) saturation line
+  - psat, rho : IAPWS-95, via feos' own multiparameter equation of state
   - sft       : IAPWS R1-76
+Regenerate them with examples/data/generate_water_reference.py.
 
-Runtime: roughly 5-10 minutes. Objective evaluations cost about 120 ms at
-sensible parameters and up to 1 s where the VLE solve fails, so wall time
-falls as the population converges. Reduce pop_size/n_gen to make it quicker.
+Runtime: a couple of minutes on all cores. fit_pure_pareto defaults to
+n_jobs=-1 (every core bar two); pass n_jobs=1 to force serial. Objective
+evaluations cost about 120 ms at sensible parameters and up to 1 s where the
+VLE solve fails, so wall time falls as the population converges.
+
+The __main__ guard below is required, not decorative: the worker pool uses
+spawn, and each worker re-imports this module.
 """
 
 from pathlib import Path
