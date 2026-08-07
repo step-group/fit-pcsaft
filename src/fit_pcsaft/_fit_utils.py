@@ -107,13 +107,13 @@ def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
 
 
 
-def _build_eos(
+def _build_record(
     params_vec: np.ndarray,
     compound: Compound,
     spec: ModelSpec,
-) -> feos.EquationOfState:
+) -> feos.PureRecord:
     """
-    Build PC-SAFT equation of state from parameters.
+    Build a feos PureRecord from a parameter vector.
 
     Non-associating (na/nb are None):
         mu fixed: params_vec = [m, sigma, epsilon_k]
@@ -150,7 +150,7 @@ def _build_eos(
         idx += 1
         epsilon_k_ab = float(params_vec[idx])
         idx += 1
-        record = feos.PureRecord(
+        return feos.PureRecord(
             identifier=identifier,
             molarweight=mw,
             m=m,
@@ -162,19 +162,40 @@ def _build_eos(
                 {"na": na, "nb": nb, "epsilon_k_ab": epsilon_k_ab, "kappa_ab": kappa_ab}
             ],
         )
-    else:
-        record = feos.PureRecord(
-            identifier=identifier,
-            molarweight=mw,
-            m=m,
-            sigma=sigma,
-            epsilon_k=epsilon_k,
-            mu=mu_val,
-            q=q,
-        )
+    return feos.PureRecord(
+        identifier=identifier,
+        molarweight=mw,
+        m=m,
+        sigma=sigma,
+        epsilon_k=epsilon_k,
+        mu=mu_val,
+        q=q,
+    )
 
-    parameters = feos.Parameters.new_pure(record)
+
+def _build_eos(
+    params_vec: np.ndarray,
+    compound: Compound,
+    spec: ModelSpec,
+) -> feos.EquationOfState:
+    """Build the PC-SAFT equation of state. See _build_record for vector ordering."""
+    parameters = feos.Parameters.new_pure(_build_record(params_vec, compound, spec))
     return feos.EquationOfState.pcsaft(parameters)
+
+
+def _build_functional(
+    params_vec: np.ndarray,
+    compound: Compound,
+    spec: ModelSpec,
+):
+    """Build the PC-SAFT Helmholtz energy functional used for DFT surface tension.
+
+    feos 0.10 returns an ``EquationOfState`` here — the same type ``_build_eos``
+    returns — but a *different* object: this one carries the non-local weight
+    functions ``PlanarInterface`` needs. See _build_record for vector ordering.
+    """
+    parameters = feos.Parameters.new_pure(_build_record(params_vec, compound, spec))
+    return feos.HelmholtzEnergyFunctional.pcsaft(parameters)
 
 
 _EPS_2PT = np.sqrt(np.finfo(float).eps)  # ~1.49e-8
