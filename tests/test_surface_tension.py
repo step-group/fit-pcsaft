@@ -50,10 +50,13 @@ WATER_2B = np.array([1.0000, 2.9375, 272.03, 0.044480, 3125.3])
 WATER_2B_SPEC = ModelSpec(mu=0.0, na=1, nb=1, q=0.0)
 
 
-def iapws_sft_mN_m(T):
-    """IAPWS R1-76 surface tension of water. Returns mN/m."""
-    tau = 1.0 - np.asarray(T, dtype=float) / 647.096
-    return 235.8 * tau ** 1.256 * (1.0 - 0.625 * tau)
+def water_reference_sft():
+    """Reference gamma(T) for water: the committed IAPWS R1-76 quasi-data.
+
+    Regenerate with ``examples/data/generate_water_reference.py``.
+    """
+    d = Path(__file__).parent.parent / "examples" / "data" / "surface_tension"
+    return load_sft_csv(d / "water.csv")
 
 
 def test_puredata_defaults_empty_sft():
@@ -105,9 +108,8 @@ def test_water_2b_forward_check_against_paper():
     T-grid differs from the paper's and feos hardcodes psi_dft = 1.3862.
     """
     func = _build_functional(WATER_2B, WATER, WATER_2B_SPEC)
-    T = np.linspace(280.0, 630.0, 15)
+    T, exp = water_reference_sft()
     model = predict_surface_tension(func, T, Units())
-    exp = iapws_sft_mN_m(T)
     ok = np.isfinite(model)
     assert ok.sum() >= 12, "surface tension failed at too many temperatures"
     aad = float(np.mean(np.abs(model[ok] - exp[ok])))

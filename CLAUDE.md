@@ -100,7 +100,18 @@ feos.PhaseEquilibrium.pure(eos, T * si.KELVIN).liquid.mass_density() / (si.KILOG
 
 CSVs **require a header**. Column names are normalised through `_COL_ALIASES` in `_csv.py` and validated against a `CsvSchema`; unrecognised columns are dropped silently. Aliases carrying unit suffixes (`psat_kPa`, `rho_kg_m3`) are name hints only — **no numeric conversion happens in the loaders**. Units are carried entirely by the `*_unit` keyword arguments into the `Units` dataclass and applied at prediction time.
 
-The water files under `examples/data/{psat,density,surface_tension}/water.csv` are quasi-data generated from reference correlations (Wagner & Pruss 1993 for the saturation line, IAPWS R1-76 for γ), following the paper's own practice of discretising correlations so the fit is not biased toward temperature ranges where raw measurements happen to be dense.
+### Reference (quasi-)data
+
+The water files under `examples/data/{psat,density,surface_tension}/water.csv` are quasi-data, following the paper's own practice of discretising correlations so the fit is not biased toward temperature ranges where raw measurements happen to be dense. Regenerate with:
+
+```bash
+uv run python examples/data/generate_water_reference.py
+```
+
+- **psat, rho** — IAPWS-95, evaluated through feos' own `EquationOfState.multiparameter` using the CoolProp coefficient database vendored at `examples/data/parameters/coolprop_multiparameter.json` (124 fluids). No extra dependency, and the reference and the PC-SAFT model are computed by the same library.
+- **γ** — IAPWS R1-76(2014); IAPWS-95 does not provide surface tension. Constants verified verbatim against the [published release](https://iapws.org/public/documents/CH-L9/Surf-H2O-2014.pdf); the equation reproduces its Table 1 column 4 at 0.01/25/200/250/300/350/370 °C.
+
+**Do not hand-write reference correlations from memory.** feos' multiparameter EOS plus that JSON covers any of the 124 fluids; reach for it instead.
 
 ### JSON parameter files
 
