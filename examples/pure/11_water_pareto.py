@@ -17,10 +17,12 @@ experimental points happen to be dense:
 Regenerate them with examples/data/generate_water_reference.py.
 
 Runtime: about 5 minutes on all cores (9600 evaluations -- enough to
-resolve a real curve; smaller budgets give a cluster). fit_pure_pareto defaults to
-n_jobs=-1 (every core bar two); pass n_jobs=1 to force serial. Objective
-evaluations cost about 120 ms at sensible parameters and up to 1 s where the
-VLE solve fails, so wall time falls as the population converges.
+resolve a real curve; smaller budgets give a cluster), plus a few hundred more
+for the post-search refinement pass that turns NSGA-II's clustered population
+into an evenly spaced front. fit_pure_pareto defaults to n_jobs=-1 (every core
+bar two); pass n_jobs=1 to force serial. Objective evaluations cost about
+120 ms at sensible parameters and up to 1 s where the VLE solve fails, so wall
+time falls as the population converges.
 
 The __main__ guard below is required, not decorative: the worker pool uses
 spawn, and each worker re-imports this module.

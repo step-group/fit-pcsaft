@@ -313,6 +313,75 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None):
     return PcSaftBiObjective()
 
 
+def _map_evaluate(rows, pool, compound, spec, data, units, sft_options):
+    """Evaluate parameter vectors, through the worker pool when there is one."""
+    if pool is None:
+        return [
+            _evaluate_point(x, compound, spec, data, units, sft_options)
+            for x in rows
+        ]
+    return pool.map(_worker_evaluate, rows)
+
+
+def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options):
+    """Fill the gaps NSGA-II leaves between adjacent front points.
+
+    NSGA-II returns a population, not a curve. Crowding distance preserves
+    diversity but nothing forces even spacing, so the front comes back as
+    clusters of near-identical parameter sets separated by voids — on water,
+    eight of eighty points sat within 0.2% of each other on the AAD_vle axis
+    while a 2.8% stretch of the same axis held none.
+
+    The voids are a sampling artefact, not structure: every point obtained by
+    linearly interpolating the parameter vectors across them is itself
+    non-dominated. So interpolating and re-evaluating buys resolution at the
+    price of arithmetic — no new search, just more points on a curve already
+    found. Costs ``(len(X) - 1) * n_between`` evaluations.
+
+    Interpolating in parameter space rather than objective space is what makes
+    this sound: the result is a real parameter set with real objective values,
+    never a drawn-in line between two computed points.
+
+    The ``n_between`` interpolants per segment are a budget, not a fixed count:
+    they are handed out in proportion to each segment's length in normalized
+    objective space. Spreading them evenly instead wastes most of them inside
+    the clusters, which are already dense, and leaves the voids — the whole
+    point of the exercise — barely touched.
+
+    Costs about ``(len(X) - 1) * n_between`` evaluations.
+    """
+    if len(X) < 2 or n_between < 1:
+        return X, F
+
+    span = np.ptp(F, axis=0)
+    span[span <= 0.0] = 1.0
+    seg = np.linalg.norm(np.diff(F, axis=0) / span, axis=1)
+    budget = n_between * (len(X) - 1)
+    share = seg / seg.sum() if seg.sum() > 0 else np.full(len(seg), 1.0 / len(seg))
+    # At least one interpolant per segment, so no gap is skipped entirely.
+    counts = np.maximum(1, np.round(budget * share).astype(int))
+
+    rows = [
+        (1.0 - t) * X[k] + t * X[k + 1]
+        for k, n_k in enumerate(counts)
+        for t in np.linspace(0.0, 1.0, n_k + 2)[1:-1]
+    ]
+    if not rows:
+        return X, F
+    R = np.asarray(
+        _map_evaluate(rows, pool, compound, spec, data, units, sft_options),
+        dtype=float,
+    )
+    ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
+    if not ok.any():
+        return X, F
+    X_all = np.vstack([X, np.asarray(rows, dtype=float)[ok]])
+    F_all = np.vstack([F, R[ok, :2]])
+    keep = non_dominated(F_all)
+    order = np.argsort(F_all[keep, 0])
+    return X_all[keep][order], F_all[keep][order]
+
+
 def _initial_sampling(use_lhs: bool):
     """Sampling operator for generation zero.
 
@@ -464,6 +533,7 @@ def fit_pure_pareto(
     quiet_solver: bool = True,
     lhs: bool = True,
     n_jobs: int = -1,
+    refine: int = 4,
 ) -> ParetoResult:
     """Generate the AAD_vle / AAD_sft pareto front with NSGA-II.
 
@@ -484,6 +554,9 @@ def fit_pure_pareto(
     9600 runs, so even 9600 is not fully converged -- treat a single run as
     one sample, not the answer.
 
+    The "max gap" column above is the raw NSGA-II output; ``refine`` (below)
+    closes most of it afterwards for a few percent of the same budget.
+
     Returns a ``ParetoResult``; call ``.select(ref_vle, ref_sft)`` on it to get
     a single ``FitResult``.
 
@@ -498,6 +571,29 @@ def fit_pure_pareto(
     default) uses every core bar two. Processes rather than threads because feos
     does not release the GIL. On a spawn platform, call this from inside an
     ``if __name__ == "__main__":`` guard.
+
+    ``refine`` interpolates roughly this many parameter sets between each
+    adjacent pair of front points once the search is done, keeping the ones that
+    turn out to be non-dominated. Measured on the 9600-evaluation water run, at
+    3% of the search cost:
+
+        80 -> 209 points, median objective-space spacing 3.4x finer, 316
+        evaluations, 7 s on 14 workers.
+
+    It does two things. The obvious one is resolution: NSGA-II's crowding
+    distance keeps diversity but never forces even spacing, so its output is
+    clusters separated by voids, and every point interpolated across a void is
+    itself non-dominated -- the voids are a sampling artefact. The less obvious
+    one is correctness: the raw front is not always a front. On water the fill
+    dominated a whole stretch of it, moving the eq-32 tangent point from
+    (1.44%, 1.62) to (1.90%, 1.29) -- eq 32 from 3.04 to 2.79. Trust a raw
+    front's selected point less than a refined one's.
+
+    What it does not fix is a genuine hole, where the straight line between two
+    front points in parameter space does not track the front in objective space.
+    Water keeps one, at the knee near AAD_vle = 2%: a second pass moves eq 32 by
+    0.01 for 3.6x the evaluations. That corner needs search budget, not
+    arithmetic. Set refine=0 to see the raw population. See ``_densify``.
     """
     from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.optimize import minimize
@@ -548,25 +644,35 @@ def fit_pure_pareto(
                 save_history=False,
             )
 
-    if res.F is None:
-        raise RuntimeError(
-            "NSGA-II found no feasible parameter set: every candidate failed to "
-            "produce a vapour-liquid equilibrium or a stable interface. Check the "
-            "bounds and the association scheme."
-        )
-    F = np.atleast_2d(np.asarray(res.F, dtype=float))
-    X = np.atleast_2d(np.asarray(res.X, dtype=float))
-    keep = non_dominated(F) & (F[:, 0] < _BIG)
-    if not keep.any():
-        raise RuntimeError(
-            "NSGA-II returned only degenerate solutions. Check the bounds and "
-            "the association scheme."
-        )
-    order = np.argsort(F[keep, 0])
+        if res.F is None:
+            raise RuntimeError(
+                "NSGA-II found no feasible parameter set: every candidate failed "
+                "to produce a vapour-liquid equilibrium or a stable interface. "
+                "Check the bounds and the association scheme."
+            )
+        F = np.atleast_2d(np.asarray(res.F, dtype=float))
+        X = np.atleast_2d(np.asarray(res.X, dtype=float))
+        keep = non_dominated(F) & (F[:, 0] < _BIG)
+        if not keep.any():
+            raise RuntimeError(
+                "NSGA-II returned only degenerate solutions. Check the bounds and "
+                "the association scheme."
+            )
+        order = np.argsort(F[keep, 0])
+        X, F = X[keep][order], F[keep][order]
+
+        if refine > 0 and len(X) > 1:
+            n_before = len(F)
+            with _silence_fd_stderr(quiet_solver):
+                X, F = _densify(
+                    X, F, refine, pool, compound, spec, data, units, sft_options
+                )
+            if verbose:
+                print(f"refine: {n_before} -> {len(F)} front points")
 
     return ParetoResult(
-        X=X[keep][order],
-        F=F[keep][order],
+        X=X,
+        F=F,
         data=data,
         compound=compound,
         spec=spec,

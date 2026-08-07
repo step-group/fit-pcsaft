@@ -143,3 +143,87 @@ def test_select_picks_the_tangent_point():
     assert _argmin_scalarized(F, ref_vle=2.0, ref_sft=1.0) == 1
     # heavy weight on sft (small ref_sft) -> the low-sft corner wins
     assert _argmin_scalarized(F, ref_vle=100.0, ref_sft=0.1) == 2
+
+
+def _hexane_data_conflicting():
+    """Bulk data from HEXANE_P, gamma from a different sigma.
+
+    The self-consistent fixture cannot exercise densify: both objectives are
+    minimised by the same parameter vector, so its "front" is a single point.
+    Taking gamma from a shifted parameter set makes the two objectives pull in
+    genuinely different directions, which is the case densify exists for.
+    """
+    import numpy as np
+
+    from fit_pcsaft._fit_utils import _build_functional
+    from fit_pcsaft._pure.surface_tension import predict_surface_tension
+    from fit_pcsaft._types import PureData, Units
+    from tests.test_surface_tension import HEXANE, HEXANE_P, HEXANE_SPEC
+
+    T = np.array([300.0, 320.0, 340.0])
+    shifted = HEXANE_P * np.array([1.0, 1.03, 1.0])
+    gamma = predict_surface_tension(
+        _build_functional(shifted, HEXANE, HEXANE_SPEC), T, Units()
+    )
+    base = _hexane_data_with_sft()
+    return PureData(
+        T_psat=base.T_psat, p_psat=base.p_psat,
+        T_rho=base.T_rho, rho=base.rho,
+        T_sft=T, sft=gamma,
+    )
+
+
+def test_densify_fills_gaps_without_leaving_the_front():
+    """Given a real front, densify must keep every point and add more."""
+    import numpy as np
+
+    from fit_pcsaft._pure.pareto import _densify, non_dominated
+    from fit_pcsaft._types import Units
+    from tests.test_surface_tension import HEXANE, HEXANE_P, HEXANE_SPEC
+
+    data = _hexane_data_conflicting()
+    units = Units()
+
+    def _obj(x):
+        return aad_objectives(np.asarray(x, float), HEXANE, HEXANE_SPEC, data, units)
+
+    # Sweep sigma between the two objectives' optima; the non-dominated subset
+    # is the starting front, exactly as the driver builds it.
+    cand = np.array(
+        [[HEXANE_P[0], s, HEXANE_P[2]]
+         for s in np.linspace(HEXANE_P[1], HEXANE_P[1] * 1.03, 6)]
+    )
+    Fc = np.array([_obj(x) for x in cand])
+    keep = non_dominated(Fc) & (Fc[:, 0] < _BIG)
+    order = np.argsort(Fc[keep, 0])
+    X, F = cand[keep][order], Fc[keep][order]
+    assert len(F) >= 2, "sweep did not produce a front to densify"
+
+    Xd, Fd = _densify(X, F, 3, None, HEXANE, HEXANE_SPEC, data, units, None)
+
+    assert len(Fd) > len(F), "densify added no points"
+    assert len(Xd) == len(Fd)
+    assert np.all(np.diff(Fd[:, 0]) >= 0.0), "front must stay sorted by AAD_vle"
+    for f in F:
+        assert np.any(np.all(np.isclose(Fd, f), axis=1)), f"lost front point {f}"
+    # every returned pair is a real evaluation of its own parameter vector,
+    # never a drawn-in interpolation of the objectives
+    for x, f in zip(Xd, Fd):
+        assert _obj(x) == pytest.approx(tuple(f), rel=1e-9)
+    assert non_dominated(Fd).all()
+
+
+def test_densify_is_a_noop_when_disabled():
+    """refine=0 must leave the raw NSGA-II output untouched."""
+    import numpy as np
+
+    from fit_pcsaft._pure.pareto import _densify
+    from fit_pcsaft._types import Units
+    from tests.test_surface_tension import HEXANE, HEXANE_SPEC, _hexane_data_with_sft
+
+    X = np.array([[3.0576, 3.7983, 236.77], [3.2000, 3.7500, 233.00]])
+    F = np.array([[1.0, 2.0], [2.0, 1.0]])
+    Xd, Fd = _densify(
+        X, F, 0, None, HEXANE, HEXANE_SPEC, _hexane_data_with_sft(), Units(), None
+    )
+    assert np.array_equal(Xd, X) and np.array_equal(Fd, F)
