@@ -15,6 +15,8 @@ class PureData:
     rho: np.ndarray  # liquid densities (user units)
     T_hvap: np.ndarray = field(default_factory=lambda: np.array([]))  # hvap temperatures (user units)
     hvap: np.ndarray = field(default_factory=lambda: np.array([]))  # enthalpies of vaporization (user units)
+    T_sft: np.ndarray = field(default_factory=lambda: np.array([]))  # surface tension temperatures (user units)
+    sft: np.ndarray = field(default_factory=lambda: np.array([]))  # surface tensions (user units)
 
 
 @dataclass
@@ -37,6 +39,7 @@ class Units:
     pressure: object = field(default_factory=lambda: si.KILO * si.PASCAL)
     density: object = field(default_factory=lambda: si.KILOGRAM / si.METER**3)
     enthalpy: object = field(default_factory=lambda: si.KILO * si.JOULE / si.MOL)
+    surface_tension: object = field(default_factory=lambda: si.MILLI * si.NEWTON / si.METER)
 
 
 @dataclass
@@ -44,6 +47,10 @@ class FitConfig:
     w_psat: float = 3.0
     w_rho: float = 2.0
     w_hvap: float = 1.0
+    w_sft: float = 1.0
     extrapolate_psat: bool = False
     loss: str = "linear"
-    f_scale: dict = field(default_factory=lambda: {"psat": 1.0, "rho": 1.0, "hvap": 1.0})
+    f_scale: dict = field(
+        default_factory=lambda: {"psat": 1.0, "rho": 1.0, "hvap": 1.0, "sft": 1.0}
+    )
+    sft_options: object = None  # SurfaceTensionOptions; None -> module default

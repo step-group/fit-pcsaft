@@ -27,3 +27,15 @@ def test_load_sft_csv_missing_column(tmp_path: Path):
     p.write_text("T,psat\n300.0,3.5\n")
     with pytest.raises(ValueError):
         load_sft_csv(p)
+
+
+def test_puredata_defaults_empty_sft():
+    from fit_pcsaft._types import FitConfig, PureData, Units
+    d = PureData(
+        T_psat=np.array([300.0]), p_psat=np.array([3.5]),
+        T_rho=np.array([300.0]), rho=np.array([789.0]),
+    )
+    assert d.T_sft.size == 0 and d.sft.size == 0
+    assert Units().surface_tension is not None
+    assert FitConfig().w_sft == 1.0
+    assert FitConfig().f_scale["sft"] == 1.0
