@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import numpy as np
@@ -157,3 +158,48 @@ def test_analytical_jacobian_refuses_sft():
     data = _hexane_data_with_sft()
     with pytest.raises(ValueError, match="surface tension"):
         _make_f_and_df(data, HEXANE, HEXANE_SPEC, Units(), _sft_config())
+
+
+def test_public_entry_points_accept_sft():
+    import inspect
+
+    from fit_pcsaft import eval_pure, fit_pure, fit_pure_de
+
+    for fn in (fit_pure, fit_pure_de, eval_pure):
+        params = inspect.signature(fn).parameters
+        assert "sft_path" in params, f"{fn.__name__} missing sft_path"
+        assert "surface_tension_unit" in params, f"{fn.__name__} missing surface_tension_unit"
+    for fn in (fit_pure, fit_pure_de):
+        assert "sft_weight" in inspect.signature(fn).parameters
+
+
+@pytest.mark.skipif(
+    bool(os.environ.get("NO_NETWORK")), reason="_fetch_compound hits PubChem"
+)
+def test_setup_pure_fit_picks_numerical_jacobian_for_sft(tmp_path: Path, capsys):
+    """_setup_pure_fit must not hand back the analytical Jacobian when sft is present."""
+    from fit_pcsaft._pure.fit import _setup_pure_fit
+
+    psat = tmp_path / "psat.csv"
+    psat.write_text("T,psat\n300.0,21.9\n320.0,43.9\n340.0,79.5\n")
+    rho = tmp_path / "rho.csv"
+    rho.write_text("T,rho\n300.0,654.9\n320.0,635.6\n340.0,615.4\n")
+    sft = tmp_path / "sft.csv"
+    sft.write_text("T,sft\n300.0,17.60\n320.0,15.34\n")
+
+    out = _setup_pure_fit(
+        id="hexane",
+        psat_path=psat, density_path=rho, hvap_path=None, sft_path=sft,
+        mu=0.0, q=0.0, na=None, nb=None,
+        psat_weight=3.0, density_weight=2.0, hvap_weight=1.0, sft_weight=1.0,
+        extrapolate_psat=False,
+        pressure_unit=si.KILO * si.PASCAL,
+        temperature_unit=si.KELVIN,
+        density_unit=si.KILOGRAM / (si.METER**3),
+        enthalpy_unit=si.KILO * si.JOULE / si.MOL,
+        surface_tension_unit=si.MILLI * si.NEWTON / si.METER,
+    )
+    data, cost_fn = out[0], out[5]
+    assert data.T_sft.size == 2
+    assert cost_fn(np.sqrt(HEXANE_P)).size == 3 + 3 + 2
+    assert "surface tension" in capsys.readouterr().out.lower()

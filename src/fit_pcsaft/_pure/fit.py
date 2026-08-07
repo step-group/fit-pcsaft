@@ -8,7 +8,7 @@ import numpy as np
 import si_units as si
 from scipy.optimize import differential_evolution, least_squares
 
-from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv
+from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv, load_sft_csv
 from fit_pcsaft._fit_utils import (
     _PENALTY,
     _build_eos,
@@ -201,6 +201,10 @@ def _setup_pure_fit(
     enthalpy_unit,
     loss: str = "linear",
     f_scale=None,
+    sft_path=None,
+    sft_weight: float = 1.0,
+    surface_tension_unit=si.MILLI * si.NEWTON / si.METER,
+    sft_options=None,
 ):
     """Load data, fetch compound, build cost function. Shared by fit_pure and fit_pure_de."""
     fit_mu = mu is None
@@ -222,6 +226,11 @@ def _setup_pure_fit(
     else:
         _t_hvap, _d_hvap = np.array([]), np.array([])
 
+    if sft_path is not None:
+        _t_sft, _d_sft = load_sft_csv(sft_path)
+    else:
+        _t_sft, _d_sft = np.array([]), np.array([])
+
     data = PureData(
         T_psat=_t_psat,
         p_psat=_p_psat,
@@ -229,6 +238,8 @@ def _setup_pure_fit(
         rho=_d_rhoLsat,
         T_hvap=_t_hvap,
         hvap=_d_hvap,
+        T_sft=_t_sft,
+        sft=_d_sft,
     )
 
     compound = Compound(identifier=identifier, mw=float(mw))
@@ -238,23 +249,38 @@ def _setup_pure_fit(
         pressure=pressure_unit,
         density=density_unit,
         enthalpy=enthalpy_unit,
+        surface_tension=surface_tension_unit,
     )
-    active = {"psat", "rho"} | ({"hvap"} if hvap_path is not None else set())
+    active = (
+        {"psat", "rho"}
+        | ({"hvap"} if hvap_path is not None else set())
+        | ({"sft"} if sft_path is not None else set())
+    )
     f_scale_dict = _normalize_f_scale(f_scale, loss, active)
     config = FitConfig(
         w_psat=psat_weight,
         w_rho=density_weight,
         w_hvap=hvap_weight,
+        w_sft=sft_weight,
         extrapolate_psat=extrapolate_psat,
         loss=loss,
         f_scale=f_scale_dict,
+        sft_options=sft_options,
     )
 
     # hvap now has AD (feos.Property.enthalpy_of_vaporization_derivatives).
-    # q does not: feos silently accepts 'q' in parameter_names and returns a
-    # zero gradient column, so a quadrupolar fit must stay on finite differences.
-    use_numerical_jac = q != 0.0
-    if use_numerical_jac:
+    # Neither q nor surface tension does: feos silently accepts 'q' in
+    # parameter_names and returns a zero gradient column, and feos.Property has
+    # no surface_tension_derivatives at all. Both must stay on finite differences.
+    if sft_path is not None:
+        print(
+            "Note: surface tension data present (no feos AD for surface tension) — "
+            "falling back to numerical Jacobian (2-point).\n"
+        )
+        cost_fn, jac_fn, errors = _make_f_and_df_numerical(
+            data, compound, spec, units, config
+        )
+    elif q != 0.0:
         print(
             "Note: q != 0 (quadrupole has no feos AD support) — "
             "falling back to numerical Jacobian (2-point).\n"
@@ -276,6 +302,7 @@ def fit_pure(
     psat_path: Path | str,
     density_path: Path | str,
     hvap_path: Optional[Path | str] = None,
+    sft_path: Optional[Path | str] = None,
     mu: Optional[float] = 0.0,
     q: float = 0.0,
     na: Optional[int] = None,
@@ -283,6 +310,7 @@ def fit_pure(
     psat_weight: float = 3.0,
     density_weight: float = 2.0,
     hvap_weight: float = 1.0,
+    sft_weight: float = 1.0,
     extrapolate_psat: bool = False,
     loss: str = "linear",
     f_scale: "float | dict | None" = None,
@@ -290,6 +318,8 @@ def fit_pure(
     temperature_unit: si.SIObject = si.KELVIN,
     density_unit: si.SIObject = si.KILOGRAM / (si.METER**3),
     enthalpy_unit: si.SIObject = si.KILO * si.JOULE / si.MOL,
+    surface_tension_unit: si.SIObject = si.MILLI * si.NEWTON / si.METER,
+    sft_options=None,
     scipy_kwargs: Optional[dict] = None,
 ) -> FitResult:
     """Fit PC-SAFT parameters to vapor pressure and liquid density data.
@@ -370,6 +400,10 @@ def fit_pure(
             enthalpy_unit=enthalpy_unit,
             loss=loss,
             f_scale=f_scale,
+            sft_path=sft_path,
+            sft_weight=sft_weight,
+            surface_tension_unit=surface_tension_unit,
+            sft_options=sft_options,
         )
     )
 
@@ -447,6 +481,7 @@ def fit_pure_de(
     psat_path: Path | str,
     density_path: Path | str,
     hvap_path: Optional[Path | str] = None,
+    sft_path: Optional[Path | str] = None,
     mu: Optional[float] = 0.0,
     q: float = 0.0,
     na: Optional[int] = None,
@@ -454,6 +489,7 @@ def fit_pure_de(
     psat_weight: float = 3.0,
     density_weight: float = 2.0,
     hvap_weight: float = 1.0,
+    sft_weight: float = 1.0,
     extrapolate_psat: bool = False,
     loss: str = "linear",
     f_scale: "float | dict | None" = None,
@@ -462,6 +498,8 @@ def fit_pure_de(
     temperature_unit: si.SIObject = si.KELVIN,
     density_unit: si.SIObject = si.KILOGRAM / (si.METER**3),
     enthalpy_unit: si.SIObject = si.KILO * si.JOULE / si.MOL,
+    surface_tension_unit: si.SIObject = si.MILLI * si.NEWTON / si.METER,
+    sft_options=None,
     de_kwargs: Optional[dict] = None,
 ) -> FitResult:
     """Fit PC-SAFT parameters using differential evolution (global optimizer).
@@ -538,6 +576,10 @@ def fit_pure_de(
             enthalpy_unit=enthalpy_unit,
             loss=loss,
             f_scale=f_scale,
+            sft_path=sft_path,
+            sft_weight=sft_weight,
+            surface_tension_unit=surface_tension_unit,
+            sft_options=sft_options,
         )
     )
 
@@ -624,6 +666,7 @@ def eval_pure(
     density_path: "Path | str",
     params: dict,
     hvap_path: Optional["Path | str"] = None,
+    sft_path: Optional["Path | str"] = None,
     q: float = 0.0,
     na: Optional[int] = None,
     nb: Optional[int] = None,
@@ -631,6 +674,8 @@ def eval_pure(
     temperature_unit: "si.SIObject" = si.KELVIN,
     density_unit: "si.SIObject" = si.KILOGRAM / (si.METER**3),
     enthalpy_unit: "si.SIObject" = si.KILO * si.JOULE / si.MOL,
+    surface_tension_unit: "si.SIObject" = si.MILLI * si.NEWTON / si.METER,
+    sft_options=None,
 ) -> EvalResult:
     """Evaluate PC-SAFT parameters against experimental data and return ARD%.
 
@@ -691,6 +736,11 @@ def eval_pure(
     else:
         _t_hvap, _d_hvap = np.array([]), np.array([])
 
+    if sft_path is not None:
+        _t_sft, _d_sft = load_sft_csv(sft_path)
+    else:
+        _t_sft, _d_sft = np.array([]), np.array([])
+
     data = PureData(
         T_psat=_t_psat,
         p_psat=_p_psat,
@@ -698,6 +748,8 @@ def eval_pure(
         rho=_d_rho,
         T_hvap=_t_hvap,
         hvap=_d_hvap,
+        T_sft=_t_sft,
+        sft=_d_sft,
     )
 
     # Infer association from params dict if na/nb not given
@@ -715,6 +767,7 @@ def eval_pure(
         pressure=pressure_unit,
         density=density_unit,
         enthalpy=enthalpy_unit,
+        surface_tension=surface_tension_unit,
     )
 
     # Build params_vec: [m, sigma, epsilon_k, (kappa_ab, epsilon_k_ab if assoc)]
