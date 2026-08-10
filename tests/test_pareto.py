@@ -324,7 +324,7 @@ def test_densify_fills_gaps_without_leaving_the_front():
 
 
 def test_densify_is_a_noop_when_disabled():
-    """refine=0 must leave the raw NSGA-II output untouched."""
+    """refine=0 must leave the raw search output untouched."""
     import numpy as np
 
     from fit_pcsaft._pure.pareto import _densify

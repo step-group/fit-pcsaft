@@ -17,10 +17,13 @@ range.
 Absolute rather than relative deviation for gamma: it goes to zero at the
 critical point, where a relative error diverges and would dominate the fit.
 
-The front is generated with pymoo's NSGA-II. A derivative-free population method
+The front is generated with pymoo's MOEA/D. A derivative-free population method
 is required here: large regions of parameter space have no vapour-liquid
 equilibrium or no stable interface at all, and those points are handled by
-returning a large objective value rather than a gradient.
+returning a large objective value rather than a gradient. Decomposition rather
+than dominance ranking because MOEA/D gives every population slot its own weight
+vector, so the spread along the front is designed in rather than left to
+crowding distance and repaired afterwards.
 """
 
 from __future__ import annotations
@@ -209,7 +212,7 @@ def _silence_fd_stderr(active: bool = True):
     feos panics inside Rust worker threads when the DFT solver fails to
     converge ("IterationFailed(...)"). Those panics are already handled — the
     objective returns _BIG — but Rust writes the panic message straight to fd 2,
-    where no Python-level redirect can reach it. Over thousands of NSGA-II
+    where no Python-level redirect can reach it. Over thousands of search
     evaluations that is thousands of lines of noise about failures we expect.
 
     This suppresses the whole fd, so genuine stderr output from the wrapped
@@ -377,13 +380,14 @@ def _front_from(X: np.ndarray, R: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options):
-    """Fill the gaps NSGA-II leaves between adjacent front points.
+    """Fill the gaps the search leaves between adjacent front points.
 
-    NSGA-II returns a population, not a curve. Crowding distance preserves
-    diversity but nothing forces even spacing, so the front comes back as
-    clusters of near-identical parameter sets separated by voids — on water,
-    eight of eighty points sat within 0.2% of each other on the AAD_vle axis
-    while a 2.8% stretch of the same axis held none.
+    MOEA/D spaces its population by construction — one weight vector per slot —
+    so the clustering that made this pass essential under NSGA-II (on water,
+    eight of eighty points within 0.2% of each other on the AAD_vle axis, and a
+    2.8% stretch of that axis holding none) should be much reduced. The pass is
+    still worth its cost for the second reason below: it is what reveals that a
+    raw front is not always a front.
 
     The voids are a sampling artefact, not structure: every point obtained by
     linearly interpolating the parameter vectors across them is itself
@@ -621,12 +625,17 @@ def fit_pure_pareto(
     ref_vle: float = 2.0,
     ref_sft: float = 0.7,
 ) -> ParetoResult:
-    """Generate the AAD_vle / AAD_sft pareto front with NSGA-II.
+    """Generate the AAD_vle / AAD_sft pareto front with MOEA/D.
 
     Cost is ``pop_size * n_gen`` objective evaluations, each roughly 120 ms at
     sensible parameters and up to 1 s where the VLE solve fails. Budget decides
     front quality far more than anything else; measured on water (2B, 14
     workers), best-of-front and the largest hole in it:
+
+    The table below was measured under NSGA-II, before the switch to MOEA/D. The
+    cost per evaluation is a property of the model, not the solver, so the
+    evals/time relationship still holds; the points and max-gap columns describe
+    the old solver's front shape and have not been re-measured.
 
         evals   points   AAD_vle   AAD_sft   max gap   time
          1200       32      9.47      1.12      4.37     56s
@@ -666,10 +675,11 @@ def fit_pure_pareto(
         80 -> 209 points, median objective-space spacing 3.4x finer, 316
         evaluations, 7 s on 14 workers.
 
-    It does two things. The obvious one is resolution: NSGA-II's crowding
-    distance keeps diversity but never forces even spacing, so its output is
-    clusters separated by voids, and every point interpolated across a void is
-    itself non-dominated -- the voids are a sampling artefact. The less obvious
+    It does two things. The obvious one is resolution: MOEA/D spreads its
+    population across weight vectors, so its output should already be far more
+    even than NSGA-II's clusters-and-voids, and every point interpolated across
+    a void is itself non-dominated -- the voids are a sampling artefact. The
+    less obvious
     one is correctness: the raw front is not always a front. On water the fill
     dominated a whole stretch of it, moving the eq-32 tangent point from
     (1.44%, 1.62) to (1.90%, 1.29) -- eq 32 from 3.04 to 2.79. Trust a raw
@@ -680,6 +690,17 @@ def fit_pure_pareto(
     Water keeps one, at the knee near AAD_vle = 2%: a second pass moves eq 32 by
     0.01 for 3.6x the evaluations. That corner needs search budget, not
     arithmetic. Set refine=0 to see the raw population. See ``_densify``.
+
+    ``ref_vle`` and ``ref_sft`` scale the two objectives for the decomposition,
+    and are the same eq-32 reference values ``select()`` takes: water (2, 0.7),
+    small alcohols (2, 1.5), alcohols from 1-pentanol up (2, 3.0). They matter
+    more here than a scaling factor usually would. MOEA/D's Tchebicheff
+    decomposition is applied to raw objective values -- pymoo hands it an ideal
+    point but never a nadir point -- so without this the axis with the larger
+    numeric span dominates every weight vector and the front bunches into one
+    corner. They do not change the returned objectives, which are always in %
+    and mN/m. Pass the same pair to ``select()`` that you passed here, or the
+    point picked off the front will not be the one the search resolved for.
     """
     from pymoo.optimize import minimize
 
