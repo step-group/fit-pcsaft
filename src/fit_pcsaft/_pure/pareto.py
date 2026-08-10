@@ -385,9 +385,10 @@ def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options):
     MOEA/D spaces its population by construction — one weight vector per slot —
     so the clustering that made this pass essential under NSGA-II (on water,
     eight of eighty points within 0.2% of each other on the AAD_vle axis, and a
-    2.8% stretch of that axis holding none) should be much reduced. The pass is
-    still worth its cost for the second reason below: it is what reveals that a
-    raw front is not always a front.
+    2.8% stretch of that axis holding none) is largely gone: measured on water,
+    median normalized spacing 0.0084 and largest gap 0.093. The pass is still
+    worth its cost for the second reason below: it is what reveals that a raw
+    front is not always a front.
 
     The voids are a sampling artefact, not structure: every point obtained by
     linearly interpolating the parameter vectors across them is itself
@@ -635,12 +636,27 @@ def fit_pure_pareto(
     The table below was measured under NSGA-II, before the switch to MOEA/D. The
     cost per evaluation is a property of the model, not the solver, so the
     evals/time relationship still holds; the points and max-gap columns describe
-    the old solver's front shape and have not been re-measured.
+    the old solver's front shape.
 
         evals   points   AAD_vle   AAD_sft   max gap   time
          1200       32      9.47      1.12      4.37     56s
          3600       47      2.27      0.70     19.22    127s
          9600       80      1.44      0.78      2.82    301s
+
+    MOEA/D at the same 9600-evaluation budget (pop 80 x 120 gen, refine=4, 14
+    workers) gives 190 points in 190 s, evenly spaced -- median normalized
+    spacing 0.0084, largest gap 0.093, no clusters. But it covers far less of
+    the front: AAD_vle 1.54 to 19.94 against AAD_sft 1.70 to only 1.996, where
+    NSGA-II reached AAD_sft = 0.78. Eq 32 at the tangent point is 3.62 against
+    NSGA-II's refined 2.79.
+
+    The cause is the scaling below being too weak, not MOEA/D. After dividing by
+    (ref_vle, ref_sft) the two axes still span 9.20 and 0.43 -- 21.5 to 1 -- so
+    the AAD_vle term wins the Tchebicheff max for every weight vector except
+    w1/w2 below about 0.05, some four of eighty. The interfacial end of the
+    front is never assigned a subproblem that can reach it. Normalizing by the
+    observed objective ranges rather than by the eq-32 references is the fix;
+    until then prefer a large budget and check the AAD_sft span you got back.
 
     Below a few thousand evaluations the search is still finding feasible
     ground rather than resolving the trade-off, and the front is a cluster
@@ -676,10 +692,10 @@ def fit_pure_pareto(
         evaluations, 7 s on 14 workers.
 
     It does two things. The obvious one is resolution: MOEA/D spreads its
-    population across weight vectors, so its output should already be far more
-    even than NSGA-II's clusters-and-voids, and every point interpolated across
-    a void is itself non-dominated -- the voids are a sampling artefact. The
-    less obvious
+    population across weight vectors, and measured on water its raw output is
+    already evenly spaced where NSGA-II's was clusters-and-voids, so this pass
+    buys much less than it used to -- every point interpolated across a void is
+    itself non-dominated, and there are far fewer voids. The less obvious
     one is correctness: the raw front is not always a front. On water the fill
     dominated a whole stretch of it, moving the eq-32 tangent point from
     (1.44%, 1.62) to (1.90%, 1.29) -- eq 32 from 3.04 to 2.79. Trust a raw
