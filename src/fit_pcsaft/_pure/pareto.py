@@ -701,19 +701,34 @@ def fit_pure_pareto(
          9600       80      1.44      0.78      2.82    301s
 
     MOEA/D at the same 9600-evaluation budget (pop 80 x 120 gen, refine=4, 14
-    workers) gives 190 points in 190 s, evenly spaced -- median normalized
-    spacing 0.0084, largest gap 0.093, no clusters. But it covers far less of
-    the front: AAD_vle 1.54 to 19.94 against AAD_sft 1.70 to only 1.996, where
-    NSGA-II reached AAD_sft = 0.78. Eq 32 at the tangent point is 3.62 against
-    NSGA-II's refined 2.79.
+    workers) is *worse on front coverage*, which is the thing this module exists
+    to produce. Measured on water, both scalings that have been tried:
 
-    The cause is the scaling below being too weak, not MOEA/D. After dividing by
-    (ref_vle, ref_sft) the two axes still span 9.20 and 0.43 -- 21.5 to 1 -- so
-    the AAD_vle term wins the Tchebicheff max for every weight vector except
-    w1/w2 below about 0.05, some four of eighty. The interfacial end of the
-    front is never assigned a subproblem that can reach it. Normalizing by the
-    observed objective ranges rather than by the eq-32 references is the fix;
-    until then prefer a large budget and check the AAD_sft span you got back.
+        scaling        points   AAD_vle range   AAD_sft range   max gap   eq 32
+        eq-32 refs        190   1.54 - 19.94    1.70 - 2.00      0.093    3.620
+        observed spans     70   1.48 - 45.60    1.37 - 1.50      0.685    2.876
+        (NSGA-II)      80/209   1.44 - ...      0.78 - ...        2.82    2.790
+
+    Spacing is excellent either way -- median normalized gap 0.0084 and 0.0064,
+    no clusters, which is what decomposition promises and delivers. The problem
+    is extent: NSGA-II reaches AAD_sft = 0.78, MOEA/D stalls at 1.37. A front
+    spanning 0.13 mN/m is not a trade-off curve.
+
+    The reason is structural, not a tuning miss. Tchebicheff scores a candidate
+    by ``max(w1*|f1 - z1|, w2*|f2 - z2|)``, so which end of the front a weight
+    vector can reach depends on the *ratio of the objective spans* -- a quantity
+    you only know once you have the front. Scaling by the eq-32 references left
+    that ratio at 21.5 to 1; scaling by the spans of generation zero is a better
+    guess but still a guess, made from an LHS sweep of the whole box rather than
+    from the front. NSGA-II has no such dependency: dominance is scale-free and
+    crowding distance is normalized per front, which is why it explores both
+    ends without being told where they are.
+
+    Fixing this properly means re-estimating ideal and nadir each generation and
+    rescaling the stored population's F to match -- pymoo's MOEAD keeps F on the
+    population and compares fresh offspring against it, so a scale that moves
+    without rescaling history corrupts every replacement decision. That is a
+    custom ParallelMOEAD subclass, not a parameter.
 
     Below a few thousand evaluations the search is still finding feasible
     ground rather than resolving the trade-off, and the front is a cluster
