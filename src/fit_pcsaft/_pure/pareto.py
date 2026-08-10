@@ -55,6 +55,10 @@ _MIN_VALID_FRACTION = 0.5
 # scale the objectives; below this the eq-32 references are used instead.
 _MIN_SCALE_SAMPLE = 4
 
+# Neighbouring subproblems one offspring may take over in a generation --
+# MOEA/D-DE's nr (Li & Zhang 2009), pagmo's `limit`. See _capped_replacement.
+_N_REPLACE = 2
+
 
 def non_dominated(F: np.ndarray) -> np.ndarray:
     """Boolean mask of the non-dominated rows of a minimization objective array.
@@ -534,6 +538,29 @@ def _ref_dirs(pop_size: int) -> np.ndarray:
     return get_reference_directions("uniform", 2, n_partitions=pop_size - 1)
 
 
+def _capped_replacement(better, n_replace, random_state):
+    """Which of the neighbour slots an offspring is allowed to take.
+
+    MOEA/D-DE (Li & Zhang 2009) caps this at ``nr``; pagmo exposes it as
+    ``limit`` and defaults it to 2 whenever ``preserve_diversity`` is on, which
+    is the configuration Rehner & Gross used. **pymoo has no cap at all** — its
+    ``MOEAD._replace`` assigns the offspring to every neighbour it beats, so one
+    good solution can occupy all ``n_neighbors`` (20) subproblems in a single
+    generation. Diversity collapses and the front contracts onto whichever
+    region happened to be found first. Measured on water without the cap, the
+    AAD_sft extent came back as 0.30 and then 0.13 mN/m under two different
+    objective scalings, against NSGA-II's ~1.2.
+
+    Selection among the improved slots is random, as the paper specifies: it
+    scans the neighbourhood in random order and stops after nr replacements.
+    Taking the first nr, or greedily the nr it improves most, would put the
+    same bias back.
+    """
+    if len(better) <= n_replace:
+        return better
+    return random_state.permutation(better)[:n_replace]
+
+
 def _make_algorithm(pop_size: int, lhs: bool):
     """MOEA/D, in the variant that evaluates a whole population at a time.
 
@@ -543,10 +570,30 @@ def _make_algorithm(pop_size: int, lhs: bool):
     ``ParallelMOEAD`` overrides ``_infill``/``_advance`` to mate the whole
     population first, and inherits ``n_offsprings = pop_size``, so one
     generation is one ``pool.map`` — the same rhythm NSGA-II had.
+
+    Subclassed to add the replacement cap pymoo leaves out; see
+    ``_capped_replacement``. The body below is pymoo's own ``_replace`` with
+    that one line changed.
     """
     from pymoo.algorithms.moo.moead import ParallelMOEAD
 
-    return ParallelMOEAD(_ref_dirs(pop_size), sampling=_initial_sampling(lhs))
+    class _CappedMOEAD(ParallelMOEAD):
+        n_replace = _N_REPLACE
+
+        def _replace(self, k, off):
+            pop = self.pop
+            N = self.neighbors[k]
+            FV = self.decomposition.do(
+                pop[N].get("F"), weights=self.ref_dirs[N, :], ideal_point=self.ideal
+            )
+            off_FV = self.decomposition.do(
+                off.F[None, :], weights=self.ref_dirs[N, :], ideal_point=self.ideal
+            )
+            better = np.where(off_FV < FV)[0]
+            take = _capped_replacement(better, self.n_replace, self.random_state)
+            pop[N[take]] = off
+
+    return _CappedMOEAD(_ref_dirs(pop_size), sampling=_initial_sampling(lhs))
 
 
 @dataclass(frozen=True)

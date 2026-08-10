@@ -255,6 +255,48 @@ def test_algorithm_is_the_parallel_moead_variant():
     assert algorithm.n_offsprings == 20, "one full population per generation"
 
 
+def test_replacement_keeps_everything_under_the_cap():
+    from fit_pcsaft._pure.pareto import _capped_replacement
+
+    I = np.array([3, 7])
+    out = _capped_replacement(I, 2, np.random.default_rng(0))
+    assert out.tolist() == [3, 7]
+
+
+def test_replacement_is_capped_when_an_offspring_beats_many_neighbours():
+    """One solution flooding its whole neighbourhood is how the front collapses."""
+    from fit_pcsaft._pure.pareto import _capped_replacement
+
+    I = np.arange(20)
+    out = _capped_replacement(I, 2, np.random.default_rng(0))
+    assert len(out) == 2
+    assert set(out.tolist()) <= set(I.tolist())
+
+
+def test_replacement_does_not_always_take_the_same_slots():
+    """Li and Zhang scan the neighbourhood in random order.
+
+    Taking the first n, or greedily the n it improves most, reintroduces exactly
+    the bias towards one region that the cap exists to remove.
+    """
+    from fit_pcsaft._pure.pareto import _capped_replacement
+
+    rng = np.random.default_rng(0)
+    I = np.arange(20)
+    seen: set = set()
+    for _ in range(50):
+        seen.update(_capped_replacement(I, 2, rng).tolist())
+    assert len(seen) > 4, "selection is not spread across the neighbourhood"
+
+
+def test_algorithm_caps_neighbour_replacement():
+    """pymoo's own _replace has no cap; pagmo's limit=2 is what the paper used."""
+    from fit_pcsaft._pure.pareto import _N_REPLACE, _make_algorithm
+
+    algorithm = _make_algorithm(pop_size=20, lhs=True)
+    assert algorithm.n_replace == _N_REPLACE == 2
+
+
 def test_problem_declares_no_constraints():
     """pymoo's MOEA/D asserts on any constrained problem in its _setup."""
     from fit_pcsaft._pure.pareto import _make_problem
