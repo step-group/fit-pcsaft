@@ -435,6 +435,37 @@ def _initial_sampling(use_lhs: bool):
     return FloatRandomSampling()
 
 
+def _ref_dirs(pop_size: int) -> np.ndarray:
+    """The weight-vector fan MOEA/D decomposes against, one per population slot.
+
+    Das-Dennis on two objectives returns ``n_partitions + 1`` vectors, so
+    ``pop_size - 1`` partitions keeps ``pop_size`` meaning what it meant under
+    NSGA-II. pymoo needs these up front: ``MOEAD.__init__`` reads
+    ``len(ref_dirs)`` to set the population size before its own ``None``
+    fallback in ``_setup`` ever runs.
+    """
+    from pymoo.util.ref_dirs import get_reference_directions
+
+    if pop_size < 2:
+        raise ValueError(f"MOEA/D needs at least 2 weight vectors, got {pop_size}")
+    return get_reference_directions("uniform", 2, n_partitions=pop_size - 1)
+
+
+def _make_algorithm(pop_size: int, lhs: bool):
+    """MOEA/D, in the variant that evaluates a whole population at a time.
+
+    ``ParallelMOEAD``, not ``MOEAD``: the plain class is a ``LoopwiseAlgorithm``
+    whose ``_next`` yields a single offspring per step, which would hand the
+    worker pool batches of one and give back all of the 4.3x that pool buys.
+    ``ParallelMOEAD`` overrides ``_infill``/``_advance`` to mate the whole
+    population first, and inherits ``n_offsprings = pop_size``, so one
+    generation is one ``pool.map`` — the same rhythm NSGA-II had.
+    """
+    from pymoo.algorithms.moo.moead import ParallelMOEAD
+
+    return ParallelMOEAD(_ref_dirs(pop_size), sampling=_initial_sampling(lhs))
+
+
 @dataclass(frozen=True)
 class ParetoResult:
     """The pareto front of a bi-objective PC-SAFT fit.

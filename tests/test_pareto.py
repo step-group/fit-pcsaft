@@ -164,6 +164,43 @@ def test_lhs_sampling_selected():
     assert isinstance(_initial_sampling(False), FloatRandomSampling)
 
 
+def test_ref_dirs_give_one_weight_vector_per_population_slot():
+    """MOEA/D's population size *is* its number of weight vectors.
+
+    Das-Dennis on two objectives returns n_partitions + 1 vectors, so pop_size
+    has to map to n_partitions - 1 for the argument to keep its meaning.
+    """
+    from fit_pcsaft._pure.pareto import _ref_dirs
+
+    W = _ref_dirs(60)
+    assert W.shape == (60, 2)
+    assert W.sum(axis=1) == pytest.approx(np.ones(60))
+
+
+def test_ref_dirs_rejects_a_degenerate_population():
+    from fit_pcsaft._pure.pareto import _ref_dirs
+
+    with pytest.raises(ValueError, match="at least 2"):
+        _ref_dirs(1)
+
+
+def test_algorithm_is_the_parallel_moead_variant():
+    """Plain MOEAD is loopwise and would starve the worker pool.
+
+    Its _next yields one offspring at a time, so the pool would get batches of
+    one and the measured 4.3x on 14 workers would be gone. ParallelMOEAD emits
+    a whole population per generation.
+    """
+    from pymoo.algorithms.moo.moead import ParallelMOEAD
+
+    from fit_pcsaft._pure.pareto import _make_algorithm
+
+    algorithm = _make_algorithm(pop_size=20, lhs=True)
+    assert isinstance(algorithm, ParallelMOEAD)
+    assert algorithm.pop_size == 20
+    assert algorithm.n_offsprings == 20, "one full population per generation"
+
+
 def test_select_picks_the_tangent_point():
     F = np.array([[1.0, 6.0], [2.0, 2.0], [6.0, 1.0]])
     # ref_vle=2%, ref_sft=1 -> costs: 6.5, 3.0, 4.0 -> index 1
