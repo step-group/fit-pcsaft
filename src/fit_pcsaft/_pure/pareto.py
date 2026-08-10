@@ -5,26 +5,39 @@ error and interfacial error are treated as two independent objectives instead of
 being collapsed into one weighted sum, so the whole trade-off curve is available
 and the arbitrariness of a weight choice becomes visible.
 
-    objective 1 (eq 30)  AAD_vle = AARD(psat) + AARD(rho)       [%]
+    objective 1 (eq 30)  AAD_vle = mean(AARD(psat), AARD(rho))  [%]
     objective 2 (eq 31)  AAD_sft = mean|gamma_calc - gamma_exp| [mN/m]
 
-Eq 30 *sums* the two mean relative errors — one term per property, each already
-divided by its own point count — it does not average them.
+Eq 30 is read here as a *mean* of the two AARDs, not their sum. Written out, the
+equation looks like a sum of two separately-normalized terms,
+``(1/N_psat) sum|rd_psat| + (1/N_rho) sum|rd_rho|``, and that reading was tried.
+It cannot be what produced the paper's Table 2. Forward-evaluating the paper's
+own water 2B parameters (Table 1) against IAPWS-95 saturation data gives
 
-This was previously implemented as the mean, on the reasoning that the paper's
-own water 2B parameters (Table 1) reproduce their AAD_vle = 2.14% (Table 2) at
-2.4% under the mean against 4.7% under the sum. That inference was unsound: the
-bundled water quasi-data is saturation-only over 280-620 K, while the paper also
-fitted liquid and supercritical densities to 1073 K, so neither number is
-comparable to their 2.14% and the closer match was coincidence.
+    AARD_psat = 4.56%    AARD_rho = 1.76%    ->  sum 6.32, mean 3.16
 
-The factor of two does not move the front. Dominance is invariant under a
-positive per-axis scaling, so the non-dominated set is identical, and
-``_objective_scale`` divides by the observed span, which doubles with it — the
-values MOEA/D decomposes are unchanged. What it changes is the reported
-AAD_vle, and through it the eq-32 tangent: under the mean, ``ref_vle=2.0``
-weighted the bulk term at half what the paper intended, biasing ``select()``
-toward the interfacial end of the front.
+against their reported AAD_vle = 2.14%. **AARD_psat alone already exceeds their
+whole reported value**, so no summed form can land on 2.14 for any parameter set
+that also reproduces their surface tension -- which these do, to within 0.03
+mN/m on all three association schemes.
+
+Nor is that psat error a data-range artefact to be trimmed away. Its relative
+deviation is a smooth systematic curve, +11.5% at 280 K, -5.4% at 373 K, +7.7%
+at 620 K -- worst at *both* ends, so truncating below the critical region barely
+moves it (4.56% over 280-620 K, still 3.70% cut back to 500 K). It is PC-SAFT's
+structural error for water.
+
+The mean is also what a single ``1/N_total`` average over all points reduces to
+whenever the two data sets are the same size, which they are here (23 and 23).
+That is the most likely reconciliation: with the paper's much larger density set
+(273-1073 K, liquid and supercritical) a pooled average would dilute the psat
+term well below either number above. Unverified against the published equation.
+
+The choice does not move the front. Dominance is invariant under a positive
+per-axis scaling, so the non-dominated set is identical, and ``_objective_scale``
+divides by an observed span that scales with it -- the values MOEA/D decomposes
+are unchanged. It changes the reported AAD_vle and, through it, where eq 32 puts
+its tangent.
 
 Absolute rather than relative deviation for gamma: it goes to zero at the
 critical point, where a relative error diverges and would dominate the fit.
@@ -229,9 +242,9 @@ def _evaluate_point(
         _fraction(m_psat, len(data.T_psat)), _fraction(m_rho, len(data.T_rho))
     )
 
-    # eq 30 sums the two mean relative errors, it does not average them:
-    #   AAD_vle = (1/N_psat) sum|rd_psat| + (1/N_rho) sum|rd_rho|
-    aad_vle = m_psat.aard_pct + m_rho.aard_pct
+    # Mean of the two AARDs, equivalently a single 1/N_total average when the
+    # two data sets are the same size. NOT their sum -- see the module docstring.
+    aad_vle = 0.5 * (m_psat.aard_pct + m_rho.aard_pct)
     if not np.isfinite(aad_vle):
         aad_vle = _BIG
 
@@ -776,19 +789,23 @@ def fit_pure_pareto(
     as 0.30 and 0.13 mN/m, and with it 0.73, reaching 0.64 -- past the 0.78 the
     NSGA-II this replaced managed. See ``_capped_replacement`` for why.
 
-    The sharpest check on the cap is not any of those numbers but the parameter
-    set ``.select()`` then returns, against Rehner & Gross' published water 2B
-    (their Table 1):
+    A tempting further check is the parameter set ``.select()`` returns, against
+    Rehner & Gross' published water 2B (their Table 1). **Do not lean on it.**
 
                         m      sigma    eps_k    kappa_ab   eps_k_ab
         paper        1.0000    2.9375   272.03   0.044480     3125.3
-        with cap     1.1346    2.8109   273.25   0.047221     3054.6
-        without cap  2.1894    2.2067   228.69   0.330135     2311.2
+        selected     1.1346    2.8109   273.25   0.047221     3054.6
+        deviation      13%       4%        0.5%      6%          2%
 
-    With the cap this is the paper's parameter set: 0.5% on eps_k, 2-6% on
-    sigma, kappa_ab and eps_k_ab, 13% on m. Without it kappa_ab is out by a
-    factor of seven. Reproducing Table 1 is what this module is for, so treat
-    that row as the regression test if the solver is ever touched again.
+    That looks like a hit, and it is not evidence. This front spans AAD_vle 2.64
+    to 11.04 while the paper's own operating point for these parameters is
+    2.14%, which falls outside it: the bundled quasi-data is saturation-only over
+    280-620 K where the paper also fitted liquid and supercritical densities to
+    1073 K. A front that never reaches the paper's conditions cannot be said to
+    have reproduced the paper's parameters, however close the numbers land.
+
+    The cap's real evidence is the AAD_sft extent in the table above -- internal
+    to this data set, and needing no cross-paper comparison to mean something.
 
     The scaling then decides where along the trade-off that coverage sits, and
     the ranking above is the whole argument for not running raw objectives even

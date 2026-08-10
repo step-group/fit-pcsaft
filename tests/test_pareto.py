@@ -84,11 +84,10 @@ def test_water_forward_check_against_paper(scheme, params, na, nb, paper_vle, pa
     ranking across schemes (4C < 2B < 3B) is reproduced either way.
 
     The AAD_vle band is two-sided on purpose. Measured ratios to the paper are
-    2.95 / 3.11 / 2.51 for 2B / 3B / 4C -- systematic, as a data-set difference
-    should be. A one-sided upper bound is what let eq 30 sit implemented as the
-    *mean* of the two AARDs instead of their *sum*: that halves every ratio to
-    1.3-1.6, which sails under any upper bound loose enough to accommodate the
-    real one. The lower edge is the half of this assertion that has teeth.
+    1.48 / 1.56 / 1.25 for 2B / 3B / 4C -- systematic, as a data-set difference
+    should be. The upper edge is the half with teeth: implementing eq 30 as the
+    *sum* of the two AARDs rather than their *mean* doubles every ratio to
+    2.5-3.1, and a one-sided "is it small enough" assertion would not notice.
     """
     from fit_pcsaft._types import ModelSpec
 
@@ -101,9 +100,9 @@ def test_water_forward_check_against_paper(scheme, params, na, nb, paper_vle, pa
     )
     assert aad_sft == pytest.approx(paper_sft, abs=0.05)
     ratio = aad_vle / paper_vle
-    assert 2.0 < ratio < 4.0, (
-        f"AAD_vle/paper = {ratio:.2f}, outside the 2-4 band; below 2 usually "
-        "means eq 30 has been turned back into a mean of the two AARDs"
+    assert 1.0 < ratio < 2.0, (
+        f"AAD_vle/paper = {ratio:.2f}, outside the 1-2 band; above 2 usually "
+        "means eq 30 has been turned into a sum of the two AARDs"
     )
 
 
