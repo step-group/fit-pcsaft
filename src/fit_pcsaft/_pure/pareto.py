@@ -770,11 +770,28 @@ def fit_pure_pareto(
     leaving that ratio at whatever the raw units happen to give is not a choice
     so much as an accident. See ``_objective_scale``.
 
-    What is still not matched is the AAD_vle corner: 2.64 here against 1.44 for
-    NSGA-II, which is most of the remaining eq-32 gap. Every row above is a
-    single stochastic sample, and the note further up about 9600 evaluations not
-    being converged applies to all of them -- differences of 0.1 in eq 32 should
-    not be read as signal.
+    Against NSGA-II re-measured on the same machine and budget (the table at the
+    top of this docstring was recorded elsewhere and is not comparable -- it
+    reports 301 s where the same run here takes 188 s):
+
+        solver                  points   AAD_vle       AAD_sft      eq 32   time
+        MOEA/D (spans, nr=2)       131   2.64-11.04    0.64-1.36    2.961   186s
+        NSGA-II                    241   2.47-13.81    0.45-1.17    2.842   188s
+
+    They are comparable. Front extent is a tie (AAD_sft span 0.726 against
+    0.718), eq 32 differs by 0.12 which is inside the run-to-run noise, and
+    there is no speed difference. NSGA-II reaches further into the interfacial
+    corner and comes back with more points at finer spacing -- though that last
+    one is confounded, since 241 points against 131 makes smaller gaps almost
+    automatic and says little about the raw search.
+
+    So the case for MOEA/D here is fidelity to the paper's method, not measured
+    superiority: Rehner & Gross used it (via pygmo) and recommend it for this
+    problem class. Their stated reasons -- derivative-free, no dependence on
+    initial values, tolerant of parameter sets with no VLE via a large returned
+    residual -- are satisfied by NSGA-II too. Anyone reopening this should
+    re-measure both rather than trusting either table; single samples, and the
+    9600-evaluation note above applies to every row.
 
     Below a few thousand evaluations the search is still finding feasible
     ground rather than resolving the trade-off, and the front is a cluster
