@@ -82,6 +82,13 @@ def test_water_forward_check_against_paper(scheme, params, na, nb, paper_vle, pa
     water the paper also fitted liquid and supercritical densities over
     273-1073 K, whereas this data set is saturation-only over 280-620 K. The
     ranking across schemes (4C < 2B < 3B) is reproduced either way.
+
+    The AAD_vle band is two-sided on purpose. Measured ratios to the paper are
+    2.95 / 3.11 / 2.51 for 2B / 3B / 4C -- systematic, as a data-set difference
+    should be. A one-sided upper bound is what let eq 30 sit implemented as the
+    *mean* of the two AARDs instead of their *sum*: that halves every ratio to
+    1.3-1.6, which sails under any upper bound loose enough to accommodate the
+    real one. The lower edge is the half of this assertion that has teeth.
     """
     from fit_pcsaft._types import ModelSpec
 
@@ -93,7 +100,11 @@ def test_water_forward_check_against_paper(scheme, params, na, nb, paper_vle, pa
         f"AAD_sft={aad_sft:.2f} mN/m (paper {paper_sft})"
     )
     assert aad_sft == pytest.approx(paper_sft, abs=0.05)
-    assert aad_vle < 2.5 * paper_vle
+    ratio = aad_vle / paper_vle
+    assert 2.0 < ratio < 4.0, (
+        f"AAD_vle/paper = {ratio:.2f}, outside the 2-4 band; below 2 usually "
+        "means eq 30 has been turned back into a mean of the two AARDs"
+    )
 
 
 def test_water_scheme_ranking_matches_paper():

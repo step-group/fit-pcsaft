@@ -5,14 +5,26 @@ error and interfacial error are treated as two independent objectives instead of
 being collapsed into one weighted sum, so the whole trade-off curve is available
 and the arbitrariness of a weight choice becomes visible.
 
-    objective 1 (eq 30)  AAD_vle = mean(AARD(psat), AARD(rho))  [%]
+    objective 1 (eq 30)  AAD_vle = AARD(psat) + AARD(rho)       [%]
     objective 2 (eq 31)  AAD_sft = mean|gamma_calc - gamma_exp| [mN/m]
 
-Whether eq 30 averages the two AARDs or sums them is not legible in the
-published equation. It averages: the paper's own water PC-SAFT 2B parameters
-(Table 1) reproduce their AAD_vle = 2.14% (Table 2) only under the mean —
-they give 2.4% as a mean and 4.7% as a sum over a comparable temperature
-range.
+Eq 30 *sums* the two mean relative errors — one term per property, each already
+divided by its own point count — it does not average them.
+
+This was previously implemented as the mean, on the reasoning that the paper's
+own water 2B parameters (Table 1) reproduce their AAD_vle = 2.14% (Table 2) at
+2.4% under the mean against 4.7% under the sum. That inference was unsound: the
+bundled water quasi-data is saturation-only over 280-620 K, while the paper also
+fitted liquid and supercritical densities to 1073 K, so neither number is
+comparable to their 2.14% and the closer match was coincidence.
+
+The factor of two does not move the front. Dominance is invariant under a
+positive per-axis scaling, so the non-dominated set is identical, and
+``_objective_scale`` divides by the observed span, which doubles with it — the
+values MOEA/D decomposes are unchanged. What it changes is the reported
+AAD_vle, and through it the eq-32 tangent: under the mean, ``ref_vle=2.0``
+weighted the bulk term at half what the paper intended, biasing ``select()``
+toward the interfacial end of the front.
 
 Absolute rather than relative deviation for gamma: it goes to zero at the
 critical point, where a relative error diverges and would dominate the fit.
@@ -217,7 +229,9 @@ def _evaluate_point(
         _fraction(m_psat, len(data.T_psat)), _fraction(m_rho, len(data.T_rho))
     )
 
-    aad_vle = 0.5 * (m_psat.aard_pct + m_rho.aard_pct)
+    # eq 30 sums the two mean relative errors, it does not average them:
+    #   AAD_vle = (1/N_psat) sum|rd_psat| + (1/N_rho) sum|rd_rho|
+    aad_vle = m_psat.aard_pct + m_rho.aard_pct
     if not np.isfinite(aad_vle):
         aad_vle = _BIG
 
