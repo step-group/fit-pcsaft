@@ -127,11 +127,11 @@ def test_violation_is_graded_not_flat():
 
 
 def test_penalty_is_zero_for_feasible_points():
-    """A feasible row is the plain eq-32 scaling with nothing added to it."""
+    """A feasible row is the plain scaling with nothing added to it."""
     from fit_pcsaft._pure.pareto import _penalize
 
     R = np.array([[4.0, 1.4, -0.1], [2.0, 0.7, 0.0]])
-    out = _penalize(R, ref_vle=2.0, ref_sft=0.7)
+    out = _penalize(R, scale_vle=2.0, scale_sft=0.7)
     assert out == pytest.approx(np.array([[2.0, 2.0], [1.0, 1.0]]))
 
 
@@ -148,9 +148,63 @@ def test_penalty_is_graded_and_loses_to_every_feasible_point():
         [4.0, 1.4, 0.02],   # missed the threshold by one point in twenty-five
         [4.0, 1.4, 1.00],   # nothing evaluated at all
     ])
-    out = _penalize(R, ref_vle=2.0, ref_sft=0.7)
+    out = _penalize(R, scale_vle=2.0, scale_sft=0.7)
     assert np.all(out[0] < out[1]), "feasible must beat infeasible"
     assert np.all(out[1] < out[2]), "violation must stay graded, not flat"
+
+
+def test_objective_scale_uses_the_observed_spans():
+    """Tchebicheff responds to spans, so the spans are what must be equalized."""
+    from fit_pcsaft._pure.pareto import _objective_scale
+
+    R = np.array([
+        [1.0, 2.0, -0.1],
+        [5.0, 2.5, -0.1],
+        [9.0, 3.0, -0.1],
+        [11.0, 3.5, -0.1],
+    ])
+    s_vle, s_sft = _objective_scale(R, ref_vle=2.0, ref_sft=0.7)
+    # spans of the feasible rows, not the eq-32 references
+    assert s_vle == pytest.approx(9.0, rel=0.2)
+    assert s_sft == pytest.approx(1.35, rel=0.2)
+
+
+def test_objective_scale_ignores_infeasible_and_degenerate_rows():
+    from fit_pcsaft._pure.pareto import _objective_scale
+
+    clean = np.array([[1.0, 2.0, -0.1], [3.0, 2.4, -0.1],
+                      [5.0, 2.8, -0.1], [7.0, 3.2, -0.1]])
+    polluted = np.vstack([clean, np.array([
+        [500.0, 90.0, 0.4],        # infeasible
+        [_BIG, _BIG, -0.1],        # feasible but degenerate
+    ])])
+    assert _objective_scale(polluted, 2.0, 0.7) == pytest.approx(
+        _objective_scale(clean, 2.0, 0.7)
+    )
+
+
+def test_objective_scale_is_robust_to_one_wild_feasible_point():
+    """A single terrible-but-feasible set must not set the scale by itself."""
+    from fit_pcsaft._pure.pareto import _objective_scale
+
+    R = np.array([
+        [1.0, 2.0, -0.1], [2.0, 2.2, -0.1], [3.0, 2.4, -0.1],
+        [4.0, 2.6, -0.1], [5.0, 2.8, -0.1], [6.0, 3.0, -0.1],
+    ])
+    tame = _objective_scale(R, 2.0, 0.7)
+    wild = _objective_scale(
+        np.vstack([R, [[5000.0, 900.0, -0.1]]]), 2.0, 0.7
+    )
+    assert wild[0] < 10 * tame[0], "one outlier hijacked the AAD_vle scale"
+    assert wild[1] < 10 * tame[1], "one outlier hijacked the AAD_sft scale"
+
+
+def test_objective_scale_falls_back_when_almost_nothing_is_feasible():
+    """Gen zero can be nearly all infeasible for an associating fluid."""
+    from fit_pcsaft._pure.pareto import _objective_scale
+
+    R = np.array([[1.0, 2.0, -0.1], [4.0, 9.0, 0.5], [_BIG, _BIG, 1.0]])
+    assert _objective_scale(R, ref_vle=2.0, ref_sft=0.7) == (2.0, 0.7)
 
 
 def test_lhs_sampling_selected():
@@ -212,6 +266,30 @@ def test_problem_declares_no_constraints():
     assert not problem.has_constraints(), "MOEA/D would abort at setup"
     assert problem.n_obj == 2
     assert problem.n_var == 3
+
+
+def test_problem_freezes_its_scale_after_the_first_population():
+    """A drifting scale would corrupt MOEA/D's replacement comparisons.
+
+    _replace weighs an offspring's fresh F against F stored on the population
+    when it was evaluated. Those are only comparable if the same divisor
+    produced both, so the scale is estimated once and then held.
+    """
+    from fit_pcsaft._pure.pareto import _make_problem
+
+    problem = _make_problem(
+        HEXANE, HEXANE_SPEC, _hexane_data_with_sft(), Units(),
+        [(1.0, 5.0), (3.0, 4.5), (150.0, 350.0)], None,
+    )
+    assert problem.scale is None, "nothing to estimate from yet"
+
+    out: dict = {}
+    problem._evaluate(np.array([HEXANE_P, HEXANE_P * 1.02]), out)
+    frozen = problem.scale
+    assert frozen is not None, "first population must set the scale"
+
+    problem._evaluate(np.array([HEXANE_P * 1.05]), out)
+    assert problem.scale == frozen, "scale must never be re-estimated"
 
 
 def test_front_keeps_only_feasible_non_dominated_rows_in_order():

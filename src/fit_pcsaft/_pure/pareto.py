@@ -51,6 +51,10 @@ _BIG = 1.0e6  # objective value where nothing at all could be evaluated
 # than this fraction of its experimental points.
 _MIN_VALID_FRACTION = 0.5
 
+# Feasible points needed in generation zero before its spans are trusted to
+# scale the objectives; below this the eq-32 references are used instead.
+_MIN_SCALE_SAMPLE = 4
+
 
 def non_dominated(F: np.ndarray) -> np.ndarray:
     """Boolean mask of the non-dominated rows of a minimization objective array.
@@ -93,7 +97,47 @@ def _argmin_scalarized(F: np.ndarray, ref_vle: float, ref_sft: float) -> int:
     return int(np.argmin(F[:, 0] / ref_vle + F[:, 1] / ref_sft))
 
 
-def _penalize(R: np.ndarray, ref_vle: float, ref_sft: float) -> np.ndarray:
+def _objective_scale(
+    R: np.ndarray, ref_vle: float, ref_sft: float
+) -> tuple[float, float]:
+    """Divisors that put the two objectives on comparable spans.
+
+    MOEA/D assigns each weight vector a subproblem via
+    ``max(w1*|f1 - z1|, w2*|f2 - z2|)``, so it is the *spans* of the two
+    objectives that decide how many weight vectors can reach each end of the
+    front — not their absolute values. Scaling by the eq-32 references was tried
+    first and is not enough: on water it leaves spans of 9.20 and 0.43, 21.5 to
+    1, so all but about four of eighty vectors optimize AAD_vle alone and the
+    interfacial end of the front is never resolved (AAD_sft bottomed out at 1.70
+    against NSGA-II's 0.78).
+
+    The spans are taken from the feasible part of the first population, then
+    frozen for the rest of the run — see ``_make_problem``. Never re-estimated,
+    because pymoo's ``MOEAD._replace`` compares an offspring's fresh F against
+    stored population F: a scale that drifted between generations would make
+    those comparisons meaningless.
+
+    Upper end from the third quartile rather than the maximum. Generation zero
+    is an LHS sweep of the whole box, so a feasible-but-hopeless set with AAD_vle
+    in the thousands is normal, and one of them would otherwise set the scale for
+    the entire run. A 90th percentile is not enough on its own: with the handful
+    of feasible points a small population yields, it interpolates into the tail
+    and picks the outlier up anyway. Measured from the minimum, which is a real
+    quantity here — it is where the ideal point sits. The eq-32 references are
+    the fallback when too little of generation zero was feasible to estimate
+    anything.
+    """
+    ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
+    if int(ok.sum()) < _MIN_SCALE_SAMPLE:
+        return ref_vle, ref_sft
+    F = R[ok, :2]
+    span = np.percentile(F, 75.0, axis=0) - np.min(F, axis=0)
+    fallback = np.array([ref_vle, ref_sft], dtype=float)
+    span = np.where(span > 0.0, span, fallback)
+    return float(span[0]), float(span[1])
+
+
+def _penalize(R: np.ndarray, scale_vle: float, scale_sft: float) -> np.ndarray:
     """Scaled objectives with the feasibility violation folded in.
 
     pymoo's MOEA/D refuses a constrained problem outright (``moead.py``: its
@@ -106,13 +150,16 @@ def _penalize(R: np.ndarray, ref_vle: float, ref_sft: float) -> np.ndarray:
     that cannot tell "failed two of twenty-five gamma points" from "no VLE at
     all" has no direction to climb out.
 
-    The division by ``(ref_vle, ref_sft)`` is not cosmetic. MOEA/D decomposes
-    with Tchebicheff, which pymoo applies to raw objective values — it is handed
-    an ideal point but never a nadir point, so nothing normalizes the two axes.
-    On water AAD_vle spans some 9 units above the ideal against AAD_sft's 1.3,
-    so weight vectors only start separating points near w1/w2 = 0.14 and most of
-    a uniform fan collapses onto one corner of the front. Eq 32 already defines
-    what commensurate means for this pair; this reuses it.
+    The division is not cosmetic. MOEA/D decomposes with Tchebicheff, which
+    pymoo applies to raw objective values — it is handed an ideal point but
+    never a nadir point, so nothing normalizes the two axes, and a weight vector
+    can only reach the end of the front whose term can win the ``max``. The
+    divisors come from ``_objective_scale``; only their *ratio* matters, since a
+    common factor rescales every subproblem equally.
+
+    No shift is applied, deliberately. Tchebicheff works on ``|F - ideal|`` and
+    MOEA/D tracks the ideal from the F values it is given, so subtracting a
+    constant would move both by the same amount and change nothing.
 
     A degenerate row can carry ``_BIG`` while still reporting ``violation <= 0``
     (an infinite AARD over points that all evaluated). Such a row can outrank a
@@ -121,7 +168,7 @@ def _penalize(R: np.ndarray, ref_vle: float, ref_sft: float) -> np.ndarray:
     ``_BIG`` point is wanted either way.
     """
     R = np.atleast_2d(np.asarray(R, dtype=float))
-    F = R[:, :2] / np.array([ref_vle, ref_sft], dtype=float)
+    F = R[:, :2] / np.array([scale_vle, scale_sft], dtype=float)
     return F + (_BIG * np.maximum(R[:, 2], 0.0))[:, None]
 
 
@@ -327,6 +374,13 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
     ``n_ieq_constr`` is 0 and not 1 because MOEA/D asserts on any constrained
     problem. The feasibility information is not lost — ``_penalize`` carries it
     in the objectives instead.
+
+    ``ref_vle`` and ``ref_sft`` are only a fallback here. The objectives are
+    normally divided by the spans of the first population (``_objective_scale``),
+    which is what actually lets weight vectors reach both ends of the front. The
+    estimate is taken once and frozen: ``MOEAD._replace`` compares a fresh
+    offspring's F against F stored on the population, so a scale that moved
+    between generations would silently corrupt every replacement decision.
     """
     from pymoo.core.problem import Problem
 
@@ -336,6 +390,7 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
     class PcSaftBiObjective(Problem):
         def __init__(self):
             super().__init__(n_var=len(bounds), n_obj=2, xl=xl, xu=xu)
+            self.scale = None
 
         def _evaluate(self, X, out, *args, **kwargs):
             rows = [np.asarray(x, dtype=float) for x in np.atleast_2d(X)]
@@ -343,7 +398,9 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
                 _map_evaluate(rows, pool, compound, spec, data, units, sft_options),
                 dtype=float,
             )
-            out["F"] = _penalize(R, ref_vle, ref_sft)
+            if self.scale is None:
+                self.scale = _objective_scale(R, ref_vle, ref_sft)
+            out["F"] = _penalize(R, *self.scale)
 
     return PcSaftBiObjective()
 
@@ -775,6 +832,11 @@ def fit_pure_pareto(
                 "MOEA/D found no parameter set at all: every candidate failed to "
                 "produce a vapour-liquid equilibrium or a stable interface. "
                 "Check the bounds and the association scheme."
+            )
+        if verbose and problem.scale is not None:
+            print(
+                f"objective scale: AAD_vle / {problem.scale[0]:.3g}, "
+                f"AAD_sft / {problem.scale[1]:.3g}"
             )
         # res.F is in scaled, penalized space and cannot be converted back --
         # a penalized row's true objectives are not recoverable from it. So the
