@@ -549,7 +549,7 @@ class ParetoResult:
             fun=np.array([cost]),
             x=params_vec,
             success=True,
-            message=f"NSGA-II front point {i} (ref_vle={ref_vle}, ref_sft={ref_sft})",
+            message=f"MOEA/D front point {i} (ref_vle={ref_vle}, ref_sft={ref_sft})",
             nfev=len(self.F),
         )
         return FitResult(
@@ -618,6 +618,8 @@ def fit_pure_pareto(
     lhs: bool = True,
     n_jobs: int = -1,
     refine: int = 4,
+    ref_vle: float = 2.0,
+    ref_sft: float = 0.7,
 ) -> ParetoResult:
     """Generate the AAD_vle / AAD_sft pareto front with NSGA-II.
 
@@ -679,7 +681,6 @@ def fit_pure_pareto(
     0.01 for 3.6x the evaluations. That corner needs search budget, not
     arithmetic. Set refine=0 to see the raw population. See ``_densify``.
     """
-    from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.optimize import minimize
 
     from fit_pcsaft._pure.fit import _default_de_bounds, _setup_pure_fit
@@ -707,16 +708,20 @@ def fit_pure_pareto(
     if bounds is None:
         bounds = _default_de_bounds(fit_mu, is_associative)
 
-    algorithm = NSGA2(pop_size=pop_size, sampling=_initial_sampling(lhs))
+    algorithm = _make_algorithm(pop_size, lhs)
     n_workers = _resolve_n_jobs(n_jobs)
     if verbose:
-        print(f"NSGA-II: pop {pop_size} x {n_gen} gen on {n_workers} process(es)")
+        print(
+            f"MOEA/D: {pop_size} weight vectors x {n_gen} gen "
+            f"on {n_workers} process(es)"
+        )
 
     with _worker_pool(
         n_workers, compound, spec, data, units, sft_options, quiet_solver
     ) as pool:
         problem = _make_problem(
-            compound, spec, data, units, bounds, sft_options, pool=pool
+            compound, spec, data, units, bounds, sft_options, pool=pool,
+            ref_vle=ref_vle, ref_sft=ref_sft,
         )
         with _silence_fd_stderr(quiet_solver):
             res = minimize(
@@ -728,22 +733,25 @@ def fit_pure_pareto(
                 save_history=False,
             )
 
-        if res.F is None:
+        if res.X is None:
             raise RuntimeError(
-                "NSGA-II found no feasible parameter set: every candidate failed "
-                "to produce a vapour-liquid equilibrium or a stable interface. "
+                "MOEA/D found no parameter set at all: every candidate failed to "
+                "produce a vapour-liquid equilibrium or a stable interface. "
                 "Check the bounds and the association scheme."
             )
-        F = np.atleast_2d(np.asarray(res.F, dtype=float))
+        # res.F is in scaled, penalized space and cannot be converted back --
+        # a penalized row's true objectives are not recoverable from it. So the
+        # optimum set is evaluated once more for its real AAD_vle and AAD_sft.
+        # At most pop_size points, under 2% of a real search budget.
         X = np.atleast_2d(np.asarray(res.X, dtype=float))
-        keep = non_dominated(F) & (F[:, 0] < _BIG)
-        if not keep.any():
-            raise RuntimeError(
-                "NSGA-II returned only degenerate solutions. Check the bounds and "
-                "the association scheme."
+        with _silence_fd_stderr(quiet_solver):
+            R = np.asarray(
+                _map_evaluate(
+                    list(X), pool, compound, spec, data, units, sft_options
+                ),
+                dtype=float,
             )
-        order = np.argsort(F[keep, 0])
-        X, F = X[keep][order], F[keep][order]
+        X, F = _front_from(X, R)
 
         if refine > 0 and len(X) > 1:
             n_before = len(F)
