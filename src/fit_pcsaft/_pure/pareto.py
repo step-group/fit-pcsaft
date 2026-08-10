@@ -762,6 +762,20 @@ def fit_pure_pareto(
     as 0.30 and 0.13 mN/m, and with it 0.73, reaching 0.64 -- past the 0.78 the
     NSGA-II this replaced managed. See ``_capped_replacement`` for why.
 
+    The sharpest check on the cap is not any of those numbers but the parameter
+    set ``.select()`` then returns, against Rehner & Gross' published water 2B
+    (their Table 1):
+
+                        m      sigma    eps_k    kappa_ab   eps_k_ab
+        paper        1.0000    2.9375   272.03   0.044480     3125.3
+        with cap     1.1346    2.8109   273.25   0.047221     3054.6
+        without cap  2.1894    2.2067   228.69   0.330135     2311.2
+
+    With the cap this is the paper's parameter set: 0.5% on eps_k, 2-6% on
+    sigma, kappa_ab and eps_k_ab, 13% on m. Without it kappa_ab is out by a
+    factor of seven. Reproducing Table 1 is what this module is for, so treat
+    that row as the regression test if the solver is ever touched again.
+
     The scaling then decides where along the trade-off that coverage sits, and
     the ranking above is the whole argument for not running raw objectives even
     though pagmo does: raw is the worst of the three by a wide margin. Tchebicheff
