@@ -748,34 +748,33 @@ def fit_pure_pareto(
          9600       80      1.44      0.78      2.82    301s
 
     MOEA/D at the same 9600-evaluation budget (pop 80 x 120 gen, refine=4, 14
-    workers) is *worse on front coverage*, which is the thing this module exists
-    to produce. Measured on water, both scalings that have been tried:
+    workers), measured on water while settling the two knobs that turned out to
+    matter -- the neighbour-replacement cap and the objective scaling:
 
-        scaling        points   AAD_vle range   AAD_sft range   max gap   eq 32
-        eq-32 refs        190   1.54 - 19.94    1.70 - 2.00      0.093    3.620
-        observed spans     70   1.48 - 45.60    1.37 - 1.50      0.685    2.876
-        (NSGA-II)      80/209   1.44 - ...      0.78 - ...        2.82    2.790
+        scaling   cap   points   AAD_vle       AAD_sft       max gap   eq 32
+        eq-32     no       190   1.54-19.94    1.70 - 2.00     0.093    3.620
+        spans     no        70   1.48-45.60    1.37 - 1.50     0.685    2.876
+        raw       nr=2      71   2.24-71.95    1.68 - 2.71     0.532    4.988
+        eq-32     nr=2     105   1.89-12.05    1.28 - 2.22     0.278    3.082
+        spans     nr=2     131   2.64-11.04    0.64 - 1.36     0.225    2.961
 
-    Spacing is excellent either way -- median normalized gap 0.0084 and 0.0064,
-    no clusters, which is what decomposition promises and delivers. The problem
-    is extent: NSGA-II reaches AAD_sft = 0.78, MOEA/D stalls at 1.37. A front
-    spanning 0.13 mN/m is not a trade-off curve.
+    The cap is what opened the front up: without it the AAD_sft extent came back
+    as 0.30 and 0.13 mN/m, and with it 0.73, reaching 0.64 -- past the 0.78 the
+    NSGA-II this replaced managed. See ``_capped_replacement`` for why.
 
-    The reason is structural, not a tuning miss. Tchebicheff scores a candidate
-    by ``max(w1*|f1 - z1|, w2*|f2 - z2|)``, so which end of the front a weight
-    vector can reach depends on the *ratio of the objective spans* -- a quantity
-    you only know once you have the front. Scaling by the eq-32 references left
-    that ratio at 21.5 to 1; scaling by the spans of generation zero is a better
-    guess but still a guess, made from an LHS sweep of the whole box rather than
-    from the front. NSGA-II has no such dependency: dominance is scale-free and
-    crowding distance is normalized per front, which is why it explores both
-    ends without being told where they are.
+    The scaling then decides where along the trade-off that coverage sits, and
+    the ranking above is the whole argument for not running raw objectives even
+    though pagmo does: raw is the worst of the three by a wide margin. Tchebicheff
+    scores by ``max(w1*|f1 - z1|, w2*|f2 - z2|)``, so which end of the front a
+    weight vector can reach depends on the ratio of the objective spans, and
+    leaving that ratio at whatever the raw units happen to give is not a choice
+    so much as an accident. See ``_objective_scale``.
 
-    Fixing this properly means re-estimating ideal and nadir each generation and
-    rescaling the stored population's F to match -- pymoo's MOEAD keeps F on the
-    population and compares fresh offspring against it, so a scale that moves
-    without rescaling history corrupts every replacement decision. That is a
-    custom ParallelMOEAD subclass, not a parameter.
+    What is still not matched is the AAD_vle corner: 2.64 here against 1.44 for
+    NSGA-II, which is most of the remaining eq-32 gap. Every row above is a
+    single stochastic sample, and the note further up about 9600 evaluations not
+    being converged applies to all of them -- differences of 0.1 in eq 32 should
+    not be read as signal.
 
     Below a few thousand evaluations the search is still finding feasible
     ground rather than resolving the trade-off, and the front is a cluster
