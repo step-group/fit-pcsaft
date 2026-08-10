@@ -201,6 +201,52 @@ def test_algorithm_is_the_parallel_moead_variant():
     assert algorithm.n_offsprings == 20, "one full population per generation"
 
 
+def test_problem_declares_no_constraints():
+    """pymoo's MOEA/D asserts on any constrained problem in its _setup."""
+    from fit_pcsaft._pure.pareto import _make_problem
+
+    problem = _make_problem(
+        HEXANE, HEXANE_SPEC, _hexane_data_with_sft(), Units(),
+        [(1.0, 5.0), (3.0, 4.5), (150.0, 350.0)], None,
+    )
+    assert not problem.has_constraints(), "MOEA/D would abort at setup"
+    assert problem.n_obj == 2
+    assert problem.n_var == 3
+
+
+def test_front_keeps_only_feasible_non_dominated_rows_in_order():
+    """The driver, not pymoo, is now what keeps infeasible points off the front."""
+    from fit_pcsaft._pure.pareto import _front_from
+
+    X = np.array([
+        [1.0, 3.0, 200.0],   # feasible, on the front
+        [2.0, 3.0, 200.0],   # feasible, dominated by row 0
+        [3.0, 3.0, 200.0],   # feasible, on the front
+        [4.0, 3.0, 200.0],   # best objectives of all, but infeasible
+        [5.0, 3.0, 200.0],   # feasible but degenerate
+    ])
+    R = np.array([
+        [2.0, 5.0, -0.1],
+        [3.0, 6.0, -0.1],
+        [5.0, 1.0, -0.1],
+        [0.1, 0.1, 0.5],
+        [_BIG, _BIG, -0.1],
+    ])
+    Xf, F = _front_from(X, R)
+
+    assert F.tolist() == [[2.0, 5.0], [5.0, 1.0]]
+    assert Xf.tolist() == [[1.0, 3.0, 200.0], [3.0, 3.0, 200.0]]
+
+
+def test_front_raises_when_nothing_is_feasible():
+    from fit_pcsaft._pure.pareto import _front_from
+
+    X = np.array([[1.0, 3.0, 200.0], [2.0, 3.0, 200.0]])
+    R = np.array([[1.0, 1.0, 0.3], [_BIG, _BIG, 1.0]])
+    with pytest.raises(RuntimeError, match="infeasible"):
+        _front_from(X, R)
+
+
 def test_select_picks_the_tangent_point():
     F = np.array([[1.0, 6.0], [2.0, 2.0], [6.0, 1.0]])
     # ref_vle=2%, ref_sft=1 -> costs: 6.5, 3.0, 4.0 -> index 1

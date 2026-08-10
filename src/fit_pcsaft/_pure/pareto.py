@@ -311,14 +311,19 @@ def _worker_pool(n_jobs, compound, spec, data, units, sft_options, quiet):
         pool.join()
 
 
-def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None):
-    """Population-at-a-time problem.
+def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
+                  ref_vle: float = 2.0, ref_sft: float = 0.7):
+    """Population-at-a-time problem, unconstrained by necessity.
 
     Deliberately a vectorized ``Problem`` rather than pymoo's
     ``ElementwiseProblem`` + ``StarmapParallelization``: that route pickles the
     problem itself to each worker, which fails here because the problem closes
     over a ``feos.Identifier``. Taking the whole population and mapping it
     ourselves keeps every feos object in the process that made it.
+
+    ``n_ieq_constr`` is 0 and not 1 because MOEA/D asserts on any constrained
+    problem. The feasibility information is not lost — ``_penalize`` carries it
+    in the objectives instead.
     """
     from pymoo.core.problem import Problem
 
@@ -327,20 +332,15 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None):
 
     class PcSaftBiObjective(Problem):
         def __init__(self):
-            super().__init__(n_var=len(bounds), n_obj=2, n_ieq_constr=1, xl=xl, xu=xu)
+            super().__init__(n_var=len(bounds), n_obj=2, xl=xl, xu=xu)
 
         def _evaluate(self, X, out, *args, **kwargs):
             rows = [np.asarray(x, dtype=float) for x in np.atleast_2d(X)]
-            if pool is None:
-                results = [
-                    _evaluate_point(x, compound, spec, data, units, sft_options)
-                    for x in rows
-                ]
-            else:
-                results = pool.map(_worker_evaluate, rows)
-            R = np.asarray(results, dtype=float)
-            out["F"] = R[:, :2]
-            out["G"] = R[:, 2:3]
+            R = np.asarray(
+                _map_evaluate(rows, pool, compound, spec, data, units, sft_options),
+                dtype=float,
+            )
+            out["F"] = _penalize(R, ref_vle, ref_sft)
 
     return PcSaftBiObjective()
 
@@ -353,6 +353,27 @@ def _map_evaluate(rows, pool, compound, spec, data, units, sft_options):
             for x in rows
         ]
     return pool.map(_worker_evaluate, rows)
+
+
+def _front_from(X: np.ndarray, R: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The front, from parameter vectors and their true (unscaled) evaluations.
+
+    Filtering feasibility here is what the pymoo constraint used to do. Note the
+    order: infeasible rows are dropped *before* the dominance test, so a good
+    parameter set is never discarded for being dominated by a set that could not
+    be evaluated in the first place.
+    """
+    ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
+    if not ok.any():
+        raise RuntimeError(
+            "MOEA/D returned only infeasible or degenerate solutions: no "
+            "candidate produced both a vapour-liquid equilibrium and a stable "
+            "interface. Check the bounds and the association scheme."
+        )
+    X, F = X[ok], R[ok, :2]
+    keep = non_dominated(F)
+    order = np.argsort(F[keep, 0])
+    return X[keep][order], F[keep][order]
 
 
 def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options):
