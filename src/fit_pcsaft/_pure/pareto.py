@@ -90,6 +90,38 @@ def _argmin_scalarized(F: np.ndarray, ref_vle: float, ref_sft: float) -> int:
     return int(np.argmin(F[:, 0] / ref_vle + F[:, 1] / ref_sft))
 
 
+def _penalize(R: np.ndarray, ref_vle: float, ref_sft: float) -> np.ndarray:
+    """Scaled objectives with the feasibility violation folded in.
+
+    pymoo's MOEA/D refuses a constrained problem outright (``moead.py``: its
+    ``_setup`` asserts ``not problem.has_constraints()``), so the graded
+    violation ``_evaluate_point`` reports cannot be handed over as ``out["G"]``.
+    It is added to both objectives instead. Feasible rows (``violation <= 0``)
+    are untouched, so the front itself is unaffected; infeasible ones stay
+    *rankable among themselves*, which is the whole point of grading them —
+    about 80% of a wide bounds box has no stable interface, and an optimizer
+    that cannot tell "failed two of twenty-five gamma points" from "no VLE at
+    all" has no direction to climb out.
+
+    The division by ``(ref_vle, ref_sft)`` is not cosmetic. MOEA/D decomposes
+    with Tchebicheff, which pymoo applies to raw objective values — it is handed
+    an ideal point but never a nadir point, so nothing normalizes the two axes.
+    On water AAD_vle spans some 9 units above the ideal against AAD_sft's 1.3,
+    so weight vectors only start separating points near w1/w2 = 0.14 and most of
+    a uniform fan collapses onto one corner of the front. Eq 32 already defines
+    what commensurate means for this pair; this reuses it.
+
+    A degenerate row can carry ``_BIG`` while still reporting ``violation <= 0``
+    (an infinite AARD over points that all evaluated). Such a row can outrank a
+    mildly infeasible one here. That is deliberate: both are dropped by the
+    feasibility filter in ``_front_from``, and pushing the search away from a
+    ``_BIG`` point is wanted either way.
+    """
+    R = np.atleast_2d(np.asarray(R, dtype=float))
+    F = R[:, :2] / np.array([ref_vle, ref_sft], dtype=float)
+    return F + (_BIG * np.maximum(R[:, 2], 0.0))[:, None]
+
+
 def _evaluate_point(
     params_vec: np.ndarray,
     compound: Compound,

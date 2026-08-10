@@ -126,6 +126,33 @@ def test_violation_is_graded_not_flat():
     assert hopeless[2] <= 1.0
 
 
+def test_penalty_is_zero_for_feasible_points():
+    """A feasible row is the plain eq-32 scaling with nothing added to it."""
+    from fit_pcsaft._pure.pareto import _penalize
+
+    R = np.array([[4.0, 1.4, -0.1], [2.0, 0.7, 0.0]])
+    out = _penalize(R, ref_vle=2.0, ref_sft=0.7)
+    assert out == pytest.approx(np.array([[2.0, 2.0], [1.0, 1.0]]))
+
+
+def test_penalty_is_graded_and_loses_to_every_feasible_point():
+    """MOEA/D has no constraint handling, so the grading has to live in F.
+
+    Same objectives, three feasibility levels: the ordering between them is the
+    only signal the optimizer gets about how badly a set failed.
+    """
+    from fit_pcsaft._pure.pareto import _penalize
+
+    R = np.array([
+        [4.0, 1.4, -0.1],   # feasible
+        [4.0, 1.4, 0.02],   # missed the threshold by one point in twenty-five
+        [4.0, 1.4, 1.00],   # nothing evaluated at all
+    ])
+    out = _penalize(R, ref_vle=2.0, ref_sft=0.7)
+    assert np.all(out[0] < out[1]), "feasible must beat infeasible"
+    assert np.all(out[1] < out[2]), "violation must stay graded, not flat"
+
+
 def test_lhs_sampling_selected():
     """Generation zero must use Latin hypercube coverage by default."""
     from pymoo.operators.sampling.lhs import LatinHypercubeSampling
