@@ -28,6 +28,7 @@ from fit_pcsaft._binary._utils import (
 )
 from fit_pcsaft._binary.result import BinaryFitResult
 from fit_pcsaft._csv import SCHEMA_VLLE, load_csv
+from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 _N_KIJ_SCAN = 13
 
@@ -35,6 +36,7 @@ _N_KIJ_SCAN = 13
 def _predict_vlle_point(
     record1, record2, kij_val: float, T_K: float, P_Pa: float,
     x1_I_init: float = 0.01, x1_II_init: float = 0.90,
+    errors: "list | None" = None,
 ) -> "tuple[float, float, float, float]":
     """Predict heteroazeotrope at (T_K, P_Pa). Returns (T_pred, x1_I, x1_II, y1) or (nan*4) on failure."""
     import feos
@@ -55,7 +57,9 @@ def _predict_vlle_point(
         if x1_I_pred > x1_II_pred:
             x1_I_pred, x1_II_pred = x1_II_pred, x1_I_pred
         return T_pred, x1_I_pred, x1_II_pred, y1_pred
-    except Exception:
+    except Exception as exc:
+        if errors is not None:
+            errors.append(exc)
         nan = float("nan")
         return nan, nan, nan, nan
 
@@ -145,6 +149,7 @@ def fit_kij_vlle(
     # Number of residuals per point: 1 (T) + optional compositions
     n_comp = int(has_xI) + int(has_xII) + int(has_y1)
     n_per_point = 1 + n_comp
+    errors: list = []
 
     def _residuals_point(kij_val: float, i: int) -> np.ndarray:
         """Residual vector for a single VLLE data point."""
@@ -153,7 +158,7 @@ def fit_kij_vlle(
         x_I_init  = float(data["x1_I"][i])  if has_xI  else 0.01
         x_II_init = float(data["x1_II"][i]) if has_xII else 0.90
         T_pred, x1_I_pred, x1_II_pred, y1_pred = _predict_vlle_point(
-            record1, record2, kij_val, T_K, P_Pa, x_I_init, x_II_init
+            record1, record2, kij_val, T_K, P_Pa, x_I_init, x_II_init, errors=errors
         )
         if np.isnan(T_pred):
             return np.ones(n_per_point)
@@ -205,7 +210,10 @@ def fit_kij_vlle(
             continue
 
     if len(T_fitted) == 0:
-        raise RuntimeError("No VLLE points converged. Try relaxing kij_bounds.")
+        raise RuntimeError(
+            "No VLLE points converged. Try relaxing kij_bounds."
+            + _first_error_hint(errors)
+        ) from _first_error(errors)
 
     # --- Polynomial fit to (T, k_ij) pairs -----------------------------------
     T_arr_fit = np.array(T_fitted)

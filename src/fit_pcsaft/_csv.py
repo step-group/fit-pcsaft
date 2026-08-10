@@ -28,6 +28,7 @@ _COL_ALIASES: dict[str, str] = {
     "temperature":           "T",
     "Temperature ( K )":     "T",
     "Temperature (K)":       "T",
+    "T (K)":                 "T",
     "T_K":                   "T",
     "t":                     "T",
     "t_K":                   "T",
@@ -57,6 +58,15 @@ _COL_ALIASES: dict[str, str] = {
     "delta_vapH":            "hvap",
     "hvap_kJ_mol":           "hvap",
     "hvap":                  "hvap",    # already canonical
+    # --- Surface tension (canonical: "sft") ---
+    "surface_tension":       "sft",
+    "surface tension":       "sft",
+    "Surface Tension (mN/m)":"sft",
+    "sigma_st":              "sft",
+    "gamma":                 "sft",
+    "gamma_mN_m":            "sft",
+    "sft_mN_m":              "sft",
+    "st":                    "sft",
     # --- VLE / SLE mole fractions (canonical: "x1", "y1") ---
     "x":                     "x1",
     "x_1":                   "x1",
@@ -99,7 +109,7 @@ _COL_ALIASES: dict[str, str] = {
 # Set of all canonical names (values in the alias map plus bare canonicals).
 _CANONICAL_NAMES: frozenset[str] = frozenset(_COL_ALIASES.values()) | frozenset(
     ["T", "P", "psat", "rho", "hvap", "x1", "y1",
-     "x1_I", "x1_II", "w1_I", "w1_II", "H", "eta"]
+     "x1_I", "x1_II", "w1_I", "w1_II", "H", "eta", "sft"]
 )
 
 
@@ -120,6 +130,7 @@ SCHEMA_PSAT       = CsvSchema(required=("T", "psat"),           name="vapor pres
 SCHEMA_VISCOSITY  = CsvSchema(required=("T", "eta"), optional=("P",), name="viscosity")
 SCHEMA_DENSITY    = CsvSchema(required=("T", "rho"),            name="density")
 SCHEMA_HVAP       = CsvSchema(required=("T", "hvap"),           name="enthalpy of vaporization")
+SCHEMA_SFT        = CsvSchema(required=("T", "sft"),            name="surface tension")
 SCHEMA_VLE        = CsvSchema(required=("T", "P", "x1"),        optional=("y1",),                   name="VLE")
 SCHEMA_SLE        = CsvSchema(required=("T", "x1"),             name="SLE")
 SCHEMA_LLE        = CsvSchema(required=("T",),                  optional=("x1_I", "x1_II", "w1_I", "w1_II"), name="LLE")
@@ -235,3 +246,9 @@ def load_hvap_csv(path: "Path | str") -> tuple[np.ndarray, np.ndarray]:
     """Load an enthalpy-of-vaporization CSV. Returns ``(T, hvap)`` arrays."""
     data = load_csv(path, SCHEMA_HVAP)
     return data["T"], data["hvap"]
+
+
+def load_sft_csv(path: "Path | str") -> tuple[np.ndarray, np.ndarray]:
+    """Load a surface-tension CSV. Returns ``(T, sft)`` arrays."""
+    data = load_csv(path, SCHEMA_SFT)
+    return data["T"], data["sft"]

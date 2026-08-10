@@ -121,8 +121,7 @@ def main() -> None:
                 eos_mix,
                 temperature=T * si.KELVIN,
                 pressure=P * si.MEGA * si.PASCAL,
-                total_moles=si.MOL,
-                molefracs=np.array([x1, 1.0 - x1]),
+                composition=np.array([x1, 1.0 - x1]) * si.MOL,
             )
             eta_p = float(state.viscosity() / (si.PASCAL * si.SECOND))
             ard = abs(eta_p - eta_e) / eta_e * 100

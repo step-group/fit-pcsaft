@@ -144,13 +144,17 @@ def _plot_residuals_pure(result, path=None):
     sns.set_context("talk")
     sns.set_style("ticks")
 
-    df = _compute_per_point_rd(result.eos, result.data, result.units)
+    df = _compute_per_point_rd(
+        result.eos, result.data, result.units,
+        functional=getattr(result, "functional", None),
+    )
     present = set(df["property"].to_list())
 
     _props = [
         ("psat", "Vapor pressure",    "#1F77B4", "o"),
         ("rho",  "Liquid density",    "#E32F2F", "s"),
         ("hvap", "Enthalpy of vap.",  "#2CA02C", "^"),
+        ("sft",  "Surface tension",   "#FF7F0E", "D"),
     ]
 
     fig, ax = plt.subplots(figsize=(9, 5))
@@ -179,6 +183,60 @@ def _plot_residuals_pure(result, path=None):
 
     sns.despine(offset=10)
     plt.tight_layout(rect=[0, 0.12, 1, 1])
+
+    if path is not None:
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+
+    return fig, ax
+
+
+def _plot_pareto(result, path=None, ref_vle: float = 2.0, ref_sft: float = 0.7):
+    """AAD_sft vs AAD_vle with the selected point and its tangent (paper Fig. 1)."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import seaborn as sns
+
+    from fit_pcsaft._pure.pareto import _argmin_scalarized
+
+    sns.set_context("talk")
+    sns.set_style("ticks")
+
+    F = result.F
+    i = _argmin_scalarized(F, ref_vle, ref_sft)
+
+    fig, ax = plt.subplots(figsize=(7, 5.5))
+    ax.plot(F[:, 0], F[:, 1], "-o", color="#1F77B4", ms=5, lw=1.5,
+            label=result.input_name or "pareto front")
+    ax.scatter([F[i, 0]], [F[i, 1]], s=160, marker="X", color="#E32F2F",
+               zorder=6, label="selected")
+
+    # Axis limits come from the front alone. The tangent below is then clipped
+    # to them: drawn across the full width it runs far past the data (and well
+    # below zero), which rescales the axes and flattens the curve into a line.
+    def _limits(v):
+        lo, hi = float(v.min()), float(v.max())
+        pad = 0.08 * (hi - lo) if hi > lo else max(0.08 * abs(hi), 0.1)
+        return lo - pad, hi + pad
+
+    xlim, ylim = _limits(F[:, 0]), _limits(F[:, 1])
+
+    # tangent of slope -ref_sft/ref_vle through the selected point
+    slope = -ref_sft / ref_vle
+    x_at = [F[i, 0] + (y - F[i, 1]) / slope for y in ylim]
+    x_t = np.clip(np.sort(x_at), *xlim)
+    ax.plot(x_t, F[i, 1] + slope * (x_t - F[i, 0]),
+            ls="--", color="gray", lw=1.0, zorder=1,
+            label=rf"tangent, $-$ref$_\mathrm{{sft}}$/ref$_\mathrm{{vle}}$")
+
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.set_xlabel(r"AAD$_\mathrm{vle}$ / %")
+    ax.set_ylabel(r"AAD$_\mathrm{sft}$ / mN m$^{-1}$")
+    ax.set_title(f"Pareto front — {result.input_name}")
+    ax.legend(loc="best", framealpha=0.9)
+
+    sns.despine(offset=10)
+    plt.tight_layout()
 
     if path is not None:
         fig.savefig(path, dpi=300, bbox_inches="tight")

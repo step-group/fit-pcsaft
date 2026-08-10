@@ -9,10 +9,10 @@ import numpy as np
 from fit_pcsaft._types import Compound, ModelSpec, PureData, Units
 
 
-def _predict_per_property(eos, data, units):
+def _predict_per_property(eos, data, units, *, functional=None):
     """Return (model_arr, exp_arr) per property, NaN where feos raises.
 
-    Returns dict keyed by "psat", "rho", "hvap". Each value is a tuple
+    Returns dict keyed by "psat", "rho", "hvap", "sft". Each value is a tuple
     (model: np.ndarray, exp: np.ndarray) of equal length. Empty datasets
     produce zero-length arrays. Never raises.
     """
@@ -54,37 +54,46 @@ def _predict_per_property(eos, data, units):
                 pass
         return model, np.asarray(hvap_exp_vals, dtype=float)
 
+    def _sft_model(T_vals, sft_exp_vals):
+        exp = np.asarray(sft_exp_vals, dtype=float)
+        if functional is None or len(T_vals) == 0:
+            return np.full(len(T_vals), np.nan), exp
+        from fit_pcsaft._pure.surface_tension import predict_surface_tension
+        return predict_surface_tension(functional, T_vals, units), exp
+
     return {
         "psat": _psat_model(data.T_psat, data.p_psat),
         "rho":  _rho_model(data.T_rho, data.rho),
         "hvap": _hvap_model(data.T_hvap, data.hvap),
+        "sft":  _sft_model(data.T_sft, data.sft),
     }
 
 
-def _compute_pure_metrics(eos, data, units):
+def _compute_pure_metrics(eos, data, units, *, functional=None):
     """Compute per-property Metrics from an EOS + experimental data.
 
-    Returns dict keyed by "psat", "rho", "hvap". Properties with no input rows
+    Returns dict keyed by "psat", "rho", "hvap", "sft". Properties with no input rows
     return Metrics.empty(0).
     """
     from fit_pcsaft._metrics import compute_metrics_from_arrays
-    preds = _predict_per_property(eos, data, units)
+    preds = _predict_per_property(eos, data, units, functional=functional)
     return {
         prop: compute_metrics_from_arrays(model, exp, n_total=len(exp))
         for prop, (model, exp) in preds.items()
     }
 
 
-def _compute_per_point_rd(eos, data, units):
+def _compute_per_point_rd(eos, data, units, *, functional=None):
     """Compute per-point signed RD% and ARD% for all experimental datasets."""
     import polars as pl
 
-    preds = _predict_per_property(eos, data, units)
+    preds = _predict_per_property(eos, data, units, functional=functional)
 
     rows = []
     prop_labels = {"psat": (data.T_psat, data.p_psat),
                    "rho":  (data.T_rho,  data.rho),
-                   "hvap": (data.T_hvap, data.hvap)}
+                   "hvap": (data.T_hvap, data.hvap),
+                   "sft":  (data.T_sft,  data.sft)}
     for prop, (model_arr, exp_arr) in preds.items():
         T_arr = prop_labels[prop][0]
         for T_val, exp_val, model_val in zip(T_arr, exp_arr, model_arr):
@@ -131,7 +140,7 @@ class FitResult:
             Units used for experimental data
 
         metrics : dict
-            Per-property Metrics panels keyed by "psat", "rho", "hvap".
+            Per-property Metrics panels keyed by "psat", "rho", "hvap", "sft".
             Access via result.metrics["psat"].aard_pct, .rmsd_pct, .r2, etc.
 
         scipy_result : object
@@ -154,6 +163,7 @@ class FitResult:
     scipy_result: object
     time_elapsed: float
     input_name: str = ""
+    functional: object = None  # feos DFT functional; needed for surface tension
 
     # --- backwards-compat shims -------------------------------------------
     @property
@@ -169,6 +179,21 @@ class FitResult:
         return self.metrics["hvap"].aard_pct
 
     @property
+    def ard_sft(self) -> float:
+        """AARD% of surface tension."""
+        return self.metrics["sft"].aard_pct
+
+    @property
+    def aad_sft(self) -> float:
+        """Mean |gamma_calc - gamma_exp| in the input unit (mN/m by default).
+
+        This is AAD_sft of Rehner & Gross (2020), eq 31 — the interfacial
+        objective. Absolute, not relative: gamma goes to zero at the critical
+        point, where a relative deviation diverges.
+        """
+        return self.metrics["sft"].mae
+
+    @property
     def metrics_psat(self):
         return self.metrics["psat"]
 
@@ -179,6 +204,10 @@ class FitResult:
     @property
     def metrics_hvap(self):
         return self.metrics["hvap"]
+
+    @property
+    def metrics_sft(self):
+        return self.metrics["sft"]
 
     def to_json(self, path: "Path | str") -> None:
         """Append or update fitted parameters in a feos-compatible JSON parameter file.
@@ -378,12 +407,14 @@ class FitResult:
     def residuals(self):
         """Per-point signed RD% and absolute ARD% as a polars DataFrame.
 
-        Columns: ``property`` ("psat"/"rho"/"hvap"), ``T``, ``exp``, ``model``,
+        Columns: ``property`` ("psat"/"rho"/"hvap"/"sft"), ``T``, ``exp``, ``model``,
         ``rd_pct`` = (model − exp)/exp × 100, ``ard_pct`` = |rd_pct|.
 
         Export: ``result.residuals().write_csv("out.csv")``.
         """
-        return _compute_per_point_rd(self.eos, self.data, self.units)
+        return _compute_per_point_rd(
+            self.eos, self.data, self.units, functional=self.functional
+        )
 
     def plot_residuals(self, path=None):
         """RD% vs temperature for each property.
@@ -404,7 +435,7 @@ class FitResult:
         """Per-property metrics as a tidy polars DataFrame (one row per property)."""
         import polars as pl
         rows = []
-        for prop in ("psat", "rho", "hvap"):
+        for prop in ("psat", "rho", "hvap", "sft"):
             m = self.metrics[prop]
             rows.append({
                 "property": prop, "n": m.n, "n_total": m.n_total,
@@ -450,10 +481,12 @@ class FitResult:
         quality_lines = ["", "Fitting quality:"]
         for prop, label in [("psat", "Vapor pressure   "),
                             ("rho",  "Liquid density   "),
-                            ("hvap", "Hvap             ")]:
+                            ("hvap", "Hvap             "),
+                            ("sft",  "Surface tension  ")]:
             m = self.metrics[prop]
             if m.n_total > 0:
-                quality_lines.append(f"  {label} {m}")
+                extra = f"  AAD={m.mae:.2f}" if prop == "sft" and m.n > 0 else ""
+                quality_lines.append(f"  {label} {m}{extra}")
         quality_lines.extend(
             [
                 f"  RMS weighted resid.:     {rms:.4f}",
@@ -486,7 +519,7 @@ class EvalResult:
         units : Units
             Units for experimental data
         metrics : dict
-            Per-property Metrics panels keyed by "psat", "rho", "hvap".
+            Per-property Metrics panels keyed by "psat", "rho", "hvap", "sft".
         input_name : str
             Compound name as supplied by the user
     """
@@ -499,6 +532,7 @@ class EvalResult:
     units: Units
     metrics: dict
     input_name: str = ""
+    functional: object = None  # feos DFT functional; needed for surface tension
 
     # --- backwards-compat shims -------------------------------------------
     @property
@@ -514,6 +548,21 @@ class EvalResult:
         return self.metrics["hvap"].aard_pct
 
     @property
+    def ard_sft(self) -> float:
+        """AARD% of surface tension."""
+        return self.metrics["sft"].aard_pct
+
+    @property
+    def aad_sft(self) -> float:
+        """Mean |gamma_calc - gamma_exp| in the input unit (mN/m by default).
+
+        This is AAD_sft of Rehner & Gross (2020), eq 31 — the interfacial
+        objective. Absolute, not relative: gamma goes to zero at the critical
+        point, where a relative deviation diverges.
+        """
+        return self.metrics["sft"].mae
+
+    @property
     def metrics_psat(self):
         return self.metrics["psat"]
 
@@ -524,6 +573,10 @@ class EvalResult:
     @property
     def metrics_hvap(self):
         return self.metrics["hvap"]
+
+    @property
+    def metrics_sft(self):
+        return self.metrics["sft"]
 
     def to_csv(
         self,
@@ -592,12 +645,14 @@ class EvalResult:
     def residuals(self):
         """Per-point signed RD% and absolute ARD% as a polars DataFrame.
 
-        Columns: ``property`` ("psat"/"rho"/"hvap"), ``T``, ``exp``, ``model``,
+        Columns: ``property`` ("psat"/"rho"/"hvap"/"sft"), ``T``, ``exp``, ``model``,
         ``rd_pct`` = (model − exp)/exp × 100, ``ard_pct`` = |rd_pct|.
 
         Export: ``result.residuals().write_csv("out.csv")``.
         """
-        return _compute_per_point_rd(self.eos, self.data, self.units)
+        return _compute_per_point_rd(
+            self.eos, self.data, self.units, functional=self.functional
+        )
 
     def plot_residuals(self, path=None):
         """RD% vs temperature for each property.
@@ -618,7 +673,7 @@ class EvalResult:
         """Per-property metrics as a tidy polars DataFrame (one row per property)."""
         import polars as pl
         rows = []
-        for prop in ("psat", "rho", "hvap"):
+        for prop in ("psat", "rho", "hvap", "sft"):
             m = self.metrics[prop]
             rows.append({
                 "property": prop, "n": m.n, "n_total": m.n_total,
@@ -660,10 +715,12 @@ class EvalResult:
         lines += ["", "Fitting quality:"]
         for prop, label in [("psat", "Vapor pressure   "),
                             ("rho",  "Liquid density   "),
-                            ("hvap", "Hvap             ")]:
+                            ("hvap", "Hvap             "),
+                            ("sft",  "Surface tension  ")]:
             m = self.metrics[prop]
             if m.n_total > 0:
-                lines.append(f"  {label} {m}")
+                extra = f"  AAD={m.mae:.2f}" if prop == "sft" and m.n > 0 else ""
+                lines.append(f"  {label} {m}{extra}")
 
         return "\n".join(lines)
 

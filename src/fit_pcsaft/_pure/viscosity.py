@@ -33,6 +33,7 @@ import si_units as si
 
 from fit_pcsaft._csv import SCHEMA_VISCOSITY, load_csv
 from fit_pcsaft._binary._utils import _apply_induced_association
+from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 from fit_pcsaft._pure.viscosity_gc import compute_a_gc
 
 
@@ -157,7 +158,7 @@ class ViscosityFitResult:
                 try:
                     is_liquid = isinstance(phase, str) and phase.lower() == "liquid"
                     is_vapor = isinstance(phase, str) and phase.lower() in ("vapor", "vapour")
-                    kw: dict = {"temperature": T * si.KELVIN, "total_moles": si.MOL}
+                    kw: dict = {"temperature": T * si.KELVIN, "composition": si.MOL}
                     if no_P_col:
                         if is_liquid:
                             P_sat = feos.PhaseEquilibrium.vapor_pressure(self.eos, T * si.KELVIN)
@@ -445,11 +446,12 @@ def fit_viscosity_entropy_scaling(
     s_vals: list[float] = []
     eta_CE_vals: list[float] = []
     eta_exp_Pa_s_vals: list[float] = []
+    errors: list = []
     no_pressure_col = P_data is None
 
     for i, (T, eta_exp, phase) in enumerate(zip(T_data, eta_data, phase_data)):
         try:
-            kw: dict = {'temperature': T * temperature_unit, 'total_moles': si.MOL}
+            kw: dict = {'temperature': T * temperature_unit, 'composition': si.MOL}
             is_liquid = isinstance(phase, str) and phase.lower() == 'liquid'
 
             if no_pressure_col:
@@ -488,7 +490,8 @@ def fit_viscosity_entropy_scaling(
                 s_vals.append(s)
                 eta_CE_vals.append(eta_CE)
                 eta_exp_Pa_s_vals.append(eta_exp_Pa_s)
-        except Exception:
+        except Exception as exc:
+            errors.append(exc)
             continue
 
     n = len(s_vals)
@@ -497,7 +500,8 @@ def fit_viscosity_entropy_scaling(
         raise RuntimeError(
             f"Only {n} valid data points (need ≥ {n_free_params}). "
             "Check that T/P conditions are within the EOS validity range."
-        )
+            + _first_error_hint(errors)
+        ) from _first_error(errors)
 
     s_arr = np.array(s_vals)
     eta_CE_arr = np.array(eta_CE_vals)
@@ -564,8 +568,12 @@ def fit_viscosity_entropy_scaling(
         def _residuals(p: np.ndarray) -> np.ndarray:
             return Phi_fit @ p - y_shift
 
+        # _residuals is linear in p, so its Jacobian is exactly Phi_fit and is
+        # constant across iterations. scipy's default '2-point' would
+        # approximate a matrix we already hold.
         theta = scipy.optimize.least_squares(
-            _residuals, x0=x0, loss=loss, f_scale=_f_scale_scalar, method="trf",
+            _residuals, x0=x0, jac=lambda p: Phi_fit,
+            loss=loss, f_scale=_f_scale_scalar, method="trf",
         ).x
 
     if A_fixed is not None:
@@ -596,7 +604,7 @@ def fit_viscosity_entropy_scaling(
         ard_vals: list[float] = []
         for i, (T, eta_exp, phase) in enumerate(zip(T_data, eta_data, phase_data)):
             try:
-                kw2: dict = {'temperature': T * temperature_unit, 'total_moles': si.MOL}
+                kw2: dict = {'temperature': T * temperature_unit, 'composition': si.MOL}
                 is_liq2 = isinstance(phase, str) and phase.lower() == 'liquid'
                 if no_pressure_col:
                     if is_liq2:
@@ -667,7 +675,7 @@ def _smooth_viscosity_curve(eos, T_min: float, T_max: float, n: int = 80, P_MPa:
                 eos,
                 temperature=T * si.KELVIN,
                 pressure=P_MPa * si.MEGA * si.PASCAL,
-                total_moles=si.MOL,
+                composition=si.MOL,
                 density_initialization="liquid",
             )
             eta_vals.append(float(state.viscosity() / (si.PASCAL * si.SECOND)))
@@ -718,7 +726,7 @@ def _plot_viscosity_pure(result: ViscosityFitResult, path=None):
             try:
                 state = feos.State(result.eos, temperature=T * si.KELVIN,
                                    pressure=0.1 * si.MEGA * si.PASCAL,
-                                   total_moles=si.MOL,
+                                   composition=si.MOL,
                                    density_initialization="liquid")
                 eta_curve.append(float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3)
             except Exception:
@@ -848,8 +856,7 @@ def plot_viscosity_binary(
             try:
                 state = feos.State(eos_mix, temperature=T_iso * si.KELVIN,
                                    pressure=P_iso * pressure_unit,
-                                   total_moles=si.MOL,
-                                   molefracs=np.array([x1, 1.0 - x1]))
+                                   composition=np.array([x1, 1.0 - x1]) * si.MOL)
                 eta_model.append(float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3)
             except Exception:
                 eta_model.append(float("nan"))
@@ -884,8 +891,7 @@ def plot_viscosity_binary(
             try:
                 state = feos.State(eos_mix, temperature=T_iso * si.KELVIN,
                                    pressure=float(P_iso_csv) * pressure_unit,
-                                   total_moles=si.MOL,
-                                   molefracs=np.array([x1, 1.0 - x1]))
+                                   composition=np.array([x1, 1.0 - x1]) * si.MOL)
                 eta_p = float(state.viscosity() / (si.PASCAL * si.SECOND))
             except Exception:
                 eta_p = float("nan")
@@ -909,8 +915,7 @@ def plot_viscosity_binary(
                 try:
                     state = feos.State(eos_mix, temperature=T_iso * si.KELVIN,
                                        pressure=P_iso * pressure_unit,
-                                       total_moles=si.MOL,
-                                       molefracs=np.array([x1, 1.0 - x1]))
+                                       composition=np.array([x1, 1.0 - x1]) * si.MOL)
                     eta_m = float(state.viscosity() / (si.PASCAL * si.SECOND))
                 except Exception:
                     eta_m = float("nan")

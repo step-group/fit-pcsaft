@@ -1,7 +1,7 @@
 """Combined cost + Jacobian for pure component PC-SAFT fitting.
 
-feos.vapor_pressure_derivatives / equilibrium_liquid_density_derivatives
-return (values, jacobian, mask) in a single vectorized AD call.
+feos.Property.{vapor_pressure,equilibrium_liquid_density,enthalpy_of_vaporization}
+_derivatives each return (values, jacobian, mask) in a single vectorized AD call.
 
 Structure
 ---------
@@ -11,144 +11,86 @@ Structure
   _setup_assoc         — associating, mu fixed
   _setup_assoc_mu      — associating, mu fitted
 
-Each returns (eos_ad, fit_params, build_arrays) where build_arrays(p) → (pa_psat, pa_rho).
+Each returns (eos_ad, fit_params, make_row) where make_row(p) → a 1-D parameter
+row. feos accepts a shared 1-D row for every input point, so no per-property
+tiling is needed.
 
-_make_core takes those three plus data/compound/config and builds the shared
-_compute/fun/jac closures. fun and jac cache the result of _compute so scipy's
-sequential fun(x) → jac(x) calls per optimizer step trigger only one feos evaluation.
+_make_core takes those three plus data/compound/units/config and builds the
+shared _compute/fun/jac closures. fun and jac cache the result of _compute so
+scipy's sequential fun(x) → jac(x) calls per optimizer step trigger only one
+feos evaluation.
 
-make_f_and_df dispatches to the right setup function and calls _make_core.
+_make_f_and_df dispatches to the right setup function and calls _make_core.
 
-Unit assumptions (hardcoded to match feos AD output):
-  psat: derivs[0] in Pa → /1000 → kPa
-  density: derivs[0] in kmol/m³ → ×mw → kg/m³
+feos AD returns SI (Pa, kmol/m³, J/mol); ``units`` converts to the user's CSV
+units. Quadrupole (q) has no AD support — feos silently returns a zero gradient
+column for 'q' — so q != 0 stays on the numerical path in fit.py.
 """
 
 import feos
 import numpy as np
+import si_units as si
 
+from fit_pcsaft._fit_utils import _PENALTY
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
 
 # ---------------------------------------------------------------------------
-# Setup functions — return (eos_ad, fit_params, build_arrays)
+# Setup functions — return (eos_ad, fit_params, make_row)
 # ---------------------------------------------------------------------------
 
 
-def _setup_nonassoc(spec: ModelSpec, n_psat: int, n_rho: int):
+def _setup_nonassoc(spec: ModelSpec):
     """Non-associating, mu fixed."""
     mu = spec.mu
-    mu_col_psat = np.full((n_psat, 1), mu)
-    mu_col_rho = np.full((n_rho, 1), mu) if n_rho > 0 else None
 
-    def build_arrays(p):
-        pa_psat = np.column_stack([np.tile(p, (n_psat, 1)), mu_col_psat])
-        pa_rho = (
-            np.column_stack([np.tile(p, (n_rho, 1)), mu_col_rho]) if n_rho > 0 else None
-        )
-        return pa_psat, pa_rho
+    def make_row(p):
+        return np.array([p[0], p[1], p[2], mu], dtype=float)
 
     return (
         feos.EquationOfStateAD.PcSaftNonAssoc,
         ["m", "sigma", "epsilon_k"],
-        build_arrays,
+        make_row,
     )
 
 
-def _setup_nonassoc_mu(spec: ModelSpec, n_psat: int, n_rho: int):
+def _setup_nonassoc_mu(spec: ModelSpec):
     """Non-associating, mu fitted."""
 
-    def build_arrays(p):
-        pa_psat = np.tile(p, (n_psat, 1))
-        pa_rho = np.tile(p, (n_rho, 1)) if n_rho > 0 else None
-        return pa_psat, pa_rho
+    def make_row(p):
+        return np.array([p[0], p[1], p[2], p[3]], dtype=float)
 
     return (
         feos.EquationOfStateAD.PcSaftNonAssoc,
         ["m", "sigma", "epsilon_k", "mu"],
-        build_arrays,
+        make_row,
     )
 
 
-def _setup_assoc(spec: ModelSpec, n_psat: int, n_rho: int):
+def _setup_assoc(spec: ModelSpec):
     """Associating, mu fixed."""
-    mu = spec.mu
-    na, nb = spec.na, spec.nb
-    mu_col_psat = np.full((n_psat, 1), mu)
-    mu_col_rho = np.full((n_rho, 1), mu) if n_rho > 0 else None
-    na_col_psat = np.full((n_psat, 1), float(na))
-    nb_col_psat = np.full((n_psat, 1), float(nb))
-    na_col_rho = np.full((n_rho, 1), float(na)) if n_rho > 0 else None
-    nb_col_rho = np.full((n_rho, 1), float(nb)) if n_rho > 0 else None
+    mu, na, nb = spec.mu, float(spec.na), float(spec.nb)
 
-    def build_arrays(p):
-        pa_psat = np.column_stack(
-            [
-                np.tile(p[:3], (n_psat, 1)),
-                mu_col_psat,
-                np.tile(p[3:5], (n_psat, 1)),
-                na_col_psat,
-                nb_col_psat,
-            ]
-        )
-        pa_rho = (
-            np.column_stack(
-                [
-                    np.tile(p[:3], (n_rho, 1)),
-                    mu_col_rho,
-                    np.tile(p[3:5], (n_rho, 1)),
-                    na_col_rho,
-                    nb_col_rho,
-                ]
-            )
-            if n_rho > 0
-            else None
-        )
-        return pa_psat, pa_rho
+    def make_row(p):
+        return np.array([p[0], p[1], p[2], mu, p[3], p[4], na, nb], dtype=float)
 
     return (
         feos.EquationOfStateAD.PcSaftFull,
         ["m", "sigma", "epsilon_k", "kappa_ab", "epsilon_k_ab"],
-        build_arrays,
+        make_row,
     )
 
 
-def _setup_assoc_mu(spec: ModelSpec, n_psat: int, n_rho: int):
-    """Associating, mu fitted."""
-    na, nb = spec.na, spec.nb
-    na_col_psat = np.full((n_psat, 1), float(na))
-    nb_col_psat = np.full((n_psat, 1), float(nb))
-    na_col_rho = np.full((n_rho, 1), float(na)) if n_rho > 0 else None
-    nb_col_rho = np.full((n_rho, 1), float(nb)) if n_rho > 0 else None
+def _setup_assoc_mu(spec: ModelSpec):
+    """Associating, mu fitted. Uses 6 gradient parameters — the feos maximum."""
+    na, nb = float(spec.na), float(spec.nb)
 
-    def build_arrays(p):
-        pa_psat = np.column_stack(
-            [
-                np.tile(p[:3], (n_psat, 1)),
-                np.tile(p[3:4], (n_psat, 1)),
-                np.tile(p[4:6], (n_psat, 1)),
-                na_col_psat,
-                nb_col_psat,
-            ]
-        )
-        pa_rho = (
-            np.column_stack(
-                [
-                    np.tile(p[:3], (n_rho, 1)),
-                    np.tile(p[3:4], (n_rho, 1)),
-                    np.tile(p[4:6], (n_rho, 1)),
-                    na_col_rho,
-                    nb_col_rho,
-                ]
-            )
-            if n_rho > 0
-            else None
-        )
-        return pa_psat, pa_rho
+    def make_row(p):
+        return np.array([p[0], p[1], p[2], p[3], p[4], p[5], na, nb], dtype=float)
 
     return (
         feos.EquationOfStateAD.PcSaftFull,
         ["m", "sigma", "epsilon_k", "mu", "kappa_ab", "epsilon_k_ab"],
-        build_arrays,
+        make_row,
     )
 
 
@@ -160,109 +102,154 @@ def _setup_assoc_mu(spec: ModelSpec, n_psat: int, n_rho: int):
 def _make_core(
     data: PureData,
     compound: Compound,
+    units: Units,
     config: FitConfig,
     eos_ad,
     fit_params,
-    build_arrays,
+    make_row,
+    errors: "list | None" = None,
 ):
-    """Build (fun, jac) given the case-specific eos_ad, fit_params, build_arrays."""
-    T_psat = data.T_psat
-    d_psat = data.p_psat
-    T_rho = data.T_rho
-    d_rho = data.rho
+    """Build (fun, jac) given the case-specific eos_ad, fit_params, make_row.
+
+    On failure this returns a *zero* Jacobian, which flattens the gradient and
+    makes the optimizer stop immediately reporting success. ``errors`` records
+    why, so the caller's stall guard can explain the bogus "convergence".
+    """
+    T_psat, d_psat = data.T_psat, data.p_psat
+    T_rho, d_rho = data.T_rho, data.rho
+    T_hvap, d_hvap = data.T_hvap, data.hvap
     mw = compound.mw
 
-    n_psat = len(T_psat)
-    n_rho = len(T_rho)
-    n_total = n_psat + n_rho
+    n_psat, n_rho, n_hvap = len(T_psat), len(T_rho), len(T_hvap)
+    n_total = n_psat + n_rho + n_hvap
     n_params = len(fit_params)
 
-    inv_d_psat = 1.0 / d_psat
-    inv_d_rho = 1.0 / d_rho if n_rho > 0 else None
+    # feos AD returns SI: Pa, kmol/m^3, J/mol. Convert to the user's CSV units.
+    # Previously hardcoded to kPa and kg/m^3, which silently corrupted both the
+    # residuals and the Jacobian for any other unit.
+    to_p = 1.0 / (units.pressure / si.PASCAL)
+    to_rho = mw / (units.density / (si.KILOGRAM / si.METER**3))
+    to_h = 1.0 / (units.enthalpy / (si.JOULE / si.MOL))
+
     inv_T_psat = 1.0 / T_psat
-    psat_cost_scale = np.sqrt(config.w_psat / n_psat) / config.f_scale["psat"]
-    rho_cost_scale = np.sqrt(config.w_rho / n_rho) / config.f_scale["rho"] if n_rho > 0 else 0.0
-    # Pa → kPa for psat; kmol/m³ → kg/m³ for rho (via mw)
-    psat_jac_scale = (np.sqrt(config.w_psat / n_psat) / 1000.0) / d_psat / config.f_scale["psat"]
-    rho_jac_scale = (
-        (np.sqrt(config.w_rho / n_rho) * mw) / d_rho / config.f_scale["rho"]
-        if n_rho > 0 else np.zeros(1)
-    )
 
-    temps_array_psat = np.expand_dims(np.array(T_psat), 1)
-    temps_array_rho = np.expand_dims(np.array(T_rho), 1) if n_rho > 0 else None
+    def _scales(w, n, key, unit_factor, d):
+        if n == 0:
+            return 0.0, np.zeros(1)
+        s = np.sqrt(w / n) / config.f_scale[key]
+        return s, (np.sqrt(w / n) * unit_factor) / d / config.f_scale[key]
 
-    _penalty_f = np.full(n_total, 1e10)
+    psat_cost_scale, psat_jac_scale = _scales(
+        config.w_psat, n_psat, "psat", to_p, d_psat)
+    rho_cost_scale, rho_jac_scale = _scales(
+        config.w_rho, n_rho, "rho", to_rho, d_rho)
+    hvap_cost_scale, hvap_jac_scale = _scales(
+        config.w_hvap, n_hvap, "hvap", to_h, d_hvap)
+
+    in_psat = np.expand_dims(np.asarray(T_psat, dtype=float), 1)
+    in_rho = np.expand_dims(np.asarray(T_rho, dtype=float), 1) if n_rho else None
+    in_hvap = np.expand_dims(np.asarray(T_hvap, dtype=float), 1) if n_hvap else None
+
+    _penalty_f = np.full(n_total, _PENALTY)
     _penalty_J = np.zeros((n_total, n_params))
+    _FAIL = (_penalty_f, _penalty_J, None, None)
+
+    def _block(ad_fn, row, inp, unit_factor, cost_scale, jac_scale, d, chain):
+        """Return (residuals, jacobian, predictions) or None on failure."""
+        try:
+            vals, grad, mask = ad_fn(eos_ad, fit_params, row, inp)
+        except Exception as exc:
+            if errors is not None:
+                errors.append(exc)
+            return None
+        if not mask.all():
+            return None
+        pred = vals * unit_factor
+        f = cost_scale * (pred / d - 1.0)
+        J = grad * jac_scale[:, np.newaxis] * chain[np.newaxis, :]
+        return f, J, pred
 
     def _compute(params_vec):
         p = params_vec**2
         chain = 2.0 * params_vec
-        pa_psat, pa_rho = build_arrays(p)
+        row = np.ascontiguousarray(make_row(p))
 
+        # --- vapor pressure: the only block allowed to extrapolate ---
         try:
-            derivs_psat = feos.vapor_pressure_derivatives(
-                eos_ad, fit_params, pa_psat, temps_array_psat
+            vals, grad, mask = feos.Property.vapor_pressure_derivatives(
+                eos_ad, fit_params, row, in_psat
             )
-        except Exception:
-            return _penalty_f, _penalty_J, None, None
+        except Exception as exc:
+            if errors is not None:
+                errors.append(exc)
+            return _FAIL
 
-        mask_psat = derivs_psat[2]
         p_pred = np.full(n_psat, np.nan)
-        p_pred[mask_psat] = derivs_psat[0] / 1000.0  # Pa → kPa
+        p_pred[mask] = vals[mask] * to_p
 
-        if not mask_psat.all():
-            if config.extrapolate_psat and mask_psat.sum() >= 2:
-                X = np.column_stack([np.ones(mask_psat.sum()), inv_T_psat[mask_psat]])
-                coeffs = np.linalg.lstsq(X, np.log(p_pred[mask_psat]), rcond=None)[0]
-                p_pred[~mask_psat] = np.exp(
-                    coeffs[0] + coeffs[1] * inv_T_psat[~mask_psat]
-                )
+        if not mask.all():
+            if config.extrapolate_psat and mask.sum() >= 2:
+                X = np.column_stack([np.ones(mask.sum()), inv_T_psat[mask]])
+                coeffs = np.linalg.lstsq(X, np.log(p_pred[mask]), rcond=None)[0]
+                p_pred[~mask] = np.exp(coeffs[0] + coeffs[1] * inv_T_psat[~mask])
             else:
-                return _penalty_f, _penalty_J, None, None
+                return _FAIL
 
-        f_psat = psat_cost_scale * (p_pred * inv_d_psat - 1.0)
-        jac_full_psat = np.zeros((n_psat, n_params))
-        jac_full_psat[mask_psat] = derivs_psat[1]
-        J_psat = jac_full_psat * psat_jac_scale[:, np.newaxis] * chain[np.newaxis, :]
+        f_parts = [psat_cost_scale * (p_pred / d_psat - 1.0)]
+        jac_psat = np.zeros((n_psat, n_params))
+        jac_psat[mask] = grad[mask]
+        J_parts = [jac_psat * psat_jac_scale[:, np.newaxis] * chain[np.newaxis, :]]
 
         rho_pred = None
-        if n_rho > 0:
-            try:
-                derivs_rho = feos.equilibrium_liquid_density_derivatives(
-                    eos_ad, fit_params, pa_rho, temps_array_rho
-                )
-            except Exception:
-                return _penalty_f, _penalty_J, None, None
-
-            mask_rho = derivs_rho[2]
-            rho_pred = np.full(n_rho, np.nan)
-            rho_pred[mask_rho] = derivs_rho[0] * mw  # kmol/m³ → kg/m³
-
-            if not mask_rho.all():
-                return _penalty_f, _penalty_J, None, None
-
-            f_rho = rho_cost_scale * (rho_pred * inv_d_rho - 1.0)
-            jac_full_rho = np.zeros((n_rho, n_params))
-            jac_full_rho[mask_rho] = derivs_rho[1]
-            J_rho = jac_full_rho * rho_jac_scale[:, np.newaxis] * chain[np.newaxis, :]
-
-            return (
-                np.concatenate([f_psat, f_rho]),
-                np.vstack([J_psat, J_rho]),
-                p_pred,
-                rho_pred,
+        if n_rho:
+            got = _block(
+                feos.Property.equilibrium_liquid_density_derivatives,
+                row, in_rho, to_rho, rho_cost_scale, rho_jac_scale,
+                d_rho, chain,
             )
+            if got is None:
+                return _FAIL
+            f_rho, J_rho, rho_pred = got
+            f_parts.append(f_rho)
+            J_parts.append(J_rho)
 
-        return f_psat, J_psat, p_pred, rho_pred
+        if n_hvap:
+            got = _block(
+                feos.Property.enthalpy_of_vaporization_derivatives,
+                row, in_hvap, to_h, hvap_cost_scale, hvap_jac_scale,
+                d_hvap, chain,
+            )
+            if got is None:
+                return _FAIL
+            f_hvap, J_hvap, _ = got
+            f_parts.append(f_hvap)
+            J_parts.append(J_hvap)
+
+        return (
+            np.concatenate(f_parts) if len(f_parts) > 1 else f_parts[0],
+            np.vstack(J_parts) if len(J_parts) > 1 else J_parts[0],
+            p_pred,
+            rho_pred,
+        )
+
+    # scipy calls fun(x) then jac(x) at the same x on every iteration.
+    # Caching the last (x, result) halves the feos AD evaluations.
+    _cache_x = None
+    _cache_out = None
+
+    def _cached(params_vec):
+        nonlocal _cache_x, _cache_out
+        if _cache_x is not None and np.array_equal(params_vec, _cache_x):
+            return _cache_out
+        _cache_out = _compute(params_vec)
+        _cache_x = np.array(params_vec, copy=True)
+        return _cache_out
 
     def fun(params_vec):
-        f, _, _, _ = _compute(params_vec)
-        return f
+        return _cached(params_vec)[0]
 
     def jac(params_vec):
-        _, J, _, _ = _compute(params_vec)
-        return J
+        return _cached(params_vec)[1]
 
     return fun, jac
 
@@ -274,19 +261,28 @@ def _make_f_and_df(
     units: Units,
     config: FitConfig,
 ):
-    """Return (fun, jac) for the appropriate PC-SAFT case."""
-    n_psat = len(data.T_psat)
-    n_rho = len(data.T_rho)
+    """Return (fun, jac, errors) for the appropriate PC-SAFT case."""
+    if len(data.T_sft) > 0:
+        raise ValueError(
+            "The analytical Jacobian does not support surface tension — feos exposes "
+            "no AD path for it (feos.Property has no surface_tension_derivatives). "
+            "Use the numerical Jacobian."
+        )
+
     assoc = spec.na is not None and spec.nb is not None and spec.na > 0 and spec.nb > 0
     fit_mu = spec.mu is None
 
     if assoc and fit_mu:
-        eos_ad, fit_params, build_arrays = _setup_assoc_mu(spec, n_psat, n_rho)
+        eos_ad, fit_params, make_row = _setup_assoc_mu(spec)
     elif assoc:
-        eos_ad, fit_params, build_arrays = _setup_assoc(spec, n_psat, n_rho)
+        eos_ad, fit_params, make_row = _setup_assoc(spec)
     elif fit_mu:
-        eos_ad, fit_params, build_arrays = _setup_nonassoc_mu(spec, n_psat, n_rho)
+        eos_ad, fit_params, make_row = _setup_nonassoc_mu(spec)
     else:
-        eos_ad, fit_params, build_arrays = _setup_nonassoc(spec, n_psat, n_rho)
+        eos_ad, fit_params, make_row = _setup_nonassoc(spec)
 
-    return _make_core(data, compound, config, eos_ad, fit_params, build_arrays)
+    errors: list = []
+    fun, jac = _make_core(
+        data, compound, units, config, eos_ad, fit_params, make_row, errors
+    )
+    return fun, jac, errors

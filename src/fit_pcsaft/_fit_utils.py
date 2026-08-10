@@ -8,7 +8,30 @@ import polars as pl
 import pubchempy as pcp
 
 from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv
+from fit_pcsaft._pure.surface_tension import predict_surface_tension
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
+
+# Sentinel residual returned when the EOS cannot be evaluated at all. Legitimate
+# residuals are relative deviations scaled by sqrt(w/n)/f_scale and stay far below it.
+_PENALTY = 1e10
+
+
+def _first_error_hint(errors: "list | None") -> str:
+    """Format the first swallowed exception for an aggregate-failure message.
+
+    The per-point handlers must keep swallowing (points legitimately fall outside
+    the EOS validity range), so the aggregate failure is the only place that can
+    explain itself.
+    """
+    if not errors:
+        return ""
+    exc = errors[0]
+    return f" First internal failure: {type(exc).__name__}: {exc}"
+
+
+def _first_error(errors: "list | None"):
+    """The exception to chain via ``raise ... from``, or None."""
+    return errors[0] if errors else None
 
 
 def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
@@ -85,13 +108,13 @@ def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
 
 
 
-def _build_eos(
+def _build_record(
     params_vec: np.ndarray,
     compound: Compound,
     spec: ModelSpec,
-) -> feos.EquationOfState:
+) -> feos.PureRecord:
     """
-    Build PC-SAFT equation of state from parameters.
+    Build a feos PureRecord from a parameter vector.
 
     Non-associating (na/nb are None):
         mu fixed: params_vec = [m, sigma, epsilon_k]
@@ -128,7 +151,7 @@ def _build_eos(
         idx += 1
         epsilon_k_ab = float(params_vec[idx])
         idx += 1
-        record = feos.PureRecord(
+        return feos.PureRecord(
             identifier=identifier,
             molarweight=mw,
             m=m,
@@ -140,24 +163,45 @@ def _build_eos(
                 {"na": na, "nb": nb, "epsilon_k_ab": epsilon_k_ab, "kappa_ab": kappa_ab}
             ],
         )
-    else:
-        record = feos.PureRecord(
-            identifier=identifier,
-            molarweight=mw,
-            m=m,
-            sigma=sigma,
-            epsilon_k=epsilon_k,
-            mu=mu_val,
-            q=q,
-        )
+    return feos.PureRecord(
+        identifier=identifier,
+        molarweight=mw,
+        m=m,
+        sigma=sigma,
+        epsilon_k=epsilon_k,
+        mu=mu_val,
+        q=q,
+    )
 
-    parameters = feos.Parameters.new_pure(record)
+
+def _build_eos(
+    params_vec: np.ndarray,
+    compound: Compound,
+    spec: ModelSpec,
+) -> feos.EquationOfState:
+    """Build the PC-SAFT equation of state. See _build_record for vector ordering."""
+    parameters = feos.Parameters.new_pure(_build_record(params_vec, compound, spec))
     return feos.EquationOfState.pcsaft(parameters)
+
+
+def _build_functional(
+    params_vec: np.ndarray,
+    compound: Compound,
+    spec: ModelSpec,
+):
+    """Build the PC-SAFT Helmholtz energy functional used for DFT surface tension.
+
+    feos 0.10 returns an ``EquationOfState`` here — the same type ``_build_eos``
+    returns — but a *different* object: this one carries the non-local weight
+    functions ``PlanarInterface`` needs. See _build_record for vector ordering.
+    """
+    parameters = feos.Parameters.new_pure(_build_record(params_vec, compound, spec))
+    return feos.HelmholtzEnergyFunctional.pcsaft(parameters)
 
 
 _EPS_2PT = np.sqrt(np.finfo(float).eps)  # ~1.49e-8
 
-_VALID_PURE_PROPS = frozenset({"psat", "rho", "hvap"})
+_VALID_PURE_PROPS = frozenset({"psat", "rho", "hvap", "sft"})
 
 
 def _normalize_f_scale(
@@ -214,14 +258,21 @@ def _make_cost_fn(
     spec: ModelSpec,
     units: Units,
     config: FitConfig,
+    errors: "list | None" = None,
 ) -> Callable:
-    """Create cost function closure for non-associating optimization."""
+    """Create cost function closure for non-associating optimization.
+
+    ``errors`` collects swallowed exceptions so a fit that never leaves its
+    initial guess can report *why* instead of claiming convergence.
+    """
     T_psat = data.T_psat
     d_psat = data.p_psat
     T_rho = data.T_rho
     d_rho = data.rho
     T_hvap = data.T_hvap
     d_hvap = data.hvap
+    T_sft = data.T_sft
+    d_sft = data.sft
     temperature_unit = units.temperature
     psat_unit = units.pressure
     rho_unit = units.density
@@ -230,10 +281,19 @@ def _make_cost_fn(
     n_psat = len(T_psat)
     n_rho = len(T_rho)
     n_hvap = len(T_hvap)
-    n_total = n_psat + n_rho + n_hvap
+    n_sft = len(T_sft)
+    n_total = n_psat + n_rho + n_hvap + n_sft
     psat_cost_scale = np.sqrt(config.w_psat / n_psat) / config.f_scale["psat"]
     rho_cost_scale = np.sqrt(config.w_rho / n_rho) / config.f_scale["rho"] if n_rho > 0 else 0.0
     hvap_cost_scale = np.sqrt(config.w_hvap / n_hvap) / config.f_scale["hvap"] if n_hvap > 0 else 0.0
+    # Surface tension uses an ABSOLUTE deviation normalized by the mean
+    # experimental gamma, not a relative one: gamma -> 0 at the critical point,
+    # where a relative residual diverges (Rehner & Gross 2020, eq 31).
+    sft_cost_scale = (
+        np.sqrt(config.w_sft / n_sft) / float(np.mean(d_sft)) / config.f_scale["sft"]
+        if n_sft > 0
+        else 0.0
+    )
     inv_d_psat = 1.0 / d_psat
     inv_d_rho = 1.0 / d_rho if n_rho > 0 else None
     inv_d_hvap = 1.0 / d_hvap if n_hvap > 0 else None
@@ -243,8 +303,10 @@ def _make_cost_fn(
         """Compute weighted relative residuals."""
         try:
             eos = _build_eos(params_vec**2, compound, spec)
-        except Exception:
-            return np.full(n_total, 1e10)
+        except Exception as exc:
+            if errors is not None:
+                errors.append(exc)
+            return np.full(n_total, _PENALTY)
 
         residuals = []
 
@@ -257,7 +319,9 @@ def _make_cost_fn(
                     feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)[0]
                     / psat_unit
                 )
-            except Exception:
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(exc)
                 success[i] = False
 
         if not success.all():
@@ -267,7 +331,7 @@ def _make_cost_fn(
                 coeffs = np.linalg.lstsq(X, np.log(p_pred[success]), rcond=None)[0]
                 p_pred[~success] = np.exp(coeffs[0] + coeffs[1] * inv_T_psat[~success])
             else:
-                return np.full(n_total, 1e10)
+                return np.full(n_total, _PENALTY)
 
         residuals.append(psat_cost_scale * (p_pred * inv_d_psat - 1.0))
 
@@ -282,8 +346,10 @@ def _make_cost_fn(
                     for T in T_rho
                 ]
                 rho_pred = np.array(rho_pred_vals)
-            except Exception:
-                return np.full(n_total, 1e10)
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(exc)
+                return np.full(n_total, _PENALTY)
 
             residuals.append(rho_cost_scale * (rho_pred * inv_d_rho - 1.0))
 
@@ -301,10 +367,30 @@ def _make_cost_fn(
                         / enthalpy_unit
                     )
                 hvap_pred = np.array(hvap_pred_vals)
-            except Exception:
-                return np.full(n_total, 1e10)
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(exc)
+                return np.full(n_total, _PENALTY)
 
             residuals.append(hvap_cost_scale * (hvap_pred * inv_d_hvap - 1.0))
+
+        # Surface tension residuals (absolute, normalized by mean gamma — a
+        # relative residual diverges as gamma -> 0 at the critical point)
+        if n_sft > 0:
+            try:
+                functional = _build_functional(params_vec**2, compound, spec)
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(exc)
+                return np.full(n_total, _PENALTY)
+
+            sft_pred = predict_surface_tension(
+                functional, T_sft, units, config.sft_options
+            )
+            if not np.isfinite(sft_pred).all():
+                return np.full(n_total, _PENALTY)
+
+            residuals.append(sft_cost_scale * (sft_pred - d_sft))
 
         return np.concatenate(residuals)
 
@@ -317,13 +403,16 @@ def _make_f_and_df_numerical(
     spec: ModelSpec,
     units: Units,
     config: FitConfig,
-) -> Tuple[Callable, Callable]:
+) -> Tuple[Callable, Callable, list]:
     """Create cost function + 2-point numerical Jacobian with shared base-eval cache.
 
     Scipy calls f(x) then jac(x) at the same x each iteration. Caching the last
     (x, f(x)) means the Jacobian reuses the base evaluation instead of rerunning feos.
+
+    Returns ``(f, df, errors)``; ``errors`` accumulates swallowed exceptions.
     """
-    _cost = _make_cost_fn(data, compound, spec, units, config)
+    errors: list = []
+    _cost = _make_cost_fn(data, compound, spec, units, config, errors)
 
     # Use standard variables instead of a list hack
     x_cached = None
@@ -359,4 +448,4 @@ def _make_f_and_df_numerical(
 
         return J
 
-    return f, df
+    return f, df, errors

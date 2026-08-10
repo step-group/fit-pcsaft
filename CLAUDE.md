@@ -8,13 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Run an example
 uv run python examples/pure/01_propane.py
 uv run python examples/binary/01_ethanol_water_vle.py
+uv run python examples/pure/11_water_pareto.py   # ~4 min
 
 # Install/sync dependencies
 uv sync
 
-# Run tests (if any exist)
-uv run pytest
+# Run tests
+uv run python -m pytest
 ```
+
+`uv run pytest` fails to spawn in this checkout; use `uv run python -m pytest`.
 
 Use `uv` for all package management — not `pip`.
 
@@ -25,7 +28,7 @@ Use `uv` for all package management — not `pip`.
 ### Pure component fitting (`src/fit_pcsaft/_pure/`)
 
 - **`fit.py`**: `fit_pure()`, `fit_pure_de()`, `eval_pure()` — the main entry points. `fit_pure` runs multi-start Levenberg-Marquardt (6–8 initial sets); `fit_pure_de` uses differential evolution (global optimizer). Both call `_setup_pure_fit()` to load data/build the cost function, then minimize and return a `FitResult`.
-- **`jacobian.py`**: Analytical Jacobian via feos AD (`_make_f_and_df`). Used when neither `hvap_path` nor `q != 0` is given; otherwise falls back to numerical 2-point diff (`_make_f_and_df_numerical` in `_fit_utils.py`).
+- **`jacobian.py`**: Analytical Jacobian via feos AD (`_make_f_and_df`). Used unless `sft_path` is given or `q != 0`; otherwise falls back to numerical 2-point diff (`_make_f_and_df_numerical` in `_fit_utils.py`). Surface tension has no feos AD path at all, so `_make_f_and_df` raises if `sft` data is present rather than silently returning a short residual vector.
 
 ### Viscosity fitting (`src/fit_pcsaft/_pure/viscosity.py`)
 
@@ -40,6 +43,26 @@ ln(η / η_CE) = A + B·s + C·s² + D·s³,   s = s_res / (R·m)
 - **`plot_viscosity_binary(params_mix, csv_path, ...)`**: Standalone function for plotting binary mixture viscosity η vs x₁ at each isotherm (also exported from the top-level package).
 - **Viscosity CSV format**: Columns `T`, `P`, `eta` (pressure optional; if absent, P_sat is used for liquid). An optional `phase` string column (`'liquid'`/`'vapor'`) guides the EOS density root selection.
 - **`viscosity_gc.py`**: `compute_a_gc(groups)` computes A_gc = Σ(n_α · m_α · σ_α³ · A_α) from LL 2015 segment parameters bundled in `viscosity_gc_data/loetgeringlin2015_homo.json`. `available_groups()` lists segments with viscosity parameters.
+
+### Surface tension and pareto fitting (`src/fit_pcsaft/_pure/`)
+
+Implements Rehner & Gross (*J. Chem. Eng. Data* 2020, 65, 5698–5707): surface tension as a second, independent objective, to break the parameter degeneracy that vapour-pressure-plus-density fits leave behind for associating fluids.
+
+- **`surface_tension.py`**: `predict_surface_tension(functional, T_vals, units, options)` — γ for a pure component from feos DFT, pDGT-initialized. Returns NaN wherever the VLE or interface solve fails; never raises. `SurfaceTensionOptions(n_grid=256)` is already grid-converged (~5 ms/point; `n_grid=2048` gives the same six digits at 8× the cost).
+  - feos hardcodes `psi_dft = 1.3862` and its Python `PlanarInterface.from_pdgt` discards the bare pDGT surface tension, so results track the paper's **AAD_DFT** column, not AAD_pDGT.
+  - Catches `BaseException`: feos signals unsupported input with `pyo3_runtime.PanicException`, which is not an `Exception`.
+- **`pareto.py`**: `fit_pure_pareto(...)` → `ParetoResult`, solved with pymoo NSGA-II (derivative-free — large regions of parameter space have no VLE at all, handled as a constraint violation).
+  - Objectives: `AAD_vle = mean(AARD(psat), AARD(rho))` in %, and `AAD_sft = mean|Δγ|` in mN/m. γ is an **absolute** deviation because it goes to zero at the critical point, where a relative one diverges.
+  - `ParetoResult.select(ref_vle, ref_sft)` returns the eq-32 tangent point as an ordinary `FitResult`, so `to_json`/`plot`/`metrics_table` all work. Paper weights: water `(2%, 0.7)`, small alcohols `(2%, 1.5)`, C5+ alcohols `(2%, 3.0)`.
+  - Infeasible parameter sets report a **graded** constraint violation (`0.5 - worst_valid_fraction`), not a flat penalty. About 80% of the default bounds box has no stable interface for an associating fluid; collapsing all of it onto one `(1e6, 1e6)` leaves NSGA-II unable to tell "failed two of 25 gamma points" from "no VLE at all".
+  - `n_jobs=-1` (default) evaluates the population across worker processes — every core bar two. **Processes, not threads: feos does not release the GIL** (measured 0.89x on a 16-thread pool, i.e. slower than serial). `feos.Identifier` is also unpicklable, so pymoo's `StarmapParallelization` cannot be used — the problem is a vectorized `Problem` that maps the population itself, and workers rebuild their own feos objects in an initializer. The pool uses **spawn**, since forking a process with feos' live rayon threads risks a child deadlock, and calls `feos.set_num_threads(1)` per worker to avoid oversubscription. Measured 4.3x on 14 workers with identical results.
+  - `quiet_solver=True` (default) silences fd-level stderr during the search; feos panics from Rust worker threads on infeasible parameter sets and Python cannot intercept those writes.
+  - `refine=4` (default) runs a post-search densification pass (`_densify`): interpolate parameter vectors between adjacent front points, re-evaluate, keep whatever is non-dominated. **The raw NSGA-II output is a population, not a curve** — crowding distance preserves diversity but never forces even spacing, so it comes back as clusters separated by voids (measured: 8 of 80 water points within 0.2% of each other on the AAD_vle axis, and a 2.8% stretch holding none). Every point interpolated across a void is itself non-dominated, so the voids are a sampling artefact. Interpolants are allocated in proportion to segment length in normalized objective space, not evenly — spreading them evenly wastes them inside the clusters. Measured on the 9600-eval water run: 80 → 209 points, median spacing 3.4× finer, 316 evaluations, 7 s.
+  - **The raw front is not always a front.** On water the refine pass dominated a whole stretch of it, moving the eq-32 tangent point from `(1.44%, 1.62)` to `(1.90%, 1.29)` — eq 32 from 3.04 to 2.79. Interpolation only reveals this; the dominated points were in NSGA-II's output all along. Trust a `refine=0` front's `.select()` less.
+  - Refinement does **not** close a genuine hole, where the straight line between two front points in parameter space does not track the front in objective space. Water keeps one at the knee near AAD_vle = 2%: a second pass moves eq 32 by 0.01 for 3.6× the evaluations. That corner needs search budget, not arithmetic.
+- **Surface tension CSV format**: columns `T`, `sft` (aliases `gamma`, `surface_tension`, `sigma_st`, `st`). Default unit mN/m. `FitResult.aad_sft` is the paper's AAD_sft; `ard_sft` is the relative AARD.
+- **Fitting near the critical point**: classical PC-SAFT has no critical scaling. Bulk data above about Tr = 0.96 carries the model's structural error rather than parameter error and will dominate a relative objective — the bundled water quasi-data stops at 620 K for psat/rho (Tr = 0.958) while γ runs to 640 K.
+- **Validated** in `tests/test_pareto.py` against Tables 1 and 2 of the paper: water 2B/3B/4C reproduce AAD_DFT = 1.62/1.16/1.84 mN/m against the published 1.59/1.14/1.81, and the scheme ranking (4C best bulk, 3B best interface) holds.
 
 ### Binary k_ij fitting (`src/fit_pcsaft/_binary/`)
 
@@ -72,14 +95,28 @@ feos.PhaseEquilibrium.pure(eos, T * si.KELVIN).liquid.mass_density() / (si.KILOG
 
 ### Defaults
 
-- Weights: `psat=3.0`, `rho=2.0`, `hvap=1.0`
+- Weights: `psat=3.0`, `rho=2.0`, `hvap=1.0`, `sft=1.0`
+- Default surface tension unit: mN/m
 - Default CSV units: K, kPa, kg/m³, kJ/mol; viscosity: K, MPa, Pa·s
 - Multi-start initial sets: 6 for non-associating, 8 for associating
 - mu is **never initialized at 0.0** (dipole Jacobian is identically zero there)
 
 ### Data format
 
-CSVs: first column = temperature, second column = property. No header required; `polars` reads them directly.
+CSVs **require a header**. Column names are normalised through `_COL_ALIASES` in `_csv.py` and validated against a `CsvSchema`; unrecognised columns are dropped silently. Aliases carrying unit suffixes (`psat_kPa`, `rho_kg_m3`) are name hints only — **no numeric conversion happens in the loaders**. Units are carried entirely by the `*_unit` keyword arguments into the `Units` dataclass and applied at prediction time.
+
+### Reference (quasi-)data
+
+The water files under `examples/data/{psat,density,surface_tension}/water.csv` are quasi-data, following the paper's own practice of discretising correlations so the fit is not biased toward temperature ranges where raw measurements happen to be dense. Regenerate with:
+
+```bash
+uv run python examples/data/generate_water_reference.py
+```
+
+- **psat, rho** — IAPWS-95, evaluated through feos' own `EquationOfState.multiparameter` using the CoolProp coefficient database vendored at `examples/data/parameters/coolprop_multiparameter.json` (124 fluids). No extra dependency, and the reference and the PC-SAFT model are computed by the same library.
+- **γ** — IAPWS R1-76(2014); IAPWS-95 does not provide surface tension. Constants verified verbatim against the [published release](https://iapws.org/public/documents/CH-L9/Surf-H2O-2014.pdf); the equation reproduces its Table 1 column 4 at 0.01/25/200/250/300/350/370 °C.
+
+**Do not hand-write reference correlations from memory.** feos' multiparameter EOS plus that JSON covers any of the 124 fluids; reach for it instead.
 
 ### JSON parameter files
 

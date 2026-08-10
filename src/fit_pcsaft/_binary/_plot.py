@@ -447,7 +447,7 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
                     eos_T,
                     T_anchor_K * si.KELVIN,
                     pressure=pressure,
-                    moles=moles_a,
+                    composition=moles_a,
                     density_initialization="liquid",
                 )
                 anchor_pe = s_a.tp_flash(max_iter=500)
@@ -462,7 +462,7 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
                     eos_T,
                     T_K * si.KELVIN,
                     pressure=pressure,
-                    moles=moles,
+                    composition=moles,
                     density_initialization="liquid",
                 )
                 candidate = s.tp_flash(initial_state=anchor_pe)
@@ -1013,7 +1013,7 @@ def _sle_fixed_point(
                 eos,
                 temperature=T_K * si.KELVIN,
                 pressure=1.0 * si.BAR,
-                molefracs=np.array([x_iter, 1.0 - x_iter]),
+                composition=np.array([x_iter, 1.0 - x_iter]),
                 density_initialization="liquid",
             )
             ln_gamma = float(liq.ln_symmetric_activity_coefficient()[0])
@@ -1030,7 +1030,7 @@ def _sle_fixed_point(
                 eos,
                 temperature=T_K * si.KELVIN,
                 pressure=1.0 * si.BAR,
-                molefracs=np.array([1.0 - x_iter, x_iter]),
+                composition=np.array([1.0 - x_iter, x_iter]),
                 density_initialization="liquid",
             )
             ln_gamma = float(liq.ln_symmetric_activity_coefficient()[1])

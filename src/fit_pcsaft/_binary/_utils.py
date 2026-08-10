@@ -111,6 +111,38 @@ def _kij_at_T(coeffs: np.ndarray, T: float, t_ref: float) -> float:
     return result
 
 
+LOG_PENALTY = 10.0
+"""Residual returned for a failed prediction when log_residuals=True.
+
+In linear-x the failure penalty is 1.0, safely larger than any real
+|x_pred - x_exp| (both are mole fractions <= 1). In ln-space that no longer
+holds: |ln(x_pred/x_exp)| = 1.0 is only a factor of e, so a penalty of 1.0
+would make a *failed* flash score better than a converged-but-poor prediction,
+and least_squares would walk k_ij toward the region where the flash breaks.
+10.0 = a factor of 22000, above ln(1000) = 6.9, the worst residual a real
+(if bad) PC-SAFT water model produces on aqueous terpene solubilities.
+"""
+
+
+def _comp_resid(pred: float, exp: float, log_residuals: bool,
+                relative: bool = False) -> float:
+    """One composition residual, in ln-space or linear/relative space.
+
+    log_residuals=True returns ln(pred) - ln(exp) and *overrides* `relative`:
+    a log difference is already a relative measure. Non-finite or non-positive
+    predictions -- and non-positive experimental values, which cannot be
+    logged -- return the failure penalty for the active mode.
+
+    Sign convention matches _metrics.py: positive = model overshoots.
+    """
+    if log_residuals:
+        if not np.isfinite(pred) or pred <= 0.0 or not np.isfinite(exp) or exp <= 0.0:
+            return LOG_PENALTY
+        return float(np.log(pred) - np.log(exp))
+    if not np.isfinite(pred):
+        return 1.0
+    return (pred - exp) / max(exp, 1e-6) if relative else pred - exp
+
 
 def _fit_kij_polynomial(
     T_arr: np.ndarray,
@@ -151,8 +183,16 @@ def _fit_kij_polynomial(
             pred = sum(c * dT**j for j, c in enumerate(coeffs))
             return w_sqrt * (pred - kij_arr)
 
+        # The residual is linear in coeffs, so the Jacobian is the weighted
+        # Vandermonde matrix and is constant. Exact and free; scipy's default
+        # '2-point' would rebuild it numerically on every iteration.
+        _poly_jac_const = w_sqrt[:, None] * np.vander(
+            dT, effective_order + 1, increasing=True
+        )
+
         rob = _lsq(
             _poly_resid, x0_poly,
+            jac=lambda coeffs: _poly_jac_const,
             loss="cauchy", f_scale=0.01,
             ftol=1e-8, xtol=1e-8, gtol=1e-8,
         )
@@ -162,8 +202,21 @@ def _fit_kij_polynomial(
     return kij_coeffs, poly_resid
 
 
-def _make_binary_jac_fn(fun, n_params: int, h: float = 1e-012):
-    """Build a central-difference (3-point) Jacobian for a binary cost function."""
+def _make_binary_jac_fn(fun, n_params: int, h: float = 1e-6):
+    """Build a central-difference (3-point) Jacobian for a binary cost function.
+
+    ``h`` is absolute, not relative. The parameters are k_ij polynomial
+    coefficients: c0 is O(0.01-0.5) and higher coefficients are bounded to
+    +/-0.01, so a single absolute step suits every column. Higher-order
+    coefficients multiply dT (tens of kelvin), which amplifies their effect
+    on k_ij rather than shrinking it.
+
+    Do not lower h. The residuals come from an iterative flash/bubble-point
+    solve whose own convergence tolerance sets the noise floor: at h=1e-12
+    this returned 7.50 for an ethanol/water bubble-point derivative whose
+    true value is 4.4259 (69% error). Every h from 1e-8 to 1e-4 agrees to
+    5+ significant digits.
+    """
 
     def jac(x: np.ndarray) -> np.ndarray:
         cols = []
