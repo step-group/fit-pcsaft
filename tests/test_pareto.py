@@ -409,6 +409,50 @@ def test_front_raises_when_nothing_is_feasible():
         _front_from(X, R)
 
 
+def test_merge_keeps_the_best_of_each_run_and_sorts_by_aad_vle():
+    """Two runs that each found one end of the front make one front together.
+
+    This is the measured water case in miniature: run A owns the low-AAD_vle
+    basin, run B the low-AAD_sft one, and each has points the other dominates.
+    """
+    from fit_pcsaft._pure.pareto import _merge_fronts
+
+    X_a = np.array([[1.8, 2.35, 240.0], [1.8, 2.36, 241.0]])
+    F_a = np.array([[1.5, 1.5], [6.0, 1.4]])          # second point is poor
+    X_b = np.array([[1.2, 2.78, 272.0], [1.0, 2.86, 274.0]])
+    F_b = np.array([[2.5, 1.1], [12.8, 0.5]])
+
+    X, F = _merge_fronts([(X_a, F_a), (X_b, F_b)])
+
+    assert F.tolist() == [[1.5, 1.5], [2.5, 1.1], [12.8, 0.5]]
+    assert X[0].tolist() == [1.8, 2.35, 240.0]
+    assert X[1].tolist() == [1.2, 2.78, 272.0]
+
+
+def test_merge_of_one_run_is_that_run():
+    """n_restarts=1 must be the old code path, point for point."""
+    from fit_pcsaft._pure.pareto import _merge_fronts
+
+    X_a = np.array([[1.0, 3.0, 200.0], [2.0, 3.0, 210.0]])
+    F_a = np.array([[2.0, 5.0], [5.0, 1.0]])
+    X, F = _merge_fronts([(X_a, F_a)])
+
+    assert F.tolist() == F_a.tolist()
+    assert X.tolist() == X_a.tolist()
+
+
+def test_merge_drops_a_run_that_is_entirely_behind_another():
+    """The measured case: three of four MOEA/D runs contributed nothing."""
+    from fit_pcsaft._pure.pareto import _merge_fronts
+
+    good = (np.array([[1.0, 2.0, 3.0]]), np.array([[1.0, 1.0]]))
+    behind = (np.array([[9.0, 9.0, 9.0], [8.0, 8.0, 8.0]]),
+              np.array([[5.0, 5.0], [6.0, 4.0]]))
+    X, F = _merge_fronts([good, behind])
+
+    assert F.tolist() == [[1.0, 1.0]]
+
+
 def test_select_picks_the_tangent_point():
     F = np.array([[1.0, 6.0], [2.0, 2.0], [6.0, 1.0]])
     # ref_vle=2%, ref_sft=1 -> costs: 6.5, 3.0, 4.0 -> index 1

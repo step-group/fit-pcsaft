@@ -489,6 +489,25 @@ def _front_from(X: np.ndarray, R: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return X[keep][order], F[keep][order]
 
 
+def _merge_fronts(fronts) -> tuple[np.ndarray, np.ndarray]:
+    """One front from several independent searches.
+
+    Just the non-dominated filter over the concatenation — the runs are already
+    feasibility-filtered by ``_front_from``. Worth its own function because it
+    is where the point of restarts is: on water the front spans two disconnected
+    parameter basins (m about 1.83 with kappa_ab 0.19 below AAD_vle 2.2, and the
+    paper's m about 1.1 with kappa_ab 0.04 above 2.5), and a single search
+    commits to one of them in its first generations and then slides along it.
+    Merging is what produces a front covering both; nothing about one run's
+    internals can.
+    """
+    X = np.vstack([x for x, _ in fronts])
+    F = np.vstack([f for _, f in fronts])
+    keep = non_dominated(F)
+    order = np.argsort(F[keep, 0])
+    return X[keep][order], F[keep][order]
+
+
 def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options):
     """Fill the gaps the search leaves between adjacent front points.
 
@@ -778,6 +797,7 @@ def fit_pure_pareto(
     refine: int = 4,
     ref_vle: float = 2.0,
     ref_sft: float = 0.7,
+    n_restarts: int = 1,
 ) -> ParetoResult:
     """Generate the AAD_vle / AAD_sft pareto front with MOEA/D.
 
@@ -909,6 +929,20 @@ def fit_pure_pareto(
     0.01 for 3.6x the evaluations. That corner needs search budget, not
     arithmetic. Set refine=0 to see the raw population. See ``_densify``.
 
+    ``n_restarts`` runs the whole search that many times with a stepped seed and
+    unions the fronts, keeping the non-dominated points of the merge. Each
+    restart gets its own problem and algorithm, so its own generation-zero
+    sample and its own frozen objective scale. The point is not more budget --
+    ``n_gen`` buys that more cheaply -- but *coverage*. On water the front spans
+    two disconnected parameter basins, m about 1.83 with kappa_ab 0.19 below
+    AAD_vle 2.2 and the paper's m about 1.1 with kappa_ab 0.04 above 2.5, and a
+    single search commits to one of them early and then slides along it. No run
+    has ever covered both. ``_densify`` runs once on the merged front, not per
+    restart, so no evaluations are spent interpolating stretches the union is
+    about to discard. Under ``verbose`` each restart reports its objective scale
+    and the merge reports how many of each run's points survived it -- a run
+    contributing zero landed where another had already been.
+
     ``ref_vle`` and ``ref_sft`` scale the two objectives for the decomposition,
     and are the same eq-32 reference values ``select()`` takes: water (2, 0.7),
     small alcohols (2, 1.5), alcohols from 1-pentanol up (2, 3.0). They matter
@@ -947,55 +981,82 @@ def fit_pure_pareto(
     if bounds is None:
         bounds = _default_de_bounds(fit_mu, is_associative)
 
-    algorithm = _make_algorithm(pop_size, lhs)
     n_workers = _resolve_n_jobs(n_jobs)
     if verbose:
         print(
             f"MOEA/D: {pop_size} weight vectors x {n_gen} gen "
-            f"on {n_workers} process(es)"
+            f"x {n_restarts} restart(s) on {n_workers} process(es)"
         )
 
     with _worker_pool(
         n_workers, compound, spec, data, units, sft_options, quiet_solver
     ) as pool:
-        problem = _make_problem(
-            compound, spec, data, units, bounds, sft_options, pool=pool,
-            ref_vle=ref_vle, ref_sft=ref_sft,
-        )
-        with _silence_fd_stderr(quiet_solver):
-            res = minimize(
-                problem,
-                algorithm,
-                ("n_gen", n_gen),
-                seed=seed,
-                verbose=verbose,
-                save_history=False,
+        fronts = []
+        for r in range(n_restarts):
+            # Fresh both: pymoo mutates the algorithm's population and ideal
+            # point in place, and problem.scale is frozen after generation zero.
+            problem = _make_problem(
+                compound, spec, data, units, bounds, sft_options, pool=pool,
+                ref_vle=ref_vle, ref_sft=ref_sft,
             )
+            algorithm = _make_algorithm(pop_size, lhs)
+            with _silence_fd_stderr(quiet_solver):
+                res = minimize(
+                    problem,
+                    algorithm,
+                    ("n_gen", n_gen),
+                    seed=seed + r,
+                    verbose=verbose,
+                    save_history=False,
+                )
 
-        if res.X is None:
+            if res.X is None:
+                if verbose:
+                    print(f"restart {r + 1}: no parameter set at all, skipped")
+                continue
+            if verbose and problem.scale is not None:
+                print(
+                    f"restart {r + 1}: objective scale AAD_vle / "
+                    f"{problem.scale[0]:.3g}, AAD_sft / {problem.scale[1]:.3g}"
+                )
+            # res.F is in scaled, penalized space and cannot be converted back --
+            # a penalized row's true objectives are not recoverable from it. So
+            # the optimum set is evaluated once more for its real AAD_vle and
+            # AAD_sft. At most pop_size points, under 2% of a run's budget.
+            X_r = np.atleast_2d(np.asarray(res.X, dtype=float))
+            with _silence_fd_stderr(quiet_solver):
+                R_r = np.asarray(
+                    _map_evaluate(
+                        list(X_r), pool, compound, spec, data, units, sft_options
+                    ),
+                    dtype=float,
+                )
+            try:
+                fronts.append(_front_from(X_r, R_r))
+            except RuntimeError:
+                # One unlucky restart must not throw away the others' work.
+                if verbose:
+                    print(f"restart {r + 1}: no feasible point, skipped")
+
+        if not fronts:
             raise RuntimeError(
-                "MOEA/D found no parameter set at all: every candidate failed to "
-                "produce a vapour-liquid equilibrium or a stable interface. "
-                "Check the bounds and the association scheme."
+                "MOEA/D found no feasible parameter set in any of "
+                f"{n_restarts} restart(s): every candidate failed to produce a "
+                "vapour-liquid equilibrium or a stable interface. Check the "
+                "bounds and the association scheme."
             )
-        if verbose and problem.scale is not None:
+        X, F = _merge_fronts(fronts)
+        if verbose and len(fronts) > 1:
+            # How many of each run's points survive the union is the basin
+            # diagnostic: a run contributing 0 landed somewhere already covered.
+            # Exact tuple matching is safe here -- these are the same float
+            # objects that went into the merge, not recomputed values.
+            kept = {tuple(row) for row in F}
+            share = [sum(tuple(row) in kept for row in F_r) for _, F_r in fronts]
             print(
-                f"objective scale: AAD_vle / {problem.scale[0]:.3g}, "
-                f"AAD_sft / {problem.scale[1]:.3g}"
+                f"union: {sum(len(f) for _, f in fronts)} -> {len(F)} points, "
+                f"per-restart survivors {share}"
             )
-        # res.F is in scaled, penalized space and cannot be converted back --
-        # a penalized row's true objectives are not recoverable from it. So the
-        # optimum set is evaluated once more for its real AAD_vle and AAD_sft.
-        # At most pop_size points, under 2% of a real search budget.
-        X = np.atleast_2d(np.asarray(res.X, dtype=float))
-        with _silence_fd_stderr(quiet_solver):
-            R = np.asarray(
-                _map_evaluate(
-                    list(X), pool, compound, spec, data, units, sft_options
-                ),
-                dtype=float,
-            )
-        X, F = _front_from(X, R)
 
         if refine > 0 and len(X) > 1:
             n_before = len(F)
