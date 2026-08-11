@@ -160,7 +160,7 @@ def _objective_scale(
     first and is not enough: on water it leaves spans of 9.20 and 0.43, 21.5 to
     1, so all but about four of eighty vectors optimize AAD_vle alone and the
     interfacial end of the front is never resolved (AAD_sft bottomed out at 1.70
-    against NSGA-II's 0.78).
+    against the 0.45 a same-machine NSGA-II run reaches).
 
     The spans are taken from the feasible part of the first population, then
     frozen for the rest of the run — see ``_make_problem``. Never re-estimated,
@@ -828,8 +828,11 @@ def fit_pure_pareto(
         spans     nr=2     131   2.64-11.04    0.64 - 1.36     0.225    2.961
 
     The cap is what opened the front up: without it the AAD_sft extent came back
-    as 0.30 and 0.13 mN/m, and with it 0.73, reaching 0.64 -- past the 0.78 the
-    NSGA-II this replaced managed. See ``_capped_replacement`` for why.
+    as 0.30 and 0.13 mN/m, and with it 0.73, reaching 0.64. That is the whole
+    evidence, and it is internal to this data set -- an earlier version of this
+    paragraph added "past the 0.78 NSGA-II managed", which took 0.78 from the
+    other-hardware table above; a same-machine NSGA-II run reaches 0.45, so the
+    comparison ran the wrong way round. See ``_capped_replacement`` for why.
 
     A tempting further check is the parameter set ``.select()`` returns, against
     Rehner & Gross' published water 2B (their Table 1). **Do not lean on it.**
@@ -839,12 +842,23 @@ def fit_pure_pareto(
         selected     1.1346    2.8109   273.25   0.047221     3054.6
         deviation      13%       4%        0.5%      6%          2%
 
-    That looks like a hit, and it is not evidence. This front spans AAD_vle 2.64
-    to 11.04 while the paper's own operating point for these parameters is
-    2.14%, which falls outside it: the bundled quasi-data is saturation-only over
-    280-620 K where the paper also fitted liquid and supercritical densities to
-    1073 K. A front that never reaches the paper's conditions cannot be said to
-    have reproduced the paper's parameters, however close the numbers land.
+    That looks like a hit, and it is a coincidence of where one run's tangent
+    landed. The restarted front settles it, because unlike the single run it does
+    reach the paper's operating point -- it spans AAD_vle 1.42 to 8.57, so 2.14%
+    is inside it -- and at that point the parameters are nothing alike:
+
+                        m      sigma    eps_k    kappa_ab   eps_k_ab   AAD_sft
+        paper        1.0000    2.9375   272.03   0.044480     3125.3      1.59
+        ours @2.13   2.0331    2.2570   230.94   0.26527      2449.4      1.75
+        deviation     103%       23%      15%       497%         22%
+
+    Same bulk error, a different fluid: kappa_ab off by a factor of six and m by
+    a factor of two. So the degeneracy this whole two-objective exercise exists
+    to expose is *not* resolved by matching AAD_vle -- and a run whose selected
+    parameters happen to sit near Table 1 has told you nothing. The data differs
+    too (the bundled quasi-data is saturation-only over 280-620 K where the paper
+    also fitted liquid and supercritical densities to 1073 K), which is why the
+    two are not expected to agree in the first place.
 
     The cap's real evidence is the AAD_sft extent in the table above -- internal
     to this data set, and needing no cross-paper comparison to mean something.
@@ -857,28 +871,50 @@ def fit_pure_pareto(
     leaving that ratio at whatever the raw units happen to give is not a choice
     so much as an accident. See ``_objective_scale``.
 
-    Against NSGA-II re-measured on the same machine and budget (the table at the
-    top of this docstring was recorded elsewhere and is not comparable -- it
-    reports 301 s where the same run here takes 188 s):
+    Solver and restart count, re-measured on one machine (the table at the top of
+    this docstring was recorded elsewhere and is not comparable -- it reports
+    301 s where the same run here takes 188 s). A, B and C share a
+    9600-evaluation budget, so restarts are tested against depth and not against
+    extra compute; D is C with four times the budget:
 
-        solver                  points   AAD_vle       AAD_sft      eq 32   time
-        MOEA/D (spans, nr=2)       131   2.64-11.04    0.64-1.36    2.961   186s
-        NSGA-II                    241   2.47-13.81    0.45-1.17    2.842   188s
+        run                        points   AAD_vle      AAD_sft     eq 32   time
+        A  MOEA/D  80x120 x1          131   2.64-11.04   0.64-1.36   2.961   191s
+        B  NSGA-II 80x120 x1          241   2.47-13.81   0.45-1.17   2.842   187s
+        C  MOEA/D  80x30  x4           59   1.68- 9.11   0.40-1.88   2.781   258s
+        D  MOEA/D  80x120 x4          210   1.42- 8.57   0.36-1.82   2.685   729s
 
-    They are comparable. Front extent is a tie (AAD_sft span 0.726 against
-    0.718), eq 32 differs by 0.12 which is inside the run-to-run noise, and
-    there is no speed difference. NSGA-II reaches further into the interfacial
-    corner and comes back with more points at finer spacing -- though that last
-    one is confounded, since 241 points against 131 makes smaller gaps almost
-    automatic and says little about the raw search.
+    Extent is *not* how to read that table, and the previous version of this
+    paragraph read it that way -- it called A and B "comparable" because their
+    AAD_sft spans matched to 0.008. Fronts of equal span can sit entirely behind
+    one another. ``coverage`` is the honest comparison, the fraction of the
+    column's front dominated by the row's:
 
-    So the case for MOEA/D here is fidelity to the paper's method, not measured
-    superiority: Rehner & Gross used it (via pygmo) and recommend it for this
+                      A       B       C       D
+            A       0.00    0.25    0.19    0.07
+            B       0.63    0.00    0.25    0.10
+            C       0.58    0.54    0.00    0.00
+            D       0.67    0.85    1.00    0.00
+
+    Read three things off it. **A and B are not comparable**: NSGA-II dominates
+    63% of the shipped single-run MOEA/D front while being dominated on 25% of
+    its own, so the equal-extent reading was simply wrong. **Restarts beat depth
+    at equal budget**: C dominates 58% of A against A's 19% of C, on the same
+    9600 evaluations, and also gets the better of NSGA-II (0.54 against 0.25).
+    **And restarts plus budget dominate everything**: D covers 85% of NSGA-II's
+    front and 100% of C's, which is what four times the evaluations should buy.
+
+    Yet the union of all four still holds 232 points where D alone holds 210,
+    and A and B contribute 43 and 37 points that no other run found. Even D does
+    not cover the front by itself. Run more than one search.
+
+    None of this displaces the reason MOEA/D is here, which is fidelity to the
+    paper's method: Rehner & Gross used it (via pygmo) and recommend it for this
     problem class. Their stated reasons -- derivative-free, no dependence on
     initial values, tolerant of parameter sets with no VLE via a large returned
-    residual -- are satisfied by NSGA-II too. Anyone reopening this should
-    re-measure both rather than trusting either table; single samples, and the
-    9600-evaluation note above applies to every row.
+    residual -- are satisfied by NSGA-II too, and on a single run NSGA-II is
+    measurably ahead. What closes that gap is ``n_restarts``, not the solver.
+    Every row is one stochastic sample; re-measure rather than trusting the
+    table.
 
     Below a few thousand evaluations the search is still finding feasible
     ground rather than resolving the trade-off, and the front is a cluster
@@ -926,22 +962,57 @@ def fit_pure_pareto(
     What it does not fix is a genuine hole, where the straight line between two
     front points in parameter space does not track the front in objective space.
     Water keeps one, at the knee near AAD_vle = 2%: a second pass moves eq 32 by
-    0.01 for 3.6x the evaluations. That corner needs search budget, not
-    arithmetic. Set refine=0 to see the raw population. See ``_densify``.
+    0.01 for 3.6x the evaluations. That hole is now understood -- it is the
+    boundary between the two parameter basins described under ``n_restarts``,
+    and interpolating across it walks through neither, which is exactly why
+    arithmetic cannot close it. It needs a run that lands on the other side, not
+    more interpolation. Set refine=0 to see the raw population. See ``_densify``.
 
-    ``n_restarts`` runs the whole search that many times with a stepped seed and
-    unions the fronts, keeping the non-dominated points of the merge. Each
-    restart gets its own problem and algorithm, so its own generation-zero
-    sample and its own frozen objective scale. The point is not more budget --
-    ``n_gen`` buys that more cheaply -- but *coverage*. On water the front spans
-    two disconnected parameter basins, m about 1.83 with kappa_ab 0.19 below
-    AAD_vle 2.2 and the paper's m about 1.1 with kappa_ab 0.04 above 2.5, and a
-    single search commits to one of them early and then slides along it. No run
-    has ever covered both. ``_densify`` runs once on the merged front, not per
-    restart, so no evaluations are spent interpolating stretches the union is
-    about to discard. Under ``verbose`` each restart reports its objective scale
-    and the merge reports how many of each run's points survived it -- a run
-    contributing zero landed where another had already been.
+    ``bounds`` is the second-biggest knob and the one most often left alone. The
+    default box is deliberately wide -- m in [1, 20], sigma in [2, 6], eps/k in
+    [50, 700], kappa_ab in [1e-4, 0.5], eps_ab/k in [500, 5000] -- because it has
+    to hold alcohols and alkanes as well. For water every front point ever
+    measured here sits in m 1.03-1.84, sigma 2.35-2.87, eps/k 240-274, kappa_ab
+    0.035-0.19, eps_ab/k 2550-3200, so a box of
+
+        [(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)]
+
+    still contains the whole known front with margin at about 1/150th the
+    volume. Two warnings. That box was drawn *from the answer* and is a worked
+    example for water, not a recipe -- deriving one for a new compound the same
+    way is circular. And do not tighten kappa_ab towards the paper's 0.0445: the
+    low-AAD_vle end of the front lives at kappa_ab near 0.19, and a box that
+    excludes it deletes a real piece of the trade-off rather than a bad basin.
+
+    ``n_restarts`` is the biggest knob here and the reason this argument exists.
+    It runs the whole search that many times with a stepped seed and unions the
+    fronts, keeping the non-dominated points of the merge. Each restart gets its
+    own problem and algorithm, so its own generation-zero sample and its own
+    frozen objective scale.
+
+    The point is not more budget -- ``n_gen`` buys that more cheaply -- but
+    *coverage*. On water the front spans two disconnected parameter basins, m
+    about 1.83 with kappa_ab 0.19 below AAD_vle 2.2 and the paper's m about 1.1
+    with kappa_ab 0.04 above 2.5, and a single search commits to one of them in
+    its first generations and then slides along it. No single run has ever
+    covered both. That is also the "genuine hole" ``refine`` cannot close.
+
+    Measured at *equal total budget* -- 4 x (80 x 30 gen) against 1 x (80 x 120
+    gen), 9600 evaluations either way -- the restarted run dominates 58% of the
+    single deep run's front while conceding 19% of its own, and improves eq 32
+    from 2.961 to 2.781. Four restarts at full ``n_gen`` reach eq 32 2.685 and
+    dominate 85% of an NSGA-II front at the same per-run budget. See the
+    coverage matrix above.
+
+    Cost is linear in ``n_restarts``, so 4 x 120 gen is four searches, not a
+    cheaper one: prefer restarts over ``n_gen`` when the front looks patchy or
+    its ends look unconverged, and ``n_gen`` when the front is smooth but short.
+
+    ``_densify`` runs once on the merged front, not per restart, so no
+    evaluations go into interpolating stretches the union then discards. Under
+    ``verbose`` each restart reports its objective scale and the merge reports
+    how many of each run's points survived it -- a run contributing zero landed
+    where another had already been.
 
     ``ref_vle`` and ``ref_sft`` scale the two objectives for the decomposition,
     and are the same eq-32 reference values ``select()`` takes: water (2, 0.7),
