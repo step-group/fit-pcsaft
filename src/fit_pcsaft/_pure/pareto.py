@@ -8,19 +8,47 @@ and the arbitrariness of a weight choice becomes visible.
     objective 1 (eq 30)  AAD_vle = mean(AARD(psat), AARD(rho))  [%]
     objective 2 (eq 31)  AAD_sft = mean|gamma_calc - gamma_exp| [mN/m]
 
-Whether eq 30 averages the two AARDs or sums them is not legible in the
-published equation. It averages: the paper's own water PC-SAFT 2B parameters
-(Table 1) reproduce their AAD_vle = 2.14% (Table 2) only under the mean —
-they give 2.4% as a mean and 4.7% as a sum over a comparable temperature
-range.
+Eq 30 is read here as a *mean* of the two AARDs, not their sum. Written out, the
+equation looks like a sum of two separately-normalized terms,
+``(1/N_psat) sum|rd_psat| + (1/N_rho) sum|rd_rho|``, and that reading was tried.
+It cannot be what produced the paper's Table 2. Forward-evaluating the paper's
+own water 2B parameters (Table 1) against IAPWS-95 saturation data gives
+
+    AARD_psat = 4.56%    AARD_rho = 1.76%    ->  sum 6.32, mean 3.16
+
+against their reported AAD_vle = 2.14%. **AARD_psat alone already exceeds their
+whole reported value**, so no summed form can land on 2.14 for any parameter set
+that also reproduces their surface tension -- which these do, to within 0.03
+mN/m on all three association schemes.
+
+Nor is that psat error a data-range artefact to be trimmed away. Its relative
+deviation is a smooth systematic curve, +11.5% at 280 K, -5.4% at 373 K, +7.7%
+at 620 K -- worst at *both* ends, so truncating below the critical region barely
+moves it (4.56% over 280-620 K, still 3.70% cut back to 500 K). It is PC-SAFT's
+structural error for water.
+
+The mean is also what a single ``1/N_total`` average over all points reduces to
+whenever the two data sets are the same size, which they are here (23 and 23).
+That is the most likely reconciliation: with the paper's much larger density set
+(273-1073 K, liquid and supercritical) a pooled average would dilute the psat
+term well below either number above. Unverified against the published equation.
+
+The choice does not move the front. Dominance is invariant under a positive
+per-axis scaling, so the non-dominated set is identical, and ``_objective_scale``
+divides by an observed span that scales with it -- the values MOEA/D decomposes
+are unchanged. It changes the reported AAD_vle and, through it, where eq 32 puts
+its tangent.
 
 Absolute rather than relative deviation for gamma: it goes to zero at the
 critical point, where a relative error diverges and would dominate the fit.
 
-The front is generated with pymoo's NSGA-II. A derivative-free population method
+The front is generated with pymoo's MOEA/D. A derivative-free population method
 is required here: large regions of parameter space have no vapour-liquid
 equilibrium or no stable interface at all, and those points are handled by
-returning a large objective value rather than a gradient.
+returning a large objective value rather than a gradient. Decomposition rather
+than dominance ranking because MOEA/D gives every population slot its own weight
+vector, so the spread along the front is designed in rather than left to
+crowding distance and repaired afterwards.
 """
 
 from __future__ import annotations
@@ -47,6 +75,14 @@ _BIG = 1.0e6  # objective value where nothing at all could be evaluated
 # A dataset counts as evaluable when the model produced a finite value at more
 # than this fraction of its experimental points.
 _MIN_VALID_FRACTION = 0.5
+
+# Feasible points needed in generation zero before its spans are trusted to
+# scale the objectives; below this the eq-32 references are used instead.
+_MIN_SCALE_SAMPLE = 4
+
+# Neighbouring subproblems one offspring may take over in a generation --
+# MOEA/D-DE's nr (Li & Zhang 2009), pagmo's `limit`. See _capped_replacement.
+_N_REPLACE = 2
 
 
 def non_dominated(F: np.ndarray) -> np.ndarray:
@@ -80,6 +116,28 @@ def non_dominated(F: np.ndarray) -> np.ndarray:
     return keep
 
 
+def coverage(A: np.ndarray, B: np.ndarray) -> float:
+    """Fraction of ``B`` weakly dominated by some row of ``A`` (Zitzler C-metric).
+
+    ``coverage(A, B) == 1.0`` means every point of B is matched or beaten by a
+    point of A; ``0.0`` means none is. It is **asymmetric** and only means
+    something reported both ways round: two fronts can each cover part of the
+    other.
+
+    This exists because comparing fronts by their *extent* — the span of each
+    objective — is not a comparison at all, and this module made that mistake.
+    Of the four MOEA/D configurations measured on water, three had AAD_sft
+    extents of the same order as NSGA-II's while being 100% dominated by it.
+    Extent says how much of the trade-off a run resolved; coverage says whether
+    it resolved it in the right place.
+    """
+    A = np.atleast_2d(np.asarray(A, dtype=float))
+    B = np.atleast_2d(np.asarray(B, dtype=float))
+    le = (A[:, None, :] <= B[None, :, :]).all(axis=2)
+    lt = (A[:, None, :] < B[None, :, :]).any(axis=2)
+    return float((le & lt).any(axis=0).mean())
+
+
 def _argmin_scalarized(F: np.ndarray, ref_vle: float, ref_sft: float) -> int:
     """Index of the point minimising eq 32: AAD_vle/ref_vle + AAD_sft/ref_sft.
 
@@ -88,6 +146,81 @@ def _argmin_scalarized(F: np.ndarray, ref_vle: float, ref_sft: float) -> int:
     """
     F = np.asarray(F, dtype=float)
     return int(np.argmin(F[:, 0] / ref_vle + F[:, 1] / ref_sft))
+
+
+def _objective_scale(
+    R: np.ndarray, ref_vle: float, ref_sft: float
+) -> tuple[float, float]:
+    """Divisors that put the two objectives on comparable spans.
+
+    MOEA/D assigns each weight vector a subproblem via
+    ``max(w1*|f1 - z1|, w2*|f2 - z2|)``, so it is the *spans* of the two
+    objectives that decide how many weight vectors can reach each end of the
+    front — not their absolute values. Scaling by the eq-32 references was tried
+    first and is not enough: on water it leaves spans of 9.20 and 0.43, 21.5 to
+    1, so all but about four of eighty vectors optimize AAD_vle alone and the
+    interfacial end of the front is never resolved (AAD_sft bottomed out at 1.70
+    against the 0.45 a same-machine NSGA-II run reaches).
+
+    The spans are taken from the feasible part of the first population, then
+    frozen for the rest of the run — see ``_make_problem``. Never re-estimated,
+    because pymoo's ``MOEAD._replace`` compares an offspring's fresh F against
+    stored population F: a scale that drifted between generations would make
+    those comparisons meaningless.
+
+    Upper end from the third quartile rather than the maximum. Generation zero
+    is an LHS sweep of the whole box, so a feasible-but-hopeless set with AAD_vle
+    in the thousands is normal, and one of them would otherwise set the scale for
+    the entire run. A 90th percentile is not enough on its own: with the handful
+    of feasible points a small population yields, it interpolates into the tail
+    and picks the outlier up anyway. Measured from the minimum, which is a real
+    quantity here — it is where the ideal point sits. The eq-32 references are
+    the fallback when too little of generation zero was feasible to estimate
+    anything.
+    """
+    ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
+    if int(ok.sum()) < _MIN_SCALE_SAMPLE:
+        return ref_vle, ref_sft
+    F = R[ok, :2]
+    span = np.percentile(F, 75.0, axis=0) - np.min(F, axis=0)
+    fallback = np.array([ref_vle, ref_sft], dtype=float)
+    span = np.where(span > 0.0, span, fallback)
+    return float(span[0]), float(span[1])
+
+
+def _penalize(R: np.ndarray, scale_vle: float, scale_sft: float) -> np.ndarray:
+    """Scaled objectives with the feasibility violation folded in.
+
+    pymoo's MOEA/D refuses a constrained problem outright (``moead.py``: its
+    ``_setup`` asserts ``not problem.has_constraints()``), so the graded
+    violation ``_evaluate_point`` reports cannot be handed over as ``out["G"]``.
+    It is added to both objectives instead. Feasible rows (``violation <= 0``)
+    are untouched, so the front itself is unaffected; infeasible ones stay
+    *rankable among themselves*, which is the whole point of grading them —
+    about 80% of a wide bounds box has no stable interface, and an optimizer
+    that cannot tell "failed two of twenty-five gamma points" from "no VLE at
+    all" has no direction to climb out.
+
+    The division is not cosmetic. MOEA/D decomposes with Tchebicheff, which
+    pymoo applies to raw objective values — it is handed an ideal point but
+    never a nadir point, so nothing normalizes the two axes, and a weight vector
+    can only reach the end of the front whose term can win the ``max``. The
+    divisors come from ``_objective_scale``; only their *ratio* matters, since a
+    common factor rescales every subproblem equally.
+
+    No shift is applied, deliberately. Tchebicheff works on ``|F - ideal|`` and
+    MOEA/D tracks the ideal from the F values it is given, so subtracting a
+    constant would move both by the same amount and change nothing.
+
+    A degenerate row can carry ``_BIG`` while still reporting ``violation <= 0``
+    (an infinite AARD over points that all evaluated). Such a row can outrank a
+    mildly infeasible one here. That is deliberate: both are dropped by the
+    feasibility filter in ``_front_from``, and pushing the search away from a
+    ``_BIG`` point is wanted either way.
+    """
+    R = np.atleast_2d(np.asarray(R, dtype=float))
+    F = R[:, :2] / np.array([scale_vle, scale_sft], dtype=float)
+    return F + (_BIG * np.maximum(R[:, 2], 0.0))[:, None]
 
 
 def _evaluate_point(
@@ -131,6 +264,8 @@ def _evaluate_point(
         _fraction(m_psat, len(data.T_psat)), _fraction(m_rho, len(data.T_rho))
     )
 
+    # Mean of the two AARDs, equivalently a single 1/N_total average when the
+    # two data sets are the same size. NOT their sum -- see the module docstring.
     aad_vle = 0.5 * (m_psat.aard_pct + m_rho.aard_pct)
     if not np.isfinite(aad_vle):
         aad_vle = _BIG
@@ -177,7 +312,7 @@ def _silence_fd_stderr(active: bool = True):
     feos panics inside Rust worker threads when the DFT solver fails to
     converge ("IterationFailed(...)"). Those panics are already handled — the
     objective returns _BIG — but Rust writes the panic message straight to fd 2,
-    where no Python-level redirect can reach it. Over thousands of NSGA-II
+    where no Python-level redirect can reach it. Over thousands of search
     evaluations that is thousands of lines of noise about failures we expect.
 
     This suppresses the whole fd, so genuine stderr output from the wrapped
@@ -279,14 +414,26 @@ def _worker_pool(n_jobs, compound, spec, data, units, sft_options, quiet):
         pool.join()
 
 
-def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None):
-    """Population-at-a-time problem.
+def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
+                  ref_vle: float = 2.0, ref_sft: float = 0.7):
+    """Population-at-a-time problem, unconstrained by necessity.
 
     Deliberately a vectorized ``Problem`` rather than pymoo's
     ``ElementwiseProblem`` + ``StarmapParallelization``: that route pickles the
     problem itself to each worker, which fails here because the problem closes
     over a ``feos.Identifier``. Taking the whole population and mapping it
     ourselves keeps every feos object in the process that made it.
+
+    ``n_ieq_constr`` is 0 and not 1 because MOEA/D asserts on any constrained
+    problem. The feasibility information is not lost — ``_penalize`` carries it
+    in the objectives instead.
+
+    ``ref_vle`` and ``ref_sft`` are only a fallback here. The objectives are
+    normally divided by the spans of the first population (``_objective_scale``),
+    which is what actually lets weight vectors reach both ends of the front. The
+    estimate is taken once and frozen: ``MOEAD._replace`` compares a fresh
+    offspring's F against F stored on the population, so a scale that moved
+    between generations would silently corrupt every replacement decision.
     """
     from pymoo.core.problem import Problem
 
@@ -295,20 +442,18 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None):
 
     class PcSaftBiObjective(Problem):
         def __init__(self):
-            super().__init__(n_var=len(bounds), n_obj=2, n_ieq_constr=1, xl=xl, xu=xu)
+            super().__init__(n_var=len(bounds), n_obj=2, xl=xl, xu=xu)
+            self.scale = None
 
         def _evaluate(self, X, out, *args, **kwargs):
             rows = [np.asarray(x, dtype=float) for x in np.atleast_2d(X)]
-            if pool is None:
-                results = [
-                    _evaluate_point(x, compound, spec, data, units, sft_options)
-                    for x in rows
-                ]
-            else:
-                results = pool.map(_worker_evaluate, rows)
-            R = np.asarray(results, dtype=float)
-            out["F"] = R[:, :2]
-            out["G"] = R[:, 2:3]
+            R = np.asarray(
+                _map_evaluate(rows, pool, compound, spec, data, units, sft_options),
+                dtype=float,
+            )
+            if self.scale is None:
+                self.scale = _objective_scale(R, ref_vle, ref_sft)
+            out["F"] = _penalize(R, *self.scale)
 
     return PcSaftBiObjective()
 
@@ -323,14 +468,56 @@ def _map_evaluate(rows, pool, compound, spec, data, units, sft_options):
     return pool.map(_worker_evaluate, rows)
 
 
-def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options):
-    """Fill the gaps NSGA-II leaves between adjacent front points.
+def _front_from(X: np.ndarray, R: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The front, from parameter vectors and their true (unscaled) evaluations.
 
-    NSGA-II returns a population, not a curve. Crowding distance preserves
-    diversity but nothing forces even spacing, so the front comes back as
-    clusters of near-identical parameter sets separated by voids — on water,
-    eight of eighty points sat within 0.2% of each other on the AAD_vle axis
-    while a 2.8% stretch of the same axis held none.
+    Filtering feasibility here is what the pymoo constraint used to do. Note the
+    order: infeasible rows are dropped *before* the dominance test, so a good
+    parameter set is never discarded for being dominated by a set that could not
+    be evaluated in the first place.
+    """
+    ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
+    if not ok.any():
+        raise RuntimeError(
+            "MOEA/D returned only infeasible or degenerate solutions: no "
+            "candidate produced both a vapour-liquid equilibrium and a stable "
+            "interface. Check the bounds and the association scheme."
+        )
+    X, F = X[ok], R[ok, :2]
+    keep = non_dominated(F)
+    order = np.argsort(F[keep, 0])
+    return X[keep][order], F[keep][order]
+
+
+def _merge_fronts(fronts) -> tuple[np.ndarray, np.ndarray]:
+    """One front from several independent searches.
+
+    Just the non-dominated filter over the concatenation — the runs are already
+    feasibility-filtered by ``_front_from``. Worth its own function because it
+    is where the point of restarts is: on water the front spans two disconnected
+    parameter basins (m about 1.83 with kappa_ab 0.19 below AAD_vle 2.2, and the
+    paper's m about 1.1 with kappa_ab 0.04 above 2.5), and a single search
+    commits to one of them in its first generations and then slides along it.
+    Merging is what produces a front covering both; nothing about one run's
+    internals can.
+    """
+    X = np.vstack([x for x, _ in fronts])
+    F = np.vstack([f for _, f in fronts])
+    keep = non_dominated(F)
+    order = np.argsort(F[keep, 0])
+    return X[keep][order], F[keep][order]
+
+
+def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options):
+    """Fill the gaps the search leaves between adjacent front points.
+
+    MOEA/D spaces its population by construction — one weight vector per slot —
+    so the clustering that made this pass essential under NSGA-II (on water,
+    eight of eighty points within 0.2% of each other on the AAD_vle axis, and a
+    2.8% stretch of that axis holding none) is largely gone: measured on water,
+    median normalized spacing 0.0084 and largest gap 0.093. The pass is still
+    worth its cost for the second reason below: it is what reveals that a raw
+    front is not always a front.
 
     The voids are a sampling artefact, not structure: every point obtained by
     linearly interpolating the parameter vectors across them is itself
@@ -403,6 +590,80 @@ def _initial_sampling(use_lhs: bool):
     return FloatRandomSampling()
 
 
+def _ref_dirs(pop_size: int) -> np.ndarray:
+    """The weight-vector fan MOEA/D decomposes against, one per population slot.
+
+    Das-Dennis on two objectives returns ``n_partitions + 1`` vectors, so
+    ``pop_size - 1`` partitions keeps ``pop_size`` meaning what it meant under
+    NSGA-II. pymoo needs these up front: ``MOEAD.__init__`` reads
+    ``len(ref_dirs)`` to set the population size before its own ``None``
+    fallback in ``_setup`` ever runs.
+    """
+    from pymoo.util.ref_dirs import get_reference_directions
+
+    if pop_size < 2:
+        raise ValueError(f"MOEA/D needs at least 2 weight vectors, got {pop_size}")
+    return get_reference_directions("uniform", 2, n_partitions=pop_size - 1)
+
+
+def _capped_replacement(better, n_replace, random_state):
+    """Which of the neighbour slots an offspring is allowed to take.
+
+    MOEA/D-DE (Li & Zhang 2009) caps this at ``nr``; pagmo exposes it as
+    ``limit`` and defaults it to 2 whenever ``preserve_diversity`` is on, which
+    is the configuration Rehner & Gross used. **pymoo has no cap at all** — its
+    ``MOEAD._replace`` assigns the offspring to every neighbour it beats, so one
+    good solution can occupy all ``n_neighbors`` (20) subproblems in a single
+    generation. Diversity collapses and the front contracts onto whichever
+    region happened to be found first. Measured on water without the cap, the
+    AAD_sft extent came back as 0.30 and then 0.13 mN/m under two different
+    objective scalings, against NSGA-II's ~1.2.
+
+    Selection among the improved slots is random, as the paper specifies: it
+    scans the neighbourhood in random order and stops after nr replacements.
+    Taking the first nr, or greedily the nr it improves most, would put the
+    same bias back.
+    """
+    if len(better) <= n_replace:
+        return better
+    return random_state.permutation(better)[:n_replace]
+
+
+def _make_algorithm(pop_size: int, lhs: bool):
+    """MOEA/D, in the variant that evaluates a whole population at a time.
+
+    ``ParallelMOEAD``, not ``MOEAD``: the plain class is a ``LoopwiseAlgorithm``
+    whose ``_next`` yields a single offspring per step, which would hand the
+    worker pool batches of one and give back all of the 4.3x that pool buys.
+    ``ParallelMOEAD`` overrides ``_infill``/``_advance`` to mate the whole
+    population first, and inherits ``n_offsprings = pop_size``, so one
+    generation is one ``pool.map`` — the same rhythm NSGA-II had.
+
+    Subclassed to add the replacement cap pymoo leaves out; see
+    ``_capped_replacement``. The body below is pymoo's own ``_replace`` with
+    that one line changed.
+    """
+    from pymoo.algorithms.moo.moead import ParallelMOEAD
+
+    class _CappedMOEAD(ParallelMOEAD):
+        n_replace = _N_REPLACE
+
+        def _replace(self, k, off):
+            pop = self.pop
+            N = self.neighbors[k]
+            FV = self.decomposition.do(
+                pop[N].get("F"), weights=self.ref_dirs[N, :], ideal_point=self.ideal
+            )
+            off_FV = self.decomposition.do(
+                off.F[None, :], weights=self.ref_dirs[N, :], ideal_point=self.ideal
+            )
+            better = np.where(off_FV < FV)[0]
+            take = _capped_replacement(better, self.n_replace, self.random_state)
+            pop[N[take]] = off
+
+    return _CappedMOEAD(_ref_dirs(pop_size), sampling=_initial_sampling(lhs))
+
+
 @dataclass(frozen=True)
 class ParetoResult:
     """The pareto front of a bi-objective PC-SAFT fit.
@@ -465,7 +726,7 @@ class ParetoResult:
             fun=np.array([cost]),
             x=params_vec,
             success=True,
-            message=f"NSGA-II front point {i} (ref_vle={ref_vle}, ref_sft={ref_sft})",
+            message=f"MOEA/D front point {i} (ref_vle={ref_vle}, ref_sft={ref_sft})",
             nfev=len(self.F),
         )
         return FitResult(
@@ -534,18 +795,126 @@ def fit_pure_pareto(
     lhs: bool = True,
     n_jobs: int = -1,
     refine: int = 4,
+    ref_vle: float = 2.0,
+    ref_sft: float = 0.7,
+    n_restarts: int = 1,
 ) -> ParetoResult:
-    """Generate the AAD_vle / AAD_sft pareto front with NSGA-II.
+    """Generate the AAD_vle / AAD_sft pareto front with MOEA/D.
 
     Cost is ``pop_size * n_gen`` objective evaluations, each roughly 120 ms at
     sensible parameters and up to 1 s where the VLE solve fails. Budget decides
     front quality far more than anything else; measured on water (2B, 14
     workers), best-of-front and the largest hole in it:
 
+    The table below was measured under NSGA-II, before the switch to MOEA/D. The
+    cost per evaluation is a property of the model, not the solver, so the
+    evals/time relationship still holds; the points and max-gap columns describe
+    the old solver's front shape.
+
         evals   points   AAD_vle   AAD_sft   max gap   time
          1200       32      9.47      1.12      4.37     56s
          3600       47      2.27      0.70     19.22    127s
          9600       80      1.44      0.78      2.82    301s
+
+    MOEA/D at the same 9600-evaluation budget (pop 80 x 120 gen, refine=4, 14
+    workers), measured on water while settling the two knobs that turned out to
+    matter -- the neighbour-replacement cap and the objective scaling:
+
+        scaling   cap   points   AAD_vle       AAD_sft       max gap   eq 32
+        eq-32     no       190   1.54-19.94    1.70 - 2.00     0.093    3.620
+        spans     no        70   1.48-45.60    1.37 - 1.50     0.685    2.876
+        raw       nr=2      71   2.24-71.95    1.68 - 2.71     0.532    4.988
+        eq-32     nr=2     105   1.89-12.05    1.28 - 2.22     0.278    3.082
+        spans     nr=2     131   2.64-11.04    0.64 - 1.36     0.225    2.961
+
+    The cap is what opened the front up: without it the AAD_sft extent came back
+    as 0.30 and 0.13 mN/m, and with it 0.73, reaching 0.64. That is the whole
+    evidence, and it is internal to this data set -- an earlier version of this
+    paragraph added "past the 0.78 NSGA-II managed", which took 0.78 from the
+    other-hardware table above; a same-machine NSGA-II run reaches 0.45, so the
+    comparison ran the wrong way round. See ``_capped_replacement`` for why.
+
+    A tempting further check is the parameter set ``.select()`` returns, against
+    Rehner & Gross' published water 2B (their Table 1). **Do not lean on it.**
+
+                        m      sigma    eps_k    kappa_ab   eps_k_ab
+        paper        1.0000    2.9375   272.03   0.044480     3125.3
+        selected     1.1346    2.8109   273.25   0.047221     3054.6
+        deviation      13%       4%        0.5%      6%          2%
+
+    That looks like a hit, and it is a coincidence of where one run's tangent
+    landed. The restarted front settles it, because unlike the single run it does
+    reach the paper's operating point -- it spans AAD_vle 1.42 to 8.57, so 2.14%
+    is inside it -- and at that point the parameters are nothing alike:
+
+                        m      sigma    eps_k    kappa_ab   eps_k_ab   AAD_sft
+        paper        1.0000    2.9375   272.03   0.044480     3125.3      1.59
+        ours @2.13   2.0331    2.2570   230.94   0.26527      2449.4      1.75
+        deviation     103%       23%      15%       497%         22%
+
+    Same bulk error, a different fluid: kappa_ab off by a factor of six and m by
+    a factor of two. So the degeneracy this whole two-objective exercise exists
+    to expose is *not* resolved by matching AAD_vle -- and a run whose selected
+    parameters happen to sit near Table 1 has told you nothing. The data differs
+    too (the bundled quasi-data is saturation-only over 280-620 K where the paper
+    also fitted liquid and supercritical densities to 1073 K), which is why the
+    two are not expected to agree in the first place.
+
+    The cap's real evidence is the AAD_sft extent in the table above -- internal
+    to this data set, and needing no cross-paper comparison to mean something.
+
+    The scaling then decides where along the trade-off that coverage sits, and
+    the ranking above is the whole argument for not running raw objectives even
+    though pagmo does: raw is the worst of the three by a wide margin. Tchebicheff
+    scores by ``max(w1*|f1 - z1|, w2*|f2 - z2|)``, so which end of the front a
+    weight vector can reach depends on the ratio of the objective spans, and
+    leaving that ratio at whatever the raw units happen to give is not a choice
+    so much as an accident. See ``_objective_scale``.
+
+    Solver and restart count, re-measured on one machine (the table at the top of
+    this docstring was recorded elsewhere and is not comparable -- it reports
+    301 s where the same run here takes 188 s). A, B and C share a
+    9600-evaluation budget, so restarts are tested against depth and not against
+    extra compute; D is C with four times the budget:
+
+        run                        points   AAD_vle      AAD_sft     eq 32   time
+        A  MOEA/D  80x120 x1          131   2.64-11.04   0.64-1.36   2.961   191s
+        B  NSGA-II 80x120 x1          241   2.47-13.81   0.45-1.17   2.842   187s
+        C  MOEA/D  80x30  x4           59   1.68- 9.11   0.40-1.88   2.781   258s
+        D  MOEA/D  80x120 x4          210   1.42- 8.57   0.36-1.82   2.685   729s
+
+    Extent is *not* how to read that table, and the previous version of this
+    paragraph read it that way -- it called A and B "comparable" because their
+    AAD_sft spans matched to 0.008. Fronts of equal span can sit entirely behind
+    one another. ``coverage`` is the honest comparison, the fraction of the
+    column's front dominated by the row's:
+
+                      A       B       C       D
+            A       0.00    0.25    0.19    0.07
+            B       0.63    0.00    0.25    0.10
+            C       0.58    0.54    0.00    0.00
+            D       0.67    0.85    1.00    0.00
+
+    Read three things off it. **A and B are not comparable**: NSGA-II dominates
+    63% of the shipped single-run MOEA/D front while being dominated on 25% of
+    its own, so the equal-extent reading was simply wrong. **Restarts beat depth
+    at equal budget**: C dominates 58% of A against A's 19% of C, on the same
+    9600 evaluations, and also gets the better of NSGA-II (0.54 against 0.25).
+    **And restarts plus budget dominate everything**: D covers 85% of NSGA-II's
+    front and 100% of C's, which is what four times the evaluations should buy.
+
+    Yet the union of all four still holds 232 points where D alone holds 210,
+    and A and B contribute 43 and 37 points that no other run found. Even D does
+    not cover the front by itself. Run more than one search.
+
+    None of this displaces the reason MOEA/D is here, which is fidelity to the
+    paper's method: Rehner & Gross used it (via pygmo) and recommend it for this
+    problem class. Their stated reasons -- derivative-free, no dependence on
+    initial values, tolerant of parameter sets with no VLE via a large returned
+    residual -- are satisfied by NSGA-II too, and on a single run NSGA-II is
+    measurably ahead. What closes that gap is ``n_restarts``, not the solver.
+    Every row is one stochastic sample; re-measure rather than trusting the
+    table.
 
     Below a few thousand evaluations the search is still finding feasible
     ground rather than resolving the trade-off, and the front is a cluster
@@ -559,6 +928,13 @@ def fit_pure_pareto(
 
     Returns a ``ParetoResult``; call ``.select(ref_vle, ref_sft)`` on it to get
     a single ``FitResult``.
+
+    ``hvap_path`` is **reported but not optimized**, which is easy to misread.
+    Enthalpy of vaporization is loaded into ``data`` and shows up in the metrics
+    of whatever ``.select()`` returns, so it is a useful cross-check on a fitted
+    point. It never enters either objective: eq 30 is psat and rho only, and
+    ``_evaluate_point`` does not look at ``data.T_hvap`` at all. Passing it will
+    not pull the front towards better hvap.
 
     ``quiet_solver`` suppresses fd-level stderr for the duration of the search,
     hiding the Rust panic messages feos emits from worker threads when the DFT
@@ -580,10 +956,11 @@ def fit_pure_pareto(
         80 -> 209 points, median objective-space spacing 3.4x finer, 316
         evaluations, 7 s on 14 workers.
 
-    It does two things. The obvious one is resolution: NSGA-II's crowding
-    distance keeps diversity but never forces even spacing, so its output is
-    clusters separated by voids, and every point interpolated across a void is
-    itself non-dominated -- the voids are a sampling artefact. The less obvious
+    It does two things. The obvious one is resolution: MOEA/D spreads its
+    population across weight vectors, and measured on water its raw output is
+    already evenly spaced where NSGA-II's was clusters-and-voids, so this pass
+    buys much less than it used to -- every point interpolated across a void is
+    itself non-dominated, and there are far fewer voids. The less obvious
     one is correctness: the raw front is not always a front. On water the fill
     dominated a whole stretch of it, moving the eq-32 tangent point from
     (1.44%, 1.62) to (1.90%, 1.29) -- eq 32 from 3.04 to 2.79. Trust a raw
@@ -592,10 +969,69 @@ def fit_pure_pareto(
     What it does not fix is a genuine hole, where the straight line between two
     front points in parameter space does not track the front in objective space.
     Water keeps one, at the knee near AAD_vle = 2%: a second pass moves eq 32 by
-    0.01 for 3.6x the evaluations. That corner needs search budget, not
-    arithmetic. Set refine=0 to see the raw population. See ``_densify``.
+    0.01 for 3.6x the evaluations. That hole is now understood -- it is the
+    boundary between the two parameter basins described under ``n_restarts``,
+    and interpolating across it walks through neither, which is exactly why
+    arithmetic cannot close it. It needs a run that lands on the other side, not
+    more interpolation. Set refine=0 to see the raw population. See ``_densify``.
+
+    ``bounds`` is the second-biggest knob and the one most often left alone. The
+    default box is deliberately wide -- m in [1, 20], sigma in [2, 6], eps/k in
+    [50, 700], kappa_ab in [1e-4, 0.5], eps_ab/k in [500, 5000] -- because it has
+    to hold alcohols and alkanes as well. For water every front point ever
+    measured here sits in m 1.03-1.84, sigma 2.35-2.87, eps/k 240-274, kappa_ab
+    0.035-0.19, eps_ab/k 2550-3200, so a box of
+
+        [(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)]
+
+    still contains the whole known front with margin at about 1/150th the
+    volume. Two warnings. That box was drawn *from the answer* and is a worked
+    example for water, not a recipe -- deriving one for a new compound the same
+    way is circular. And do not tighten kappa_ab towards the paper's 0.0445: the
+    low-AAD_vle end of the front lives at kappa_ab near 0.19, and a box that
+    excludes it deletes a real piece of the trade-off rather than a bad basin.
+
+    ``n_restarts`` is the biggest knob here and the reason this argument exists.
+    It runs the whole search that many times with a stepped seed and unions the
+    fronts, keeping the non-dominated points of the merge. Each restart gets its
+    own problem and algorithm, so its own generation-zero sample and its own
+    frozen objective scale.
+
+    The point is not more budget -- ``n_gen`` buys that more cheaply -- but
+    *coverage*. On water the front spans two disconnected parameter basins, m
+    about 1.83 with kappa_ab 0.19 below AAD_vle 2.2 and the paper's m about 1.1
+    with kappa_ab 0.04 above 2.5, and a single search commits to one of them in
+    its first generations and then slides along it. No single run has ever
+    covered both. That is also the "genuine hole" ``refine`` cannot close.
+
+    Measured at *equal total budget* -- 4 x (80 x 30 gen) against 1 x (80 x 120
+    gen), 9600 evaluations either way -- the restarted run dominates 58% of the
+    single deep run's front while conceding 19% of its own, and improves eq 32
+    from 2.961 to 2.781. Four restarts at full ``n_gen`` reach eq 32 2.685 and
+    dominate 85% of an NSGA-II front at the same per-run budget. See the
+    coverage matrix above.
+
+    Cost is linear in ``n_restarts``, so 4 x 120 gen is four searches, not a
+    cheaper one: prefer restarts over ``n_gen`` when the front looks patchy or
+    its ends look unconverged, and ``n_gen`` when the front is smooth but short.
+
+    ``_densify`` runs once on the merged front, not per restart, so no
+    evaluations go into interpolating stretches the union then discards. Under
+    ``verbose`` each restart reports its objective scale and the merge reports
+    how many of each run's points survived it -- a run contributing zero landed
+    where another had already been.
+
+    ``ref_vle`` and ``ref_sft`` scale the two objectives for the decomposition,
+    and are the same eq-32 reference values ``select()`` takes: water (2, 0.7),
+    small alcohols (2, 1.5), alcohols from 1-pentanol up (2, 3.0). They matter
+    more here than a scaling factor usually would. MOEA/D's Tchebicheff
+    decomposition is applied to raw objective values -- pymoo hands it an ideal
+    point but never a nadir point -- so without this the axis with the larger
+    numeric span dominates every weight vector and the front bunches into one
+    corner. They do not change the returned objectives, which are always in %
+    and mN/m. Pass the same pair to ``select()`` that you passed here, or the
+    point picked off the front will not be the one the search resolved for.
     """
-    from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.optimize import minimize
 
     from fit_pcsaft._pure.fit import _default_de_bounds, _setup_pure_fit
@@ -609,7 +1045,13 @@ def fit_pure_pareto(
         hvap_path=hvap_path,
         sft_path=sft_path,
         mu=mu, q=q, na=na, nb=nb,
-        psat_weight=3.0, density_weight=2.0, hvap_weight=1.0, sft_weight=1.0,
+        # Inert here, and required by the shared signature, so they are passed
+        # neutral. They only shape `cost_fn`, which this driver discards along
+        # with `config`: the pareto objectives come from `_evaluate_point`,
+        # which weights nothing. They used to read 3.0/2.0/1.0, copied from
+        # `fit_pure`, which made it look as though psat was weighted 3x in the
+        # front. It never was.
+        psat_weight=1.0, density_weight=1.0, hvap_weight=1.0,
         extrapolate_psat=False,
         pressure_unit=pressure_unit,
         temperature_unit=temperature_unit,
@@ -623,43 +1065,82 @@ def fit_pure_pareto(
     if bounds is None:
         bounds = _default_de_bounds(fit_mu, is_associative)
 
-    algorithm = NSGA2(pop_size=pop_size, sampling=_initial_sampling(lhs))
     n_workers = _resolve_n_jobs(n_jobs)
     if verbose:
-        print(f"NSGA-II: pop {pop_size} x {n_gen} gen on {n_workers} process(es)")
+        print(
+            f"MOEA/D: {pop_size} weight vectors x {n_gen} gen "
+            f"x {n_restarts} restart(s) on {n_workers} process(es)"
+        )
 
     with _worker_pool(
         n_workers, compound, spec, data, units, sft_options, quiet_solver
     ) as pool:
-        problem = _make_problem(
-            compound, spec, data, units, bounds, sft_options, pool=pool
-        )
-        with _silence_fd_stderr(quiet_solver):
-            res = minimize(
-                problem,
-                algorithm,
-                ("n_gen", n_gen),
-                seed=seed,
-                verbose=verbose,
-                save_history=False,
+        fronts = []
+        for r in range(n_restarts):
+            # Fresh both: pymoo mutates the algorithm's population and ideal
+            # point in place, and problem.scale is frozen after generation zero.
+            problem = _make_problem(
+                compound, spec, data, units, bounds, sft_options, pool=pool,
+                ref_vle=ref_vle, ref_sft=ref_sft,
             )
+            algorithm = _make_algorithm(pop_size, lhs)
+            with _silence_fd_stderr(quiet_solver):
+                res = minimize(
+                    problem,
+                    algorithm,
+                    ("n_gen", n_gen),
+                    seed=seed + r,
+                    verbose=verbose,
+                    save_history=False,
+                )
 
-        if res.F is None:
+            if res.X is None:
+                if verbose:
+                    print(f"restart {r + 1}: no parameter set at all, skipped")
+                continue
+            if verbose and problem.scale is not None:
+                print(
+                    f"restart {r + 1}: objective scale AAD_vle / "
+                    f"{problem.scale[0]:.3g}, AAD_sft / {problem.scale[1]:.3g}"
+                )
+            # res.F is in scaled, penalized space and cannot be converted back --
+            # a penalized row's true objectives are not recoverable from it. So
+            # the optimum set is evaluated once more for its real AAD_vle and
+            # AAD_sft. At most pop_size points, under 2% of a run's budget.
+            X_r = np.atleast_2d(np.asarray(res.X, dtype=float))
+            with _silence_fd_stderr(quiet_solver):
+                R_r = np.asarray(
+                    _map_evaluate(
+                        list(X_r), pool, compound, spec, data, units, sft_options
+                    ),
+                    dtype=float,
+                )
+            try:
+                fronts.append(_front_from(X_r, R_r))
+            except RuntimeError:
+                # One unlucky restart must not throw away the others' work.
+                if verbose:
+                    print(f"restart {r + 1}: no feasible point, skipped")
+
+        if not fronts:
             raise RuntimeError(
-                "NSGA-II found no feasible parameter set: every candidate failed "
-                "to produce a vapour-liquid equilibrium or a stable interface. "
-                "Check the bounds and the association scheme."
+                "MOEA/D found no feasible parameter set in any of "
+                f"{n_restarts} restart(s): every candidate failed to produce a "
+                "vapour-liquid equilibrium or a stable interface. Check the "
+                "bounds and the association scheme."
             )
-        F = np.atleast_2d(np.asarray(res.F, dtype=float))
-        X = np.atleast_2d(np.asarray(res.X, dtype=float))
-        keep = non_dominated(F) & (F[:, 0] < _BIG)
-        if not keep.any():
-            raise RuntimeError(
-                "NSGA-II returned only degenerate solutions. Check the bounds and "
-                "the association scheme."
+        X, F = _merge_fronts(fronts)
+        if verbose and len(fronts) > 1:
+            # How many of each run's points survive the union is the basin
+            # diagnostic: a run contributing 0 landed somewhere already covered.
+            # Exact tuple matching is safe here -- these are the same float
+            # objects that went into the merge, not recomputed values.
+            kept = {tuple(row) for row in F}
+            share = [sum(tuple(row) in kept for row in F_r) for _, F_r in fronts]
+            print(
+                f"union: {sum(len(f) for _, f in fronts)} -> {len(F)} points, "
+                f"per-restart survivors {share}"
             )
-        order = np.argsort(F[keep, 0])
-        X, F = X[keep][order], F[keep][order]
 
         if refine > 0 and len(X) > 1:
             n_before = len(F)
