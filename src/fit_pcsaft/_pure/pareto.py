@@ -929,6 +929,13 @@ def fit_pure_pareto(
     Returns a ``ParetoResult``; call ``.select(ref_vle, ref_sft)`` on it to get
     a single ``FitResult``.
 
+    ``hvap_path`` is **reported but not optimized**, which is easy to misread.
+    Enthalpy of vaporization is loaded into ``data`` and shows up in the metrics
+    of whatever ``.select()`` returns, so it is a useful cross-check on a fitted
+    point. It never enters either objective: eq 30 is psat and rho only, and
+    ``_evaluate_point`` does not look at ``data.T_hvap`` at all. Passing it will
+    not pull the front towards better hvap.
+
     ``quiet_solver`` suppresses fd-level stderr for the duration of the search,
     hiding the Rust panic messages feos emits from worker threads when the DFT
     solver fails on an infeasible parameter set. Pass False when debugging.
@@ -1038,7 +1045,13 @@ def fit_pure_pareto(
         hvap_path=hvap_path,
         sft_path=sft_path,
         mu=mu, q=q, na=na, nb=nb,
-        psat_weight=3.0, density_weight=2.0, hvap_weight=1.0, sft_weight=1.0,
+        # Inert here, and required by the shared signature, so they are passed
+        # neutral. They only shape `cost_fn`, which this driver discards along
+        # with `config`: the pareto objectives come from `_evaluate_point`,
+        # which weights nothing. They used to read 3.0/2.0/1.0, copied from
+        # `fit_pure`, which made it look as though psat was weighted 3x in the
+        # front. It never was.
+        psat_weight=1.0, density_weight=1.0, hvap_weight=1.0,
         extrapolate_psat=False,
         pressure_unit=pressure_unit,
         temperature_unit=temperature_unit,

@@ -76,6 +76,27 @@ def test_objectives_penalize_impossible_parameters():
     assert aad_objectives(bad, HEXANE, HEXANE_SPEC, data, Units()) == (_BIG, _BIG)
 
 
+def test_hvap_is_reported_but_never_optimized():
+    """`fit_pure_pareto` accepts hvap_path, and the front must ignore it.
+
+    Enthalpy of vaporization is loaded into `data` and reported in the metrics
+    of whatever `.select()` returns, which makes it easy to assume it is being
+    fitted. It is not: eq 30 is psat and rho only. Absurd hvap values must move
+    neither objective by a single ulp.
+    """
+    import dataclasses
+
+    base = _hexane_data_with_sft()
+    with_hvap = dataclasses.replace(
+        base,
+        T_hvap=np.array([300.0, 320.0]),
+        hvap=np.array([1.0e6, -5.0e6]),   # nonsense on purpose
+    )
+    assert aad_objectives(HEXANE_P, HEXANE, HEXANE_SPEC, base, Units()) == (
+        aad_objectives(HEXANE_P, HEXANE, HEXANE_SPEC, with_hvap, Units())
+    )
+
+
 # Rehner & Gross 2020, water, PC-SAFT: parameters from Table 1, AADs from Table 2.
 # (scheme, params, na, nb, paper AAD_vle %, paper AAD_DFT mN/m)
 WATER_SCHEMES = [
