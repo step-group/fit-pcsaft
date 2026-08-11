@@ -116,6 +116,28 @@ def non_dominated(F: np.ndarray) -> np.ndarray:
     return keep
 
 
+def coverage(A: np.ndarray, B: np.ndarray) -> float:
+    """Fraction of ``B`` weakly dominated by some row of ``A`` (Zitzler C-metric).
+
+    ``coverage(A, B) == 1.0`` means every point of B is matched or beaten by a
+    point of A; ``0.0`` means none is. It is **asymmetric** and only means
+    something reported both ways round: two fronts can each cover part of the
+    other.
+
+    This exists because comparing fronts by their *extent* — the span of each
+    objective — is not a comparison at all, and this module made that mistake.
+    Of the four MOEA/D configurations measured on water, three had AAD_sft
+    extents of the same order as NSGA-II's while being 100% dominated by it.
+    Extent says how much of the trade-off a run resolved; coverage says whether
+    it resolved it in the right place.
+    """
+    A = np.atleast_2d(np.asarray(A, dtype=float))
+    B = np.atleast_2d(np.asarray(B, dtype=float))
+    le = (A[:, None, :] <= B[None, :, :]).all(axis=2)
+    lt = (A[:, None, :] < B[None, :, :]).any(axis=2)
+    return float((le & lt).any(axis=0).mean())
+
+
 def _argmin_scalarized(F: np.ndarray, ref_vle: float, ref_sft: float) -> int:
     """Index of the point minimising eq 32: AAD_vle/ref_vle + AAD_sft/ref_sft.
 

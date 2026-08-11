@@ -31,6 +31,38 @@ def test_non_dominated_single_point():
     assert non_dominated(np.array([[1.0, 1.0]])).tolist() == [True]
 
 
+def test_coverage_is_zero_between_a_front_and_itself():
+    """No point on a real front dominates another, in either direction."""
+    from fit_pcsaft._pure.pareto import coverage
+
+    A = np.array([[1.0, 5.0], [2.0, 3.0], [4.0, 1.0]])
+    assert coverage(A, A) == 0.0
+
+
+def test_coverage_is_one_when_every_point_is_beaten():
+    from fit_pcsaft._pure.pareto import coverage
+
+    A = np.array([[1.0, 1.0], [2.0, 0.5]])
+    B = np.array([[3.0, 3.0], [5.0, 2.0], [2.0, 4.0]])
+    assert coverage(A, B) == 1.0
+    assert coverage(B, A) == 0.0
+
+
+def test_coverage_is_asymmetric_on_crossing_fronts():
+    """The metric only means something reported both ways round.
+
+    This is the case the docstring's extent comparison could not see: two
+    fronts of similar span where one sits behind the other over part of its
+    length and ahead over the rest.
+    """
+    from fit_pcsaft._pure.pareto import coverage
+
+    A = np.array([[1.0, 9.0], [2.0, 4.0], [9.0, 1.0]])
+    B = np.array([[3.0, 5.0], [4.0, 4.5], [8.0, 2.0]])
+    assert coverage(A, B) == pytest.approx(2 / 3)
+    assert coverage(B, A) == 0.0
+
+
 def test_objectives_zero_on_self_consistent_sft():
     data = _hexane_data_with_sft()
     aad_vle, aad_sft = aad_objectives(HEXANE_P, HEXANE, HEXANE_SPEC, data, Units())
