@@ -716,7 +716,24 @@ def _capped_replacement(better, n_replace, random_state):
     return random_state.permutation(better)[:n_replace]
 
 
-def _make_algorithm(pop_size: int, lhs: bool):
+# Accepted values for the `decomposition` and `variant` knobs below.
+_DECOMPOSITIONS = ("tchebi", "pbi")
+_VARIANTS = ("sbx", "de")
+
+
+def _make_algorithm(
+    pop_size: int,
+    lhs: bool,
+    *,
+    n_neighbors: int = 20,
+    prob_neighbor_mating: float = 0.9,
+    n_replace: int = _N_REPLACE,
+    decomposition: str = "tchebi",
+    pbi_theta: float = 5.0,
+    variant: str = "sbx",
+    de_f: float = 0.5,
+    de_cr: float = 1.0,
+):
     """MOEA/D, in the variant that evaluates a whole population at a time.
 
     ``ParallelMOEAD``, not ``MOEAD``: the plain class is a ``LoopwiseAlgorithm``
@@ -729,11 +746,62 @@ def _make_algorithm(pop_size: int, lhs: bool):
     Subclassed to add the replacement cap pymoo leaves out; see
     ``_capped_replacement``. The body below is pymoo's own ``_replace`` with
     that one line changed.
+
+    The keyword-only arguments are MOEA/D's own settings, previously inherited
+    silently from pymoo's constructor defaults through this wrapper and
+    unreachable from ``fit_pure_pareto``. Every default reproduces that
+    inherited value exactly, so an unmodified call runs the same search as
+    before this signature grew. ``decomposition`` is resolved *eagerly* here
+    (``"tchebi"`` -> ``Tchebicheff()``, ``"pbi"`` -> ``PBI(theta=pbi_theta)``)
+    rather than left ``None``: pymoo itself would resolve ``None`` in
+    ``_setup`` via ``default_decomp``, which picks the same ``Tchebicheff()``
+    for a 2-objective problem, but only after ``.setup()`` runs, which makes
+    it untestable beforehand. ``variant="de"`` swaps the SBX crossover for
+    ``DEX(F=de_f, CR=de_cr)`` -- MOEA/D-DE's (Li & Zhang 2009) own operator,
+    and the one ``n_replace``'s default of 2 (their ``nr``) was actually
+    paired with, SBX having been pymoo's substitute. Polynomial mutation stays
+    in both variants: MOEA/D-DE applies it after DE crossover rather than
+    replacing it. DEX draws 3 parents per neighbourhood without replacement,
+    so ``variant="de"`` with fewer than 3 neighbours raises here instead of
+    failing inside numpy's ``choice``.
     """
     from pymoo.algorithms.moo.moead import ParallelMOEAD
+    from pymoo.operators.crossover.sbx import SBX
+    from pymoo.operators.mutation.pm import PM
+
+    if decomposition not in _DECOMPOSITIONS:
+        raise ValueError(
+            f"decomposition={decomposition!r} is not supported. Use one of "
+            f"{_DECOMPOSITIONS}."
+        )
+    if variant not in _VARIANTS:
+        raise ValueError(
+            f"variant={variant!r} is not supported. Use one of {_VARIANTS}."
+        )
+    if variant == "de" and n_neighbors < 3:
+        raise ValueError(
+            f"variant={variant!r} needs n_neighbors >= 3 (DEX draws 3 "
+            f"parents per neighbourhood without replacement), got "
+            f"n_neighbors={n_neighbors}."
+        )
+
+    if decomposition == "pbi":
+        from pymoo.decomposition.pbi import PBI
+        decomp = PBI(theta=pbi_theta)
+    else:
+        from pymoo.decomposition.tchebicheff import Tchebicheff
+        decomp = Tchebicheff()
+
+    if variant == "de":
+        from pymoo.operators.crossover.dex import DEX
+        crossover = DEX(F=de_f, CR=de_cr)
+    else:
+        crossover = SBX(prob=1.0, eta=20)
 
     class _CappedMOEAD(ParallelMOEAD):
-        n_replace = _N_REPLACE
+        def __init__(self, *args, n_replace=_N_REPLACE, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.n_replace = n_replace
 
         def _replace(self, k, off):
             pop = self.pop
@@ -748,7 +816,16 @@ def _make_algorithm(pop_size: int, lhs: bool):
             take = _capped_replacement(better, self.n_replace, self.random_state)
             pop[N[take]] = off
 
-    return _CappedMOEAD(_ref_dirs(pop_size), sampling=_initial_sampling(lhs))
+    return _CappedMOEAD(
+        _ref_dirs(pop_size),
+        sampling=_initial_sampling(lhs),
+        n_neighbors=n_neighbors,
+        prob_neighbor_mating=prob_neighbor_mating,
+        decomposition=decomp,
+        crossover=crossover,
+        mutation=PM(prob_var=None, eta=20),
+        n_replace=n_replace,
+    )
 
 
 @dataclass(frozen=True)
@@ -910,6 +987,14 @@ def fit_pure_pareto(
     objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
     refs: "Optional[tuple[float, float]]" = None,
     n_restarts: int = 1,
+    n_neighbors: int = 20,
+    prob_neighbor_mating: float = 0.9,
+    n_replace: int = _N_REPLACE,
+    decomposition: str = "tchebi",
+    pbi_theta: float = 5.0,
+    variant: str = "sbx",
+    de_f: float = 0.5,
+    de_cr: float = 1.0,
 ) -> ParetoResult:
     """Generate a two-objective PC-SAFT pareto front with MOEA/D.
 
@@ -1201,6 +1286,18 @@ def fit_pure_pareto(
     ``objectives[0]``/``objectives[1]``. Pass the same pair to ``select()``
     that you passed here, or the point picked off the front will not be the
     one the search resolved for.
+
+    ``n_neighbors``, ``prob_neighbor_mating``, ``n_replace``,
+    ``decomposition``/``pbi_theta`` and ``variant``/``de_f``/``de_cr`` are
+    MOEA/D's own settings, previously inherited silently from pymoo's
+    constructor defaults and unreachable from this function. Every default
+    reproduces that inherited behaviour exactly, so an unmodified call runs
+    the same search it always has. See ``_make_algorithm`` for what each one
+    does; in short, ``decomposition`` picks the scalarizing function
+    (``"tchebi"``, the default, or ``"pbi"`` with its ``pbi_theta``), and
+    ``variant`` picks the crossover operator (``"sbx"``, the default, or
+    ``"de"`` for MOEA/D-DE's own ``DEX(F=de_f, CR=de_cr)``, which needs
+    ``n_neighbors >= 3``).
     """
     objectives = tuple(objectives)
     if objectives not in _DEFAULT_REFS:
@@ -1270,7 +1367,17 @@ def fit_pure_pareto(
                 compound, spec, data, units, bounds, sft_options, pool=pool,
                 objectives=objectives, refs=refs,
             )
-            algorithm = _make_algorithm(pop_size, lhs)
+            algorithm = _make_algorithm(
+                pop_size, lhs,
+                n_neighbors=n_neighbors,
+                prob_neighbor_mating=prob_neighbor_mating,
+                n_replace=n_replace,
+                decomposition=decomposition,
+                pbi_theta=pbi_theta,
+                variant=variant,
+                de_f=de_f,
+                de_cr=de_cr,
+            )
             with _silence_fd_stderr(quiet_solver):
                 res = minimize(
                     problem,

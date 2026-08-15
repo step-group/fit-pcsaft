@@ -502,6 +502,63 @@ def test_algorithm_caps_neighbour_replacement():
     assert algorithm.n_replace == _N_REPLACE == 2
 
 
+def test_moead_defaults_reproduce_pymoos_inherited_settings():
+    """These six were pymoo defaults inherited through _CappedMOEAD and unreachable.
+    Exposing them must not change what an unmodified call runs, so pin the values
+    against the algorithm object rather than against the signature."""
+    from pymoo.decomposition.tchebicheff import Tchebicheff
+    from pymoo.operators.crossover.sbx import SBX
+
+    from fit_pcsaft._pure.pareto import _make_algorithm
+
+    algo = _make_algorithm(20, True)
+    assert algo.n_neighbors == 20
+    assert algo.selection.prob.value == pytest.approx(0.9)
+    assert algo.n_replace == 2
+    assert isinstance(algo.mating.crossover, SBX)
+    assert algo.mating.crossover.eta.value == pytest.approx(20)
+    # decomposition is resolved in _setup when left as None; ours is set eagerly
+    assert isinstance(algo.decomposition, Tchebicheff)
+
+
+def test_de_variant_swaps_the_crossover_operator():
+    """n_r=2 is MOEA/D-DE's replacement cap (Li & Zhang 2009), adopted here while
+    pymoo's SBX stayed. The DE variant is what that cap was designed to pair with."""
+    from pymoo.operators.crossover.dex import DEX
+
+    from fit_pcsaft._pure.pareto import _make_algorithm
+
+    algo = _make_algorithm(20, True, variant="de")
+    assert isinstance(algo.mating.crossover, DEX)
+
+
+def test_pbi_decomposition_is_selectable_and_carries_theta():
+    from pymoo.decomposition.pbi import PBI
+
+    from fit_pcsaft._pure.pareto import _make_algorithm
+
+    algo = _make_algorithm(20, True, decomposition="pbi", pbi_theta=5.0)
+    assert isinstance(algo.decomposition, PBI)
+    assert algo.decomposition.theta == pytest.approx(5.0)
+
+
+def test_unknown_knob_values_are_rejected():
+    from fit_pcsaft._pure.pareto import _make_algorithm
+
+    for kw in ({"decomposition": "weighted-sum"}, {"variant": "pso"}):
+        with pytest.raises(ValueError):
+            _make_algorithm(20, True, **kw)
+
+
+def test_de_variant_rejects_too_few_neighbors():
+    """DEX draws 3 parents per neighbourhood without replacement -- fewer than
+    3 neighbours would otherwise fail deep inside numpy's random.choice."""
+    from fit_pcsaft._pure.pareto import _make_algorithm
+
+    with pytest.raises(ValueError, match="n_neighbors"):
+        _make_algorithm(20, True, variant="de", n_neighbors=2)
+
+
 def test_problem_declares_no_constraints():
     """pymoo's MOEA/D asserts on any constrained problem in its _setup."""
     from fit_pcsaft._pure.pareto import _make_problem
