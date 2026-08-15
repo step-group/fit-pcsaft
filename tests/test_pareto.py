@@ -706,3 +706,61 @@ def test_densify_is_a_noop_when_disabled():
         X, F, 0, None, HEXANE, HEXANE_SPEC, _hexane_data_with_sft(), Units(), None
     )
     assert np.array_equal(Xd, X) and np.array_equal(Fd, F)
+
+
+def test_to_csv_column_names_follow_the_objectives(tmp_path):
+    """The header is an on-disk contract: examples/pure/12_water_vs_rehner.py
+    reads `aad_vle_pct`/`aad_sft` back off a saved front."""
+    import polars as pl
+
+    from fit_pcsaft._pure.pareto import ParetoResult
+
+    def _front(objectives):
+        return ParetoResult(
+            X=np.array([[3.0576, 3.7983, 236.77]]), F=np.array([[1.0, 2.0]]),
+            data=_hexane_data_with_sft(), compound=HEXANE, spec=HEXANE_SPEC,
+            units=Units(), fit_mu=False, is_associative=False, time_elapsed=0.0,
+            objectives=objectives,
+        )
+
+    p = tmp_path / "front.csv"
+    _front(("vle", "sft")).to_csv(p)
+    assert pl.read_csv(p).columns == ["aad_vle_pct", "aad_sft", "m", "sigma", "epsilon_k"]
+    _front(("psat", "rho")).to_csv(p)
+    assert pl.read_csv(p).columns == ["aad_psat_pct", "aad_rho_pct", "m", "sigma", "epsilon_k"]
+
+
+def test_str_is_table_driven_and_labels_each_mode_correctly():
+    """A mislabeled __str__ is the bug this task exists to fix: a real Forte
+    run printed 'best AAD_vle'/'AAD_sft there' axis labels for psat/rho data."""
+    from fit_pcsaft._pure.pareto import ParetoResult
+
+    def _front(objectives):
+        return ParetoResult(
+            X=np.array([[3.0576, 3.7983, 236.77], [3.10, 3.75, 233.0]]),
+            F=np.array([[1.0, 2.0], [2.0, 1.0]]),
+            data=_hexane_data_with_sft(), compound=HEXANE, spec=HEXANE_SPEC,
+            units=Units(), fit_mu=False, is_associative=False, time_elapsed=0.0,
+            input_name="hexane", objectives=objectives,
+        )
+
+    # ("vle", "sft") must reproduce the pre-refactor hardcoded string
+    # byte-for-byte: "%" attaches to the number with no space, and the
+    # sft number never carries a unit at all -- that asymmetry was already
+    # in the old hardcoded __str__ (mN/m was simply never printed), and the
+    # global constraints require default-mode text to stay bit-identical.
+    assert str(_front(("vle", "sft"))) == (
+        "Pareto front — hexane\n"
+        "  points: 2   time: 0.0 s\n"
+        "  best AAD_vle: 1.00% (AAD_sft there: 2.00)\n"
+        "  best AAD_sft: 1.00 (AAD_vle there: 2.00%)"
+    )
+    # ("psat", "rho") shares the same "%" formatting rule for both axes --
+    # both are percent quantities, so both numbers now carry "%", with the
+    # correct labels instead of the "AAD_vle"/"AAD_sft" mislabeling.
+    assert str(_front(("psat", "rho"))) == (
+        "Pareto front — hexane\n"
+        "  points: 2   time: 0.0 s\n"
+        "  best AARD_psat: 1.00% (AARD_rho there: 2.00%)\n"
+        "  best AARD_rho: 1.00% (AARD_psat there: 2.00%)"
+    )

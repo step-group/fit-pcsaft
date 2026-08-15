@@ -731,11 +731,15 @@ def _make_algorithm(pop_size: int, lhs: bool):
 class ParetoResult:
     """The pareto front of a bi-objective PC-SAFT fit.
 
-    ``F[:, 0]`` is AAD_vle in %, ``F[:, 1]`` is AAD_sft in the surface tension
-    input unit (mN/m by default). ``X[i]`` is the physical parameter vector that
-    produced ``F[i]``, in the standard ordering
-    ``[m, sigma, epsilon_k] (+ [mu]) (+ [kappa_ab, epsilon_k_ab])``.
-    Rows are sorted by increasing AAD_vle.
+    ``objectives`` names the two axes; ``F[:, k]`` is the AAD named by
+    ``objectives[k]``, in the unit ``_OBJECTIVES`` gives it:
+
+        ("vle", "sft")   AAD_vle [%]    vs AAD_sft [mN/m]   Rehner & Gross 2020
+        ("psat", "rho")  AARD_psat [%]  vs AARD_rho [%]     Forte et al. 2018
+
+    ``X[i]`` is the physical parameter vector that produced ``F[i]``, in the
+    standard ordering ``[m, sigma, epsilon_k] (+ [mu]) (+ [kappa_ab,
+    epsilon_k_ab])``. Rows are sorted by increasing ``F[:, 0]``.
     """
 
     X: np.ndarray
@@ -763,8 +767,15 @@ class ParetoResult:
     def select(self, refs: "Optional[tuple[float, float]]" = None):
         """Pick the point on the front that minimises eq 32, as a FitResult.
 
-        Paper defaults: water refs=(2%, 0.7 mN/m). Small alcohols use
-        (2%, 1.5); alcohols from 1-pentanol up use (2%, 3.0).
+        ``refs`` defaults per mode: ``(2.0, 0.7)`` for ``("vle", "sft")`` and
+        ``(2.0, 2.0)`` for ``("psat", "rho")``. Paper weights for the first:
+        water 0.7, small alcohols 1.5, alcohols from 1-pentanol up 3.0.
+
+        Under ``("psat", "rho")`` with equal refs the tangent has slope -1, so
+        eq 32 reduces to ``(AARD_psat + AARD_rho) / 2`` -- exactly AAD_vle. The
+        selected point is then the front's best *pooled* bulk fit, and the value
+        of the mode is the front itself, not that one point. Set ``refs`` from
+        the two properties' expected error scales if the selection matters.
         """
         from fit_pcsaft._pure.fit import _extract_params_dict
         from fit_pcsaft.result import FitResult, _compute_pure_metrics
@@ -818,22 +829,32 @@ class ParetoResult:
         """Write the front: one row per point, objectives then parameters."""
         import polars as pl
 
+        cols = [_OBJECTIVES[k][2] for k in self.objectives]
         df = pl.DataFrame(
-            {"aad_vle_pct": self.F[:, 0], "aad_sft": self.F[:, 1]}
+            {cols[0]: self.F[:, 0], cols[1]: self.F[:, 1]}
             | {n: self.X[:, k] for k, n in enumerate(self.param_names)}
         )
         df.write_csv(str(path))
 
     def __str__(self) -> str:
-        i_v = int(np.argmin(self.F[:, 0]))
-        i_s = int(np.argmin(self.F[:, 1]))
+        # A unit is only appended when it is "%" -- attached with no space,
+        # e.g. "4.14%". That mirrors the pre-refactor hardcoded string, which
+        # never printed a unit for AAD_sft (mN/m) at all; default-mode text
+        # must stay byte-identical, so that omission is preserved rather than
+        # "fixed" here. Under ("psat", "rho") both axes are percent
+        # quantities, so both get "%" -- symmetric, no leftover mislabeling.
+        (n0, u0, _), (n1, u1, _) = (_OBJECTIVES[k] for k in self.objectives)
+        s0 = u0 if u0 == "%" else ""
+        s1 = u1 if u1 == "%" else ""
+        i_0 = int(np.argmin(self.F[:, 0]))
+        i_1 = int(np.argmin(self.F[:, 1]))
         return (
             f"Pareto front — {self.input_name}\n"
             f"  points: {len(self.F)}   time: {self.time_elapsed:.1f} s\n"
-            f"  best AAD_vle: {self.F[i_v, 0]:.2f}% "
-            f"(AAD_sft there: {self.F[i_v, 1]:.2f})\n"
-            f"  best AAD_sft: {self.F[i_s, 1]:.2f} "
-            f"(AAD_vle there: {self.F[i_s, 0]:.2f}%)"
+            f"  best {n0}: {self.F[i_0, 0]:.2f}{s0} "
+            f"({n1} there: {self.F[i_0, 1]:.2f}{s1})\n"
+            f"  best {n1}: {self.F[i_1, 1]:.2f}{s1} "
+            f"({n0} there: {self.F[i_1, 0]:.2f}{s0})"
         )
 
 

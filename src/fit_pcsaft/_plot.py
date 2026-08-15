@@ -191,21 +191,36 @@ def _plot_residuals_pure(result, path=None):
 
 
 def _plot_pareto(result, path=None, refs: tuple[float, float] | None = None):
-    """AAD_sft vs AAD_vle with the selected point and its tangent (paper Fig. 1)."""
+    """Objective 2 vs objective 1 with the selected point and its tangent (paper Fig. 1).
+
+    Axis names, and which unit each carries, come from ``result.objectives``
+    read through ``_OBJECTIVES`` -- so a ``("psat", "rho")`` front is labeled
+    AARD_psat / AARD_rho, not the ``("vle", "sft")`` defaults. Plain-text axis
+    labels on purpose (e.g. ``"AAD_sft / mN m^-1"``, not LaTeX): these are
+    diagnostic PNGs, never thesis figures.
+    """
     import matplotlib.pyplot as plt
     import numpy as np
     import seaborn as sns
 
-    from fit_pcsaft._pure.pareto import _argmin_scalarized
+    from fit_pcsaft._pure.pareto import _DEFAULT_REFS, _OBJECTIVES, _argmin_scalarized
 
+    objectives = tuple(result.objectives)
     if refs is None:
-        refs = (2.0, 0.7)
+        refs = _DEFAULT_REFS[objectives]
 
     sns.set_context("talk")
     sns.set_style("ticks")
 
     F = result.F
     i = _argmin_scalarized(F, refs)
+
+    # _OBJECTIVES stores the prose unit ("mN/m"); axis labels use plot
+    # notation instead -- the only remap, not a new _OBJECTIVES field.
+    _axis_unit = {"mN/m": "mN m^-1"}
+    (n0, u0, _), (n1, u1, _) = (_OBJECTIVES[k] for k in objectives)
+    xlabel = f"{n0} / {_axis_unit.get(u0, u0)}"
+    ylabel = f"{n1} / {_axis_unit.get(u1, u1)}"
 
     fig, ax = plt.subplots(figsize=(7, 5.5))
     ax.plot(F[:, 0], F[:, 1], "-o", color="#1F77B4", ms=5, lw=1.5,
@@ -229,12 +244,12 @@ def _plot_pareto(result, path=None, refs: tuple[float, float] | None = None):
     x_t = np.clip(np.sort(x_at), *xlim)
     ax.plot(x_t, F[i, 1] + slope * (x_t - F[i, 0]),
             ls="--", color="gray", lw=1.0, zorder=1,
-            label=rf"tangent, $-$ref$_\mathrm{{sft}}$/ref$_\mathrm{{vle}}$")
+            label="eq-32 tangent")
 
     ax.set_xlim(*xlim)
     ax.set_ylim(*ylim)
-    ax.set_xlabel(r"AAD$_\mathrm{vle}$ / %")
-    ax.set_ylabel(r"AAD$_\mathrm{sft}$ / mN m$^{-1}$")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.set_title(f"Pareto front — {result.input_name}")
     ax.legend(loc="best", framealpha=0.9)
 
