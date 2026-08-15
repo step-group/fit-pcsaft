@@ -1,4 +1,6 @@
 import re
+import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Tuple
 
@@ -34,6 +36,17 @@ def _first_error(errors: "list | None"):
     return errors[0] if errors else None
 
 
+# Seconds to wait between the three PubChem lookup attempts. PubChem flaps:
+# observed alternating between reachable and HTTP 000 for an hour while the
+# rest of the network stayed up. With the lru_cache below there is one lookup
+# per compound per process, so this retry is the whole difference between a
+# long batch run dying at startup and it not.
+_RETRY_BACKOFF = (5.0, 15.0)
+
+_LOOKUP_NAMESPACES = ("name", "smiles", "inchi")
+
+
+@lru_cache(maxsize=None)
 def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
     """Fetch compound information from PubChem.
 
@@ -42,41 +55,45 @@ def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
     1. By common name
     2. By SMILES
     3. By InChI
+
+    A pass over all three that fails with an *exception* is retried up to
+    three times with ``_RETRY_BACKOFF``; a pass where every namespace simply
+    returned nothing is a genuine "not found" and fails immediately.
+
+    Cached on ``id_str``: every caller that fits/searches the same compound
+    more than once (e.g. a MOEA/D sweep re-running ``fit_pure_pareto`` for
+    many cells) previously repeated this network round-trip once per call --
+    66 identical PubChem lookups for one compound in one observed run,
+    which is 66 independent chances for a transient PubChem outage to kill
+    the whole thing. ``feos.Identifier`` is immutable (attribute assignment
+    raises ``AttributeError`` -- verified directly), so handing every caller
+    the same cached instance cannot let one caller's mutation leak into
+    another's.
     """
     compound = None
+    last_exc: "Exception | None" = None
 
-    # Try name lookup first
-    if not compound:
-        try:
-            compounds = pcp.get_compounds(id_str, "name")
+    for backoff in (*_RETRY_BACKOFF, None):
+        for namespace in _LOOKUP_NAMESPACES:
+            try:
+                compounds = pcp.get_compounds(id_str, namespace)
+            except Exception as exc:
+                last_exc = exc
+                continue
             if compounds:
                 compound = compounds[0]
-        except Exception:
-            pass
-
-    # Try SMILES lookup
-    if not compound:
-        try:
-            compounds = pcp.get_compounds(id_str, "smiles")
-            if compounds:
-                compound = compounds[0]
-        except Exception:
-            pass
-
-    # Try InChI lookup
-    if not compound:
-        try:
-            compounds = pcp.get_compounds(id_str, "inchi")
-            if compounds:
-                compound = compounds[0]
-        except Exception:
-            pass
+                break
+        if compound is not None or last_exc is None or backoff is None:
+            break
+        time.sleep(backoff)
 
     if not compound:
-        raise ValueError(f"Compound '{id_str}' not found in PubChem")
+        detail = f" ({type(last_exc).__name__}: {last_exc})" if last_exc else ""
+        raise ValueError(f"Compound '{id_str}' not found in PubChem{detail}")
 
     # Extract CAS from synonyms
     cas = None
+    syn_exc: "Exception | None" = None
     try:
         synonyms = pcp.get_synonyms(compound.cid, "cid")
         if synonyms:
@@ -88,11 +105,16 @@ def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
                         break
                 if cas:
                     break
-    except Exception:
-        pass
+    except Exception as exc:
+        syn_exc = exc
 
     if not cas:
-        raise ValueError(f"Could not extract CAS number for '{id_str}'")
+        # Not retried: the lookup above just succeeded, so PubChem was up a
+        # moment ago and this is far more likely to be a real gap in the
+        # synonym list than a flap. Naming the exception is what keeps an
+        # outage from reading as missing data, which is the whole bug.
+        detail = f" ({type(syn_exc).__name__}: {syn_exc})" if syn_exc else ""
+        raise ValueError(f"Could not extract CAS number for '{id_str}'{detail}")
 
     # Create feos Identifier
     identifier = feos.Identifier(
