@@ -194,7 +194,7 @@ def test_penalty_is_zero_for_feasible_points():
     from fit_pcsaft._pure.pareto import _penalize
 
     R = np.array([[4.0, 1.4, -0.1], [2.0, 0.7, 0.0]])
-    out = _penalize(R, scale_vle=2.0, scale_sft=0.7)
+    out = _penalize(R, (2.0, 0.7))
     assert out == pytest.approx(np.array([[2.0, 2.0], [1.0, 1.0]]))
 
 
@@ -211,7 +211,7 @@ def test_penalty_is_graded_and_loses_to_every_feasible_point():
         [4.0, 1.4, 0.02],   # missed the threshold by one point in twenty-five
         [4.0, 1.4, 1.00],   # nothing evaluated at all
     ])
-    out = _penalize(R, scale_vle=2.0, scale_sft=0.7)
+    out = _penalize(R, (2.0, 0.7))
     assert np.all(out[0] < out[1]), "feasible must beat infeasible"
     assert np.all(out[1] < out[2]), "violation must stay graded, not flat"
 
@@ -226,7 +226,7 @@ def test_objective_scale_uses_the_observed_spans():
         [9.0, 3.0, -0.1],
         [11.0, 3.5, -0.1],
     ])
-    s_vle, s_sft = _objective_scale(R, ref_vle=2.0, ref_sft=0.7)
+    s_vle, s_sft = _objective_scale(R, (2.0, 0.7))
     # spans of the feasible rows, not the eq-32 references
     assert s_vle == pytest.approx(9.0, rel=0.2)
     assert s_sft == pytest.approx(1.35, rel=0.2)
@@ -241,8 +241,8 @@ def test_objective_scale_ignores_infeasible_and_degenerate_rows():
         [500.0, 90.0, 0.4],        # infeasible
         [_BIG, _BIG, -0.1],        # feasible but degenerate
     ])])
-    assert _objective_scale(polluted, 2.0, 0.7) == pytest.approx(
-        _objective_scale(clean, 2.0, 0.7)
+    assert _objective_scale(polluted, (2.0, 0.7)) == pytest.approx(
+        _objective_scale(clean, (2.0, 0.7))
     )
 
 
@@ -254,9 +254,9 @@ def test_objective_scale_is_robust_to_one_wild_feasible_point():
         [1.0, 2.0, -0.1], [2.0, 2.2, -0.1], [3.0, 2.4, -0.1],
         [4.0, 2.6, -0.1], [5.0, 2.8, -0.1], [6.0, 3.0, -0.1],
     ])
-    tame = _objective_scale(R, 2.0, 0.7)
+    tame = _objective_scale(R, (2.0, 0.7))
     wild = _objective_scale(
-        np.vstack([R, [[5000.0, 900.0, -0.1]]]), 2.0, 0.7
+        np.vstack([R, [[5000.0, 900.0, -0.1]]]), (2.0, 0.7)
     )
     assert wild[0] < 10 * tame[0], "one outlier hijacked the AAD_vle scale"
     assert wild[1] < 10 * tame[1], "one outlier hijacked the AAD_sft scale"
@@ -267,7 +267,7 @@ def test_objective_scale_falls_back_when_almost_nothing_is_feasible():
     from fit_pcsaft._pure.pareto import _objective_scale
 
     R = np.array([[1.0, 2.0, -0.1], [4.0, 9.0, 0.5], [_BIG, _BIG, 1.0]])
-    assert _objective_scale(R, ref_vle=2.0, ref_sft=0.7) == (2.0, 0.7)
+    assert _objective_scale(R, (2.0, 0.7)) == (2.0, 0.7)
 
 
 def test_lhs_sampling_selected():
@@ -476,10 +476,10 @@ def test_merge_drops_a_run_that_is_entirely_behind_another():
 
 def test_select_picks_the_tangent_point():
     F = np.array([[1.0, 6.0], [2.0, 2.0], [6.0, 1.0]])
-    # ref_vle=2%, ref_sft=1 -> costs: 6.5, 3.0, 4.0 -> index 1
-    assert _argmin_scalarized(F, ref_vle=2.0, ref_sft=1.0) == 1
-    # heavy weight on sft (small ref_sft) -> the low-sft corner wins
-    assert _argmin_scalarized(F, ref_vle=100.0, ref_sft=0.1) == 2
+    # refs=(2%, 1) -> costs: 6.5, 3.0, 4.0 -> index 1
+    assert _argmin_scalarized(F, (2.0, 1.0)) == 1
+    # heavy weight on sft (small refs[1]) -> the low-sft corner wins
+    assert _argmin_scalarized(F, (100.0, 0.1)) == 2
 
 
 def _hexane_data_conflicting():

@@ -138,18 +138,18 @@ def coverage(A: np.ndarray, B: np.ndarray) -> float:
     return float((le & lt).any(axis=0).mean())
 
 
-def _argmin_scalarized(F: np.ndarray, ref_vle: float, ref_sft: float) -> int:
-    """Index of the point minimising eq 32: AAD_vle/ref_vle + AAD_sft/ref_sft.
+def _argmin_scalarized(F: np.ndarray, refs: tuple[float, float]) -> int:
+    """Index of the point minimising eq 32: AAD_vle/refs[0] + AAD_sft/refs[1].
 
     Geometrically this is the tangent point of the front with a line of slope
-    -ref_sft/ref_vle, which is how the paper picks its published parameters.
+    -refs[1]/refs[0], which is how the paper picks its published parameters.
     """
     F = np.asarray(F, dtype=float)
-    return int(np.argmin(F[:, 0] / ref_vle + F[:, 1] / ref_sft))
+    return int(np.argmin(F[:, 0] / refs[0] + F[:, 1] / refs[1]))
 
 
 def _objective_scale(
-    R: np.ndarray, ref_vle: float, ref_sft: float
+    R: np.ndarray, refs: tuple[float, float]
 ) -> tuple[float, float]:
     """Divisors that put the two objectives on comparable spans.
 
@@ -180,15 +180,15 @@ def _objective_scale(
     """
     ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
     if int(ok.sum()) < _MIN_SCALE_SAMPLE:
-        return ref_vle, ref_sft
+        return refs
     F = R[ok, :2]
     span = np.percentile(F, 75.0, axis=0) - np.min(F, axis=0)
-    fallback = np.array([ref_vle, ref_sft], dtype=float)
+    fallback = np.asarray(refs, dtype=float)
     span = np.where(span > 0.0, span, fallback)
     return float(span[0]), float(span[1])
 
 
-def _penalize(R: np.ndarray, scale_vle: float, scale_sft: float) -> np.ndarray:
+def _penalize(R: np.ndarray, scale: tuple[float, float]) -> np.ndarray:
     """Scaled objectives with the feasibility violation folded in.
 
     pymoo's MOEA/D refuses a constrained problem outright (``moead.py``: its
@@ -219,7 +219,7 @@ def _penalize(R: np.ndarray, scale_vle: float, scale_sft: float) -> np.ndarray:
     ``_BIG`` point is wanted either way.
     """
     R = np.atleast_2d(np.asarray(R, dtype=float))
-    F = R[:, :2] / np.array([scale_vle, scale_sft], dtype=float)
+    F = R[:, :2] / np.asarray(scale, dtype=float)
     return F + (_BIG * np.maximum(R[:, 2], 0.0))[:, None]
 
 
@@ -415,7 +415,7 @@ def _worker_pool(n_jobs, compound, spec, data, units, sft_options, quiet):
 
 
 def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
-                  ref_vle: float = 2.0, ref_sft: float = 0.7):
+                  refs: tuple[float, float] = (2.0, 0.7)):
     """Population-at-a-time problem, unconstrained by necessity.
 
     Deliberately a vectorized ``Problem`` rather than pymoo's
@@ -428,7 +428,7 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
     problem. The feasibility information is not lost — ``_penalize`` carries it
     in the objectives instead.
 
-    ``ref_vle`` and ``ref_sft`` are only a fallback here. The objectives are
+    ``refs`` is only a fallback here. The objectives are
     normally divided by the spans of the first population (``_objective_scale``),
     which is what actually lets weight vectors reach both ends of the front. The
     estimate is taken once and frozen: ``MOEAD._replace`` compares a fresh
@@ -452,8 +452,8 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
                 dtype=float,
             )
             if self.scale is None:
-                self.scale = _objective_scale(R, ref_vle, ref_sft)
-            out["F"] = _penalize(R, *self.scale)
+                self.scale = _objective_scale(R, refs)
+            out["F"] = _penalize(R, self.scale)
 
     return PcSaftBiObjective()
 
@@ -696,16 +696,19 @@ class ParetoResult:
             names += ["kappa_ab", "epsilon_k_ab"]
         return names
 
-    def select(self, ref_vle: float = 2.0, ref_sft: float = 0.7):
+    def select(self, refs: "Optional[tuple[float, float]]" = None):
         """Pick the point on the front that minimises eq 32, as a FitResult.
 
-        Paper defaults: water ref_vle=2%, ref_sft=0.7 mN/m. Small alcohols use
-        ref_sft=1.5; alcohols from 1-pentanol up use ref_sft=3.0.
+        Paper defaults: water refs=(2%, 0.7 mN/m). Small alcohols use
+        (2%, 1.5); alcohols from 1-pentanol up use (2%, 3.0).
         """
         from fit_pcsaft._pure.fit import _extract_params_dict
         from fit_pcsaft.result import FitResult, _compute_pure_metrics
 
-        i = _argmin_scalarized(self.F, ref_vle, ref_sft)
+        if refs is None:
+            refs = (2.0, 0.7)
+
+        i = _argmin_scalarized(self.F, refs)
         params_vec = self.X[i]
         eos = _build_eos(params_vec, self.compound, self.spec)
         functional = (
@@ -719,14 +722,14 @@ class ParetoResult:
         metrics = _compute_pure_metrics(
             eos, self.data, self.units, functional=functional
         )
-        cost = float(self.F[i, 0] / ref_vle + self.F[i, 1] / ref_sft)
+        cost = float(self.F[i, 0] / refs[0] + self.F[i, 1] / refs[1])
         scipy_result = SimpleNamespace(
             # FitResult.__str__ derives RMS from 2*cost/len(fun)
             cost=0.5 * cost**2,
             fun=np.array([cost]),
             x=params_vec,
             success=True,
-            message=f"MOEA/D front point {i} (ref_vle={ref_vle}, ref_sft={ref_sft})",
+            message=f"MOEA/D front point {i} (refs={refs})",
             nfev=len(self.F),
         )
         return FitResult(
@@ -743,9 +746,9 @@ class ParetoResult:
             functional=functional,
         )
 
-    def plot(self, path=None, ref_vle: float = 2.0, ref_sft: float = 0.7):
+    def plot(self, path=None, refs: "Optional[tuple[float, float]]" = None):
         from fit_pcsaft._plot import _plot_pareto
-        return _plot_pareto(self, path=path, ref_vle=ref_vle, ref_sft=ref_sft)
+        return _plot_pareto(self, path=path, refs=refs)
 
     def to_csv(self, path: "Path | str") -> None:
         """Write the front: one row per point, objectives then parameters."""
@@ -795,8 +798,7 @@ def fit_pure_pareto(
     lhs: bool = True,
     n_jobs: int = -1,
     refine: int = 4,
-    ref_vle: float = 2.0,
-    ref_sft: float = 0.7,
+    refs: tuple[float, float] = (2.0, 0.7),
     n_restarts: int = 1,
 ) -> ParetoResult:
     """Generate the AAD_vle / AAD_sft pareto front with MOEA/D.
@@ -926,7 +928,7 @@ def fit_pure_pareto(
     The "max gap" column above is the raw NSGA-II output; ``refine`` (below)
     closes most of it afterwards for a few percent of the same budget.
 
-    Returns a ``ParetoResult``; call ``.select(ref_vle, ref_sft)`` on it to get
+    Returns a ``ParetoResult``; call ``.select(refs)`` on it to get
     a single ``FitResult``.
 
     ``hvap_path`` is **reported but not optimized**, which is easy to misread.
@@ -1021,14 +1023,14 @@ def fit_pure_pareto(
     how many of each run's points survived it -- a run contributing zero landed
     where another had already been.
 
-    ``ref_vle`` and ``ref_sft`` scale the two objectives for the decomposition,
-    and are the same eq-32 reference values ``select()`` takes: water (2, 0.7),
-    small alcohols (2, 1.5), alcohols from 1-pentanol up (2, 3.0). They matter
+    ``refs`` scales the two objectives for the decomposition, and is the same
+    eq-32 reference pair ``select()`` takes: water (2, 0.7), small alcohols
+    (2, 1.5), alcohols from 1-pentanol up (2, 3.0). It matters
     more here than a scaling factor usually would. MOEA/D's Tchebicheff
     decomposition is applied to raw objective values -- pymoo hands it an ideal
     point but never a nadir point -- so without this the axis with the larger
     numeric span dominates every weight vector and the front bunches into one
-    corner. They do not change the returned objectives, which are always in %
+    corner. It does not change the returned objectives, which are always in %
     and mN/m. Pass the same pair to ``select()`` that you passed here, or the
     point picked off the front will not be the one the search resolved for.
     """
@@ -1081,7 +1083,7 @@ def fit_pure_pareto(
             # point in place, and problem.scale is frozen after generation zero.
             problem = _make_problem(
                 compound, spec, data, units, bounds, sft_options, pool=pool,
-                ref_vle=ref_vle, ref_sft=ref_sft,
+                refs=refs,
             )
             algorithm = _make_algorithm(pop_size, lhs)
             with _silence_fd_stderr(quiet_solver):

@@ -190,7 +190,7 @@ def _plot_residuals_pure(result, path=None):
     return fig, ax
 
 
-def _plot_pareto(result, path=None, ref_vle: float = 2.0, ref_sft: float = 0.7):
+def _plot_pareto(result, path=None, refs: tuple[float, float] | None = None):
     """AAD_sft vs AAD_vle with the selected point and its tangent (paper Fig. 1)."""
     import matplotlib.pyplot as plt
     import numpy as np
@@ -198,11 +198,14 @@ def _plot_pareto(result, path=None, ref_vle: float = 2.0, ref_sft: float = 0.7):
 
     from fit_pcsaft._pure.pareto import _argmin_scalarized
 
+    if refs is None:
+        refs = (2.0, 0.7)
+
     sns.set_context("talk")
     sns.set_style("ticks")
 
     F = result.F
-    i = _argmin_scalarized(F, ref_vle, ref_sft)
+    i = _argmin_scalarized(F, refs)
 
     fig, ax = plt.subplots(figsize=(7, 5.5))
     ax.plot(F[:, 0], F[:, 1], "-o", color="#1F77B4", ms=5, lw=1.5,
@@ -220,8 +223,8 @@ def _plot_pareto(result, path=None, ref_vle: float = 2.0, ref_sft: float = 0.7):
 
     xlim, ylim = _limits(F[:, 0]), _limits(F[:, 1])
 
-    # tangent of slope -ref_sft/ref_vle through the selected point
-    slope = -ref_sft / ref_vle
+    # tangent of slope -refs[1]/refs[0] through the selected point
+    slope = -refs[1] / refs[0]
     x_at = [F[i, 0] + (y - F[i, 1]) / slope for y in ylim]
     x_t = np.clip(np.sort(x_at), *xlim)
     ax.plot(x_t, F[i, 1] + slope * (x_t - F[i, 0]),
