@@ -12,6 +12,13 @@ from tests.test_surface_tension import (
     _hexane_data_with_sft,
 )
 
+FORTE = ("psat", "rho")
+
+
+class _NoDft(BaseException):
+    """Not an Exception on purpose: _evaluate_point's `except Exception` around
+    _build_functional would swallow one and the test would silently pass."""
+
 
 def test_non_dominated_keeps_only_the_front():
     F = np.array([
@@ -95,6 +102,95 @@ def test_hvap_is_reported_but_never_optimized():
     assert aad_objectives(HEXANE_P, HEXANE, HEXANE_SPEC, base, Units()) == (
         aad_objectives(HEXANE_P, HEXANE, HEXANE_SPEC, with_hvap, Units())
     )
+
+
+def test_forte_objectives_are_the_two_aards_and_average_to_aad_vle():
+    """Forte et al. 2018 splits Rehner & Gross's eq-30 mean into its two terms.
+
+    The arithmetic identity is the check: whatever ('psat','rho') reports must
+    average back to what ('vle','sft') reports on axis 0, exactly. If it does
+    not, one of the two branches is computing a different quantity.
+    """
+    from fit_pcsaft._types import ModelSpec
+
+    data, water = _water_data()
+    spec = ModelSpec(mu=0.0, na=1, nb=1, q=0.0)
+    params = np.array(WATER_SCHEMES[0][1])          # 2B, Table 1
+
+    aad_psat, aad_rho = aad_objectives(
+        params, water, spec, data, Units(), objectives=FORTE
+    )
+    aad_vle, _ = aad_objectives(params, water, spec, data, Units())
+
+    assert 0.5 * (aad_psat + aad_rho) == pytest.approx(aad_vle, rel=1e-12)
+    # the two terms of the module docstring's own reconciliation argument
+    assert aad_psat == pytest.approx(4.56, abs=0.05)
+    assert aad_rho == pytest.approx(1.76, abs=0.05)
+
+
+def test_forte_mode_never_builds_a_functional(monkeypatch):
+    """The whole performance case for the mode: the DFT solve dominates the
+    cost of an evaluation and is skipped entirely, because there is no
+    interface solve at all.
+
+    Both names are module-level imports in pareto.py, so patching them *there*
+    is what _evaluate_point actually resolves.
+    """
+    from fit_pcsaft._pure import pareto
+
+    def _boom(*args, **kwargs):
+        raise _NoDft("the DFT path was entered")
+
+    monkeypatch.setattr(pareto, "_build_functional", _boom)
+    monkeypatch.setattr(pareto, "predict_surface_tension", _boom)
+
+    data = _hexane_data_with_sft()      # sft data present, and irrelevant
+    f = pareto.aad_objectives(
+        HEXANE_P, HEXANE, HEXANE_SPEC, data, Units(), objectives=FORTE
+    )
+    assert all(np.isfinite(v) for v in f)
+    assert f != (_BIG, _BIG)
+
+    # negative control: without it, a typo in the patch target passes silently
+    with pytest.raises(_NoDft):
+        pareto.aad_objectives(HEXANE_P, HEXANE, HEXANE_SPEC, data, Units())
+
+
+def test_sft_is_reported_but_never_optimized_in_forte_mode():
+    """The `hvap_path` bullet, one property over.
+
+    Under ('psat','rho') surface tension is still loaded into `data` and still
+    shows up in the metrics of whatever `.select()` returns, which makes it easy
+    to assume it is being fitted. Absurd gamma must move neither objective by a
+    single ulp -- and must move both under the default pair.
+    """
+    import dataclasses
+
+    base = _hexane_data_with_sft()
+    absurd = dataclasses.replace(base, sft=base.sft * 3.0 + 50.0)
+
+    assert aad_objectives(
+        HEXANE_P, HEXANE, HEXANE_SPEC, base, Units(), objectives=FORTE
+    ) == aad_objectives(
+        HEXANE_P, HEXANE, HEXANE_SPEC, absurd, Units(), objectives=FORTE
+    )
+    assert aad_objectives(HEXANE_P, HEXANE, HEXANE_SPEC, base, Units()) != (
+        aad_objectives(HEXANE_P, HEXANE, HEXANE_SPEC, absurd, Units())
+    )
+
+
+def test_refs_default_per_mode():
+    """(2, 0.7) for Rehner & Gross, (2, 2) for Forte -- and they pick different
+    points on the same front, which is the only way to test a default that is
+    otherwise just a table entry.
+    """
+    from fit_pcsaft._pure.pareto import _DEFAULT_REFS, _argmin_scalarized
+
+    F = np.array([[1.0, 4.0], [4.0, 2.0]])
+    assert _DEFAULT_REFS[("vle", "sft")] == (2.0, 0.7)
+    assert _DEFAULT_REFS[("psat", "rho")] == (2.0, 2.0)
+    assert _argmin_scalarized(F, _DEFAULT_REFS[("vle", "sft")]) == 1
+    assert _argmin_scalarized(F, _DEFAULT_REFS[("psat", "rho")]) == 0
 
 
 # Rehner & Gross 2020, water, PC-SAFT: parameters from Table 1, AADs from Table 2.

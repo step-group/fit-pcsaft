@@ -84,6 +84,28 @@ _MIN_SCALE_SAMPLE = 4
 # MOEA/D-DE's nr (Li & Zhang 2009), pagmo's `limit`. See _capped_replacement.
 _N_REPLACE = 2
 
+# The two objective axes, keyed by what they measure:
+#     key -> (report name, unit, ParetoResult.to_csv column)
+# The column names are an on-disk contract -- examples/pure/12_water_vs_rehner.py
+# reads `aad_vle_pct`/`aad_sft` back off a saved front.
+_OBJECTIVES = {
+    "vle":  ("AAD_vle",   "%",    "aad_vle_pct"),   # eq 30: the mean of the next two
+    "psat": ("AARD_psat", "%",    "aad_psat_pct"),
+    "rho":  ("AARD_rho",  "%",    "aad_rho_pct"),
+    "sft":  ("AAD_sft",   "mN/m", "aad_sft"),
+}
+
+# The supported pairs, each mapped to the eq-32 references it defaults to.
+# Rehner & Gross 2020 (water: 2 %, 0.7 mN/m) and Forte et al. 2018, which puts
+# the two bulk AARDs on separate axes and weights them equally.
+# The keys ARE the valid pairs -- a second _VALID_PAIRS set would only be a
+# thing to keep in sync.
+_DEFAULT_REFS = {
+    ("vle", "sft"): (2.0, 0.7),
+    ("psat", "rho"): (2.0, 2.0),
+}
+_DEFAULT_OBJECTIVES = ("vle", "sft")
+
 
 def non_dominated(F: np.ndarray) -> np.ndarray:
     """Boolean mask of the non-dominated rows of a minimization objective array.
@@ -223,6 +245,11 @@ def _penalize(R: np.ndarray, scale: tuple[float, float]) -> np.ndarray:
     return F + (_BIG * np.maximum(R[:, 2], 0.0))[:, None]
 
 
+def _finite(v: float) -> float:
+    """_BIG for a non-finite AAD -- an infinite AARD is a degenerate point."""
+    return float(v) if np.isfinite(v) else _BIG
+
+
 def _evaluate_point(
     params_vec: np.ndarray,
     compound: Compound,
@@ -230,25 +257,35 @@ def _evaluate_point(
     data: PureData,
     units: Units,
     sft_options=None,
+    objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
 ) -> tuple[float, float, float]:
-    """Return ``(AAD_vle [%], AAD_sft [mN/m], violation)`` for a parameter vector.
+    """Return ``(f1, f2, violation)`` for a parameter vector.
+
+    ``f1``/``f2`` are the two AADs named by ``objectives`` -- see ``_OBJECTIVES``.
 
     ``params_vec`` is in PHYSICAL space, not sqrt-transformed.
 
-    ``violation <= 0`` means every dataset was evaluable at more than
-    ``_MIN_VALID_FRACTION`` of its points. Above zero it measures how far short
-    the *worst* dataset fell, and the objectives are still computed from
-    whatever points did work.
+    ``violation <= 0`` means every dataset **that feeds an objective** was
+    evaluable at more than ``_MIN_VALID_FRACTION`` of its points. Above zero it
+    measures how far short the worst such dataset fell, and the objectives are
+    still computed from whatever points did work. Surface tension is only in
+    that set when it is an objective: under ``("psat", "rho")`` a parameter set
+    whose interface will not converge is not penalized for it, because nothing
+    is asking it to.
 
     That grading matters: roughly 80% of a wide parameter box has no stable
     interface for an associating fluid, and a single flat penalty maps all of it
-    onto one indistinguishable point. The optimizer then cannot tell "failed two
-    of twenty-five gamma points" from "no vapour-liquid equilibrium at all", and
-    has no direction to climb out. Reporting the degree of failure gives it one.
+    onto one indistinguishable point.
+
+    **The DFT solve is skipped entirely when ``"sft"`` is not an objective** --
+    no ``_build_functional``, no ``predict_surface_tension``. That solve
+    dominates the cost of an evaluation, so the ``("psat", "rho")`` pair is
+    markedly cheaper; the measured figures live with the timing run that
+    produces them.
     """
     from fit_pcsaft.result import _predict_per_property
 
-    worst = _BIG_VIOLATION = 1.0
+    _BIG_VIOLATION = 1.0
     try:
         eos = _build_eos(params_vec, compound, spec)
     except Exception:
@@ -263,27 +300,29 @@ def _evaluate_point(
     worst = min(
         _fraction(m_psat, len(data.T_psat)), _fraction(m_rho, len(data.T_rho))
     )
+    aad = {
+        "psat": m_psat.aard_pct,
+        "rho": m_rho.aard_pct,
+        # Mean of the two AARDs, equivalently a single 1/N_total average when the
+        # two data sets are the same size. NOT their sum -- see the module docstring.
+        "vle": 0.5 * (m_psat.aard_pct + m_rho.aard_pct),
+    }
 
-    # Mean of the two AARDs, equivalently a single 1/N_total average when the
-    # two data sets are the same size. NOT their sum -- see the module docstring.
-    aad_vle = 0.5 * (m_psat.aard_pct + m_rho.aard_pct)
-    if not np.isfinite(aad_vle):
-        aad_vle = _BIG
+    if "sft" in objectives:
+        try:
+            functional = _build_functional(params_vec, compound, spec)
+        except Exception:
+            return _finite(aad[objectives[0]]), _BIG, _BIG_VIOLATION
+        gamma = predict_surface_tension(functional, data.T_sft, units, sft_options)
+        m_sft = compute_metrics_from_arrays(gamma, data.sft)
+        worst = min(worst, _fraction(m_sft, len(data.T_sft)))
+        aad["sft"] = m_sft.mae
 
-    if len(data.T_sft) == 0:
-        return float(aad_vle), 0.0, _MIN_VALID_FRACTION - worst
-
-    try:
-        functional = _build_functional(params_vec, compound, spec)
-    except Exception:
-        return float(aad_vle), _BIG, _BIG_VIOLATION
-
-    gamma = predict_surface_tension(functional, data.T_sft, units, sft_options)
-    m_sft = compute_metrics_from_arrays(gamma, data.sft)
-    worst = min(worst, _fraction(m_sft, len(data.T_sft)))
-    aad_sft = m_sft.mae if np.isfinite(m_sft.mae) else _BIG
-
-    return float(aad_vle), float(aad_sft), _MIN_VALID_FRACTION - worst
+    return (
+        _finite(aad[objectives[0]]),
+        _finite(aad[objectives[1]]),
+        _MIN_VALID_FRACTION - worst,
+    )
 
 
 def aad_objectives(
@@ -293,15 +332,18 @@ def aad_objectives(
     data: PureData,
     units: Units,
     sft_options=None,
+    objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
 ) -> tuple[float, float]:
-    """Return ``(AAD_vle [%], AAD_sft [mN/m])`` for one physical parameter vector.
+    """Return the two AADs named by ``objectives`` for one physical parameter vector.
 
     ``params_vec`` is in PHYSICAL space, not sqrt-transformed. Returns
     ``(_BIG, _BIG)`` when the parameter set is infeasible — see
     ``_evaluate_point``, which the optimizer uses directly because it also
     reports *how* infeasible.
     """
-    f1, f2, g = _evaluate_point(params_vec, compound, spec, data, units, sft_options)
+    f1, f2, g = _evaluate_point(
+        params_vec, compound, spec, data, units, sft_options, objectives
+    )
     return (_BIG, _BIG) if g > 0.0 else (f1, f2)
 
 
@@ -685,6 +727,7 @@ class ParetoResult:
     is_associative: bool
     time_elapsed: float
     input_name: str = ""
+    objectives: tuple[str, str] = _DEFAULT_OBJECTIVES
     algorithm_result: object = None
 
     @property
@@ -706,7 +749,7 @@ class ParetoResult:
         from fit_pcsaft.result import FitResult, _compute_pure_metrics
 
         if refs is None:
-            refs = (2.0, 0.7)
+            refs = _DEFAULT_REFS[tuple(self.objectives)]
 
         i = _argmin_scalarized(self.F, refs)
         params_vec = self.X[i]
