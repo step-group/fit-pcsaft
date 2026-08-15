@@ -1463,3 +1463,19 @@ def fit_pure_pareto(
         objectives=objectives,
         algorithm_result=res,
     )
+
+
+# Lazy re-export of front_quality.py's public functions -- see that module's
+# docstring for why this is a PEP 562 module __getattr__ and not a plain
+# top-level `from .front_quality import ...`: front_quality imports
+# `coverage`/`non_dominated` from this module, so a straight-line re-export
+# here would form an import cycle that breaks whenever front_quality is
+# imported first (which the tests do).
+_FRONT_QUALITY_EXPORTS = ("front_metrics", "reference_front", "compare_fronts")
+
+
+def __getattr__(name):
+    if name in _FRONT_QUALITY_EXPORTS:
+        from fit_pcsaft._pure import front_quality
+        return getattr(front_quality, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
