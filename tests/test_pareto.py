@@ -193,6 +193,52 @@ def test_refs_default_per_mode():
     assert _argmin_scalarized(F, _DEFAULT_REFS[("psat", "rho")]) == 0
 
 
+def test_sft_objectives_without_sft_data_is_rejected():
+    """The bug this guard replaces: with no gamma, the old code returned a
+    constant 0.0 second objective and the whole front degenerated onto one axis.
+
+    Raised before _setup_pure_fit, so it never reaches the PubChem lookup --
+    which is also why this test passes offline with paths that do not exist.
+    """
+    from fit_pcsaft import fit_pure_pareto
+
+    with pytest.raises(ValueError, match="sft_path"):
+        fit_pure_pareto(id="water", psat_path="nope.csv", density_path="nope.csv")
+
+
+def test_an_unsupported_objective_pair_is_rejected():
+    from fit_pcsaft import fit_pure_pareto
+
+    for pair in [("psat", "sft"), ("vle", "rho"), ("sft", "vle"), ("vle", "hvap")]:
+        with pytest.raises(ValueError, match="objectives"):
+            fit_pure_pareto(
+                id="water", psat_path="nope.csv", density_path="nope.csv",
+                sft_path="nope.csv", objectives=pair,
+            )
+
+
+def test_objectives_cross_the_process_boundary():
+    """_worker_evaluate reads `objectives` from _WORKER, so it has to be in
+    _worker_init's initargs: a spawned worker re-imports the module and inherits
+    nothing else. Two plain strings pickle; feos.Identifier does not, which is
+    why nothing else can ride along.
+    """
+    from fit_pcsaft._pure.pareto import _map_evaluate, _worker_pool
+
+    data = _hexane_data_with_sft()
+    units = Units()
+    expected = aad_objectives(
+        HEXANE_P, HEXANE, HEXANE_SPEC, data, units, objectives=FORTE
+    )
+    with _worker_pool(
+        2, HEXANE, HEXANE_SPEC, data, units, None, False, FORTE
+    ) as pool:
+        got = _map_evaluate(
+            [HEXANE_P], pool, HEXANE, HEXANE_SPEC, data, units, None, FORTE
+        )
+    assert got[0][:2] == pytest.approx(expected)
+
+
 # Rehner & Gross 2020, water, PC-SAFT: parameters from Table 1, AADs from Table 2.
 # (scheme, params, na, nb, paper AAD_vle %, paper AAD_DFT mN/m)
 WATER_SCHEMES = [

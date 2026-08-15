@@ -394,7 +394,7 @@ def _identifier_fields(identifier) -> dict:
     return {f: getattr(identifier, f, None) for f in _IDENT_FIELDS}
 
 
-def _worker_init(ident_fields, mw, spec, data, units, sft_options, quiet):
+def _worker_init(ident_fields, mw, spec, data, units, sft_options, quiet, objectives):
     import feos
 
     # Each worker owns one core; letting every one of them spin up its own rayon
@@ -411,6 +411,7 @@ def _worker_init(ident_fields, mw, spec, data, units, sft_options, quiet):
     _WORKER.update(
         compound=Compound(identifier=feos.Identifier(**ident_fields), mw=mw),
         spec=spec, data=data, units=units, sft_options=sft_options,
+        objectives=objectives,
     )
 
 
@@ -418,6 +419,7 @@ def _worker_evaluate(x):
     return _evaluate_point(
         np.asarray(x, dtype=float), _WORKER["compound"], _WORKER["spec"],
         _WORKER["data"], _WORKER["units"], _WORKER["sft_options"],
+        _WORKER["objectives"],
     )
 
 
@@ -430,12 +432,17 @@ def _resolve_n_jobs(n_jobs: int) -> int:
 
 
 @contextmanager
-def _worker_pool(n_jobs, compound, spec, data, units, sft_options, quiet):
+def _worker_pool(n_jobs, compound, spec, data, units, sft_options, quiet, objectives):
     """A spawn-based pool, or None when running serially.
 
     "spawn", not "fork": feos has already started its rayon threads in the
     parent by this point, and forking a process with live threads is a
     well-known way to deadlock in the child.
+
+    ``objectives`` has to cross with the rest of the initargs. A spawned
+    worker re-imports this module and inherits nothing from the parent, so
+    anything ``_worker_evaluate`` needs is either in the row it is handed or
+    in ``_WORKER``.
     """
     if n_jobs <= 1:
         yield None
@@ -447,7 +454,7 @@ def _worker_pool(n_jobs, compound, spec, data, units, sft_options, quiet):
         n_jobs,
         initializer=_worker_init,
         initargs=(_identifier_fields(compound.identifier), compound.mw,
-                  spec, data, units, sft_options, quiet),
+                  spec, data, units, sft_options, quiet, objectives),
     )
     try:
         yield pool
@@ -457,6 +464,7 @@ def _worker_pool(n_jobs, compound, spec, data, units, sft_options, quiet):
 
 
 def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
+                  objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
                   refs: tuple[float, float] = (2.0, 0.7)):
     """Population-at-a-time problem, unconstrained by necessity.
 
@@ -490,7 +498,10 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
         def _evaluate(self, X, out, *args, **kwargs):
             rows = [np.asarray(x, dtype=float) for x in np.atleast_2d(X)]
             R = np.asarray(
-                _map_evaluate(rows, pool, compound, spec, data, units, sft_options),
+                _map_evaluate(
+                    rows, pool, compound, spec, data, units, sft_options,
+                    objectives,
+                ),
                 dtype=float,
             )
             if self.scale is None:
@@ -500,11 +511,18 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
     return PcSaftBiObjective()
 
 
-def _map_evaluate(rows, pool, compound, spec, data, units, sft_options):
-    """Evaluate parameter vectors, through the worker pool when there is one."""
+def _map_evaluate(rows, pool, compound, spec, data, units, sft_options,
+                  objectives: tuple[str, str] = _DEFAULT_OBJECTIVES):
+    """Evaluate parameter vectors, through the worker pool when there is one.
+
+    ``objectives`` is only read on the serial path -- a pooled worker takes it
+    from ``_WORKER``, set once in the initializer. The two agree because
+    ``fit_pure_pareto`` builds the pool and every call here from the same
+    variable.
+    """
     if pool is None:
         return [
-            _evaluate_point(x, compound, spec, data, units, sft_options)
+            _evaluate_point(x, compound, spec, data, units, sft_options, objectives)
             for x in rows
         ]
     return pool.map(_worker_evaluate, rows)
@@ -550,7 +568,8 @@ def _merge_fronts(fronts) -> tuple[np.ndarray, np.ndarray]:
     return X[keep][order], F[keep][order]
 
 
-def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options):
+def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options,
+             objectives: tuple[str, str] = _DEFAULT_OBJECTIVES):
     """Fill the gaps the search leaves between adjacent front points.
 
     MOEA/D spaces its population by construction — one weight vector per slot —
@@ -598,7 +617,9 @@ def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options):
     if not rows:
         return X, F
     R = np.asarray(
-        _map_evaluate(rows, pool, compound, spec, data, units, sft_options),
+        _map_evaluate(
+            rows, pool, compound, spec, data, units, sft_options, objectives
+        ),
         dtype=float,
     )
     ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
@@ -820,7 +841,7 @@ def fit_pure_pareto(
     id: str,
     psat_path: "Path | str",
     density_path: "Path | str",
-    sft_path: "Path | str",
+    sft_path: "Optional[Path | str]" = None,
     hvap_path: "Optional[Path | str]" = None,
     mu: "Optional[float]" = 0.0,
     q: float = 0.0,
@@ -841,7 +862,8 @@ def fit_pure_pareto(
     lhs: bool = True,
     n_jobs: int = -1,
     refine: int = 4,
-    refs: tuple[float, float] = (2.0, 0.7),
+    objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
+    refs: "Optional[tuple[float, float]]" = None,
     n_restarts: int = 1,
 ) -> ParetoResult:
     """Generate the AAD_vle / AAD_sft pareto front with MOEA/D.
@@ -1077,6 +1099,21 @@ def fit_pure_pareto(
     and mN/m. Pass the same pair to ``select()`` that you passed here, or the
     point picked off the front will not be the one the search resolved for.
     """
+    objectives = tuple(objectives)
+    if objectives not in _DEFAULT_REFS:
+        raise ValueError(
+            f"objectives={objectives!r} is not supported. Use "
+            f"('vle', 'sft') for Rehner & Gross 2020 or ('psat', 'rho') for "
+            f"Forte et al. 2018."
+        )
+    if "sft" in objectives and sft_path is None:
+        raise ValueError(
+            "objectives=('vle', 'sft') needs surface-tension data: pass "
+            "sft_path, or use objectives=('psat', 'rho'), which does not."
+        )
+    if refs is None:
+        refs = _DEFAULT_REFS[objectives]
+
     from pymoo.optimize import minimize
 
     from fit_pcsaft._pure.fit import _default_de_bounds, _setup_pure_fit
@@ -1115,10 +1152,12 @@ def fit_pure_pareto(
         print(
             f"MOEA/D: {pop_size} weight vectors x {n_gen} gen "
             f"x {n_restarts} restart(s) on {n_workers} process(es)"
+            f" [{objectives[0]} vs {objectives[1]}]"
         )
 
     with _worker_pool(
-        n_workers, compound, spec, data, units, sft_options, quiet_solver
+        n_workers, compound, spec, data, units, sft_options, quiet_solver,
+        objectives,
     ) as pool:
         fronts = []
         for r in range(n_restarts):
@@ -1126,7 +1165,7 @@ def fit_pure_pareto(
             # point in place, and problem.scale is frozen after generation zero.
             problem = _make_problem(
                 compound, spec, data, units, bounds, sft_options, pool=pool,
-                refs=refs,
+                objectives=objectives, refs=refs,
             )
             algorithm = _make_algorithm(pop_size, lhs)
             with _silence_fd_stderr(quiet_solver):
@@ -1145,8 +1184,9 @@ def fit_pure_pareto(
                 continue
             if verbose and problem.scale is not None:
                 print(
-                    f"restart {r + 1}: objective scale AAD_vle / "
-                    f"{problem.scale[0]:.3g}, AAD_sft / {problem.scale[1]:.3g}"
+                    f"restart {r + 1}: objective scale "
+                    f"{_OBJECTIVES[objectives[0]][0]} / {problem.scale[0]:.3g}, "
+                    f"{_OBJECTIVES[objectives[1]][0]} / {problem.scale[1]:.3g}"
                 )
             # res.F is in scaled, penalized space and cannot be converted back --
             # a penalized row's true objectives are not recoverable from it. So
@@ -1156,7 +1196,8 @@ def fit_pure_pareto(
             with _silence_fd_stderr(quiet_solver):
                 R_r = np.asarray(
                     _map_evaluate(
-                        list(X_r), pool, compound, spec, data, units, sft_options
+                        list(X_r), pool, compound, spec, data, units,
+                        sft_options, objectives,
                     ),
                     dtype=float,
                 )
@@ -1191,7 +1232,8 @@ def fit_pure_pareto(
             n_before = len(F)
             with _silence_fd_stderr(quiet_solver):
                 X, F = _densify(
-                    X, F, refine, pool, compound, spec, data, units, sft_options
+                    X, F, refine, pool, compound, spec, data, units,
+                    sft_options, objectives,
                 )
             if verbose:
                 print(f"refine: {n_before} -> {len(F)} front points")
@@ -1207,5 +1249,6 @@ def fit_pure_pareto(
         is_associative=is_associative,
         time_elapsed=time.perf_counter() - t0,
         input_name=id,
+        objectives=objectives,
         algorithm_result=res,
     )
