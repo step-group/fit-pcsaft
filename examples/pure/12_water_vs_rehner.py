@@ -42,7 +42,7 @@ def _selected_from_front(path: Path) -> dict:
     """The eq-32 tangent point of the saved front, as an eval_pure params dict."""
     df = pl.read_csv(path)
     F = df.select(["aad_vle_pct", "aad_sft"]).to_numpy()
-    row = df.row(_argmin_scalarized(F, REF_VLE, REF_SFT), named=True)
+    row = df.row(_argmin_scalarized(F, (REF_VLE, REF_SFT)), named=True)
     return {k: row[k] for k in ("m", "sigma", "epsilon_k", "kappa_ab", "epsilon_k_ab")}
 
 

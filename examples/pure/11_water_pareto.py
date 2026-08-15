@@ -5,9 +5,12 @@ Reproduces the strategy of Rehner & Gross, J. Chem. Eng. Data 2020, 65,
 treated as two separate objectives, and the published parameter set is the
 point on the resulting front that minimises
 
-    AAD_vle / ref_vle + AAD_sft / ref_sft      (their eq 32)
+    AAD_vle / refs[0] + AAD_sft / refs[1]      (their eq 32)
 
-with ref_vle = 2% and ref_sft = 0.7 mN/m for water.
+with refs = (2.0, 0.7) for water. This is fit_pure_pareto's
+objectives=("vle", "sft") default; pass objectives=("psat", "rho") instead
+for the Forte et al. 2018 pair -- the two bulk AARDs on their own axes rather
+than pooled behind eq 30, and no surface tension data or DFT solve at all.
 
 The data files are quasi-data generated from reference correlations, as the
 paper does, so the fit is not biased toward the temperature range where raw
@@ -37,6 +40,7 @@ out_dir = Path(__file__).parent.parent / "out"
 
 REF_VLE = 2.0   # %
 REF_SFT = 0.7   # mN/m
+REFS = (REF_VLE, REF_SFT)
 
 
 def main() -> None:
@@ -54,9 +58,9 @@ def main() -> None:
     print(result)
 
     result.to_csv(out_dir / "water_pareto_front.csv")
-    result.plot(path=out_dir / "water_pareto.png", ref_vle=REF_VLE, ref_sft=REF_SFT)
+    result.plot(path=out_dir / "water_pareto.png", refs=REFS)
 
-    best = result.select(ref_vle=REF_VLE, ref_sft=REF_SFT)
+    best = result.select(refs=REFS)
     print()
     print(best)
     print(

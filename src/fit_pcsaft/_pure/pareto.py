@@ -5,8 +5,24 @@ error and interfacial error are treated as two independent objectives instead of
 being collapsed into one weighted sum, so the whole trade-off curve is available
 and the arbitrariness of a weight choice becomes visible.
 
-    objective 1 (eq 30)  AAD_vle = mean(AARD(psat), AARD(rho))  [%]
-    objective 2 (eq 31)  AAD_sft = mean|gamma_calc - gamma_exp| [mN/m]
+    objective pair ("vle", "sft")   -- Rehner & Gross 2020, the default
+        1 (eq 30)  AAD_vle = mean(AARD(psat), AARD(rho))  [%]
+        2 (eq 31)  AAD_sft = mean|gamma_calc - gamma_exp| [mN/m]
+
+    objective pair ("psat", "rho")  -- Forte et al. 2018
+        1          AARD(psat)  [%]
+        2          AARD(rho)   [%]
+
+Two objectives either way: n_obj is 2 and every measured knob below -- the
+nr=2 replacement cap, n_restarts, _densify, the Das-Dennis weight fan --
+assumes it. The second pair never touches the DFT at all, which is most of
+its point: measured on this machine's locally-built feos wheel, whole-search
+average over a 600-evaluation budget (pop_size=30, n_gen=20, n_restarts=1,
+refine=0, seed=1, n_jobs=1, same surface-tension file loaded either way so
+only the solving differs), objectives=("psat", "rho") averaged 3.69
+ms/evaluation against 103.33 ms/evaluation for ("vle", "sft") -- 28x cheaper.
+Full numbers, and why the run's 15-vs-2 front-point counts are not evidence
+about front quality, live with fit_pure_pareto's ``objectives`` paragraph.
 
 Eq 30 is read here as a *mean* of the two AARDs, not their sum. Written out, the
 equation looks like a sum of two separately-normalized terms,
@@ -271,11 +287,17 @@ def _evaluate_point(
     still computed from whatever points did work. Surface tension is only in
     that set when it is an objective: under ``("psat", "rho")`` a parameter set
     whose interface will not converge is not penalized for it, because nothing
-    is asking it to.
+    is asking it to -- exact for the two supported pairs, but not a general
+    rule: ``worst`` below always folds in the psat and rho fractions
+    regardless of ``objectives``, so a hypothetical ``("psat", "sft")`` pair
+    would still penalize on rho with nothing asking for it.
 
     That grading matters: roughly 80% of a wide parameter box has no stable
-    interface for an associating fluid, and a single flat penalty maps all of it
-    onto one indistinguishable point.
+    interface for an associating fluid, and a single flat penalty maps all of
+    it onto one indistinguishable point -- an optimizer given only that cannot
+    tell "failed two of twenty-five gamma points" from "no vapour-liquid
+    equilibrium at all". Reporting how far short a dataset fell instead gives
+    it a direction to climb out.
 
     **The DFT solve is skipped entirely when ``"sft"`` is not an objective** --
     no ``_build_functional``, no ``predict_surface_tension``. That solve
@@ -887,12 +909,27 @@ def fit_pure_pareto(
     refs: "Optional[tuple[float, float]]" = None,
     n_restarts: int = 1,
 ) -> ParetoResult:
-    """Generate the AAD_vle / AAD_sft pareto front with MOEA/D.
+    """Generate a two-objective PC-SAFT pareto front with MOEA/D.
+
+    Two modes, chosen by ``objectives``. The default, ``("vle", "sft")``,
+    reproduces Rehner & Gross, J. Chem. Eng. Data 2020, 65, 5698-5707: bulk
+    error and interfacial error as two separate AADs (eq 30/31, see the module
+    docstring). ``("psat", "rho")`` reproduces Forte et al. 2018: the two bulk
+    AARDs on their own axes instead of pooled behind eq 30, and no surface
+    tension or DFT solve at all. See ``_OBJECTIVES`` for what each key reports
+    and the ``objectives`` paragraph below for how the two modes differ in
+    cost and in what the graded violation covers.
 
     Cost is ``pop_size * n_gen`` objective evaluations, each roughly 120 ms at
-    sensible parameters and up to 1 s where the VLE solve fails. Budget decides
-    front quality far more than anything else; measured on water (2B, 14
-    workers), best-of-front and the largest hole in it:
+    sensible parameters and up to 1 s where the VLE solve fails -- measured
+    under ``objectives=('vle', 'sft')``, which is what every table in this
+    docstring documents; they do not apply to ``('psat', 'rho')``, which is
+    measured about 28x cheaper per evaluation over a whole search (this
+    machine's locally-built feos wheel, 600-evaluation budget -- see the
+    ``objectives`` paragraph below for the full numbers), so budget it
+    accordingly. Budget decides front quality far more than anything else;
+    measured on water (2B, 14 workers), best-of-front and the largest hole in
+    it:
 
     The table below was measured under NSGA-II, before the switch to MOEA/D. The
     cost per evaluation is a property of the model, not the solver, so the
@@ -1024,6 +1061,17 @@ def fit_pure_pareto(
     ``_evaluate_point`` does not look at ``data.T_hvap`` at all. Passing it will
     not pull the front towards better hvap.
 
+    Surface tension sits in a related but not identical position under
+    ``objectives=('psat', 'rho')``: passed and loaded the same way, and never
+    entering the search -- ``_evaluate_point`` skips ``_build_functional``
+    entirely on every one of the search's evaluations, which is the whole
+    performance case for the mode. Unlike ``hvap_path``, though, it is not
+    DFT-free everywhere: whenever ``sft_path`` was given, ``.select()`` still
+    builds a functional and DFT-solves the one point it returns, so the
+    resulting ``FitResult`` reports ``aad_sft`` regardless of ``objectives``.
+    That single solve is a rounding error against the evaluations the search
+    itself skipped.
+
     ``quiet_solver`` suppresses fd-level stderr for the duration of the search,
     hiding the Rust panic messages feos emits from worker threads when the DFT
     solver fails on an infeasible parameter set. Pass False when debugging.
@@ -1109,16 +1157,47 @@ def fit_pure_pareto(
     how many of each run's points survived it -- a run contributing zero landed
     where another had already been.
 
+    ``objectives`` selects the pair from ``_OBJECTIVES`` that ``F`` reports and
+    that the search decomposes against: ``("vle", "sft")`` (default, Rehner &
+    Gross 2020) or ``("psat", "rho")`` (Forte et al. 2018). Unsupported pairs
+    raise ``ValueError`` before any fitting starts, and so does ``("vle",
+    "sft")`` without ``sft_path``.
+
+    Dropping ``"sft"`` from ``objectives`` also drops it from the graded
+    violation ``_evaluate_point`` reports: infeasibility is judged only on the
+    datasets that feed an objective, so under ``("psat", "rho")`` a parameter
+    set whose interface will not converge is not penalized for it, because
+    nothing under that pair is asking for one. It also means no DFT solve at
+    all during the search -- no ``_build_functional``, no
+    ``predict_surface_tension`` -- which is most of why the pair is cheap.
+    Measured on this machine's locally-built feos wheel, whole-search average
+    over a 600-evaluation budget (pop_size=30, n_gen=20, n_restarts=1,
+    refine=0, seed=1, n_jobs=1, same surface-tension file loaded by both modes
+    so only the solving differs): ``objectives=("psat", "rho")`` averaged 3.69
+    ms per evaluation (2.2 s total) against 103.33 ms (62.0 s total) for
+    ``("vle", "sft")`` -- 28x cheaper per evaluation. That run also returned
+    15 front points against 2; do not read that as a front-quality comparison
+    -- 600 evaluations at refine=0/n_restarts=1 is far too small a budget for
+    the sft mode, and the gap is a budget artefact, not a resolution one.
+
     ``refs`` scales the two objectives for the decomposition, and is the same
-    eq-32 reference pair ``select()`` takes: water (2, 0.7), small alcohols
-    (2, 1.5), alcohols from 1-pentanol up (2, 3.0). It matters
-    more here than a scaling factor usually would. MOEA/D's Tchebicheff
-    decomposition is applied to raw objective values -- pymoo hands it an ideal
-    point but never a nadir point -- so without this the axis with the larger
-    numeric span dominates every weight vector and the front bunches into one
-    corner. It does not change the returned objectives, which are always in %
-    and mN/m. Pass the same pair to ``select()`` that you passed here, or the
-    point picked off the front will not be the one the search resolved for.
+    eq-32 reference pair ``select()`` takes. Defaults are per mode: water
+    (2, 0.7), small alcohols (2, 1.5), alcohols from 1-pentanol up (2, 3.0)
+    for ``objectives=('vle', 'sft')``; ``(2, 2)`` for ``('psat', 'rho')``.
+    Under the latter with equal refs the tangent has slope -1, so eq 32
+    reduces to ``(AARD_psat + AARD_rho) / 2`` -- exactly AAD_vle -- and the
+    selected point is the front's best *pooled* bulk fit rather than a
+    genuine trade-off pick; set ``refs`` from the two properties' expected
+    error scales if the selection is meant to mean more than that. ``refs``
+    matters more here than a scaling factor usually would: MOEA/D's
+    Tchebicheff decomposition is applied to raw objective values -- pymoo
+    hands it an ideal point but never a nadir point -- so without this the
+    axis with the larger numeric span dominates every weight vector and the
+    front bunches into one corner. It does not change the returned
+    objectives, which are always in the units ``_OBJECTIVES`` gives
+    ``objectives[0]``/``objectives[1]``. Pass the same pair to ``select()``
+    that you passed here, or the point picked off the front will not be the
+    one the search resolved for.
     """
     objectives = tuple(objectives)
     if objectives not in _DEFAULT_REFS:
