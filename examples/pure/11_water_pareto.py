@@ -10,7 +10,13 @@ point on the resulting front that minimises
 with refs = (2.0, 0.7) for water. This is fit_pure_pareto's
 objectives=("vle", "sft") default; pass objectives=("psat", "rho") instead
 for the Forte et al. 2018 pair -- the two bulk AARDs on their own axes rather
-than pooled behind eq 30, and no surface tension data or DFT solve at all.
+than pooled behind eq 30, and no DFT solve anywhere in the search itself.
+sft_path may still be passed under that pair (it is loaded and reported, just
+never optimized), and .select() below always DFT-solves once, for the single
+point it returns, whenever sft_path was given -- independent of objectives.
+examples/pure/12_water_vs_rehner.py reads this script's saved front back by
+column name, so it expects the default pair's CSV header (aad_vle_pct,
+aad_sft); switching objectives here without updating that script breaks it.
 
 The data files are quasi-data generated from reference correlations, as the
 paper does, so the fit is not biased toward the temperature range where raw

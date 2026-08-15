@@ -21,6 +21,19 @@ uv run python -m pytest
 
 Use `uv` for all package management — not `pip`.
 
+`pyproject.toml`'s `[tool.uv.sources]` pins `feos` to a locally-compiled wheel at
+`../feos/dist/feos-0.10.1-cp310-abi3-macosx_11_0_arm64.whl` (full LTO,
+`-Ctarget-cpu=native`, Cargo features trimmed to `pcsaft dft multiparameter ad
+rayon`) — same version as PyPI's, different bytes, marker-gated to
+darwin+arm64. **If that wheel is absent, `uv sync` fails.** Escape hatch:
+delete the `[tool.uv.sources]` `feos` block and run `uv lock` — that is the
+whole fix, falling back to the stock PyPI wheel. If you rebuild the wheel at
+the same version, plain `uv lock` reuses the cached hash and will not notice
+the new bytes; run `uv lock --upgrade-package feos` afterward to keep the
+committed lock honest. Skipping that is harmless at runtime (`uv sync`/`uv
+run` don't re-verify the hash) — it just leaves `uv.lock` describing stale
+bytes.
+
 ## Architecture
 
 `fit-pcsaft` wraps the [FeOs](https://github.com/feos-org/feos) PC-SAFT implementation with fitting logic powered by `scipy.optimize`. The public API is entirely in `src/fit_pcsaft/__init__.py`.

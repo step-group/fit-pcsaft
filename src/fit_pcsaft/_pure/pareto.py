@@ -179,7 +179,7 @@ def coverage(A: np.ndarray, B: np.ndarray) -> float:
 
 
 def _argmin_scalarized(F: np.ndarray, refs: tuple[float, float]) -> int:
-    """Index of the point minimising eq 32: AAD_vle/refs[0] + AAD_sft/refs[1].
+    """Index of the point minimising eq 32: F[:, 0]/refs[0] + F[:, 1]/refs[1].
 
     Geometrically this is the tangent point of the front with a line of slope
     -refs[1]/refs[0], which is how the paper picks its published parameters.
@@ -489,7 +489,7 @@ def _worker_pool(n_jobs, compound, spec, data, units, sft_options, quiet, object
 
 def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
                   objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
-                  refs: tuple[float, float] = (2.0, 0.7)):
+                  refs: tuple[float, float] = _DEFAULT_REFS[_DEFAULT_OBJECTIVES]):
     """Population-at-a-time problem, unconstrained by necessity.
 
     Deliberately a vectorized ``Problem`` rather than pymoo's
@@ -1293,8 +1293,9 @@ def fit_pure_pareto(
                 )
             # res.F is in scaled, penalized space and cannot be converted back --
             # a penalized row's true objectives are not recoverable from it. So
-            # the optimum set is evaluated once more for its real AAD_vle and
-            # AAD_sft. At most pop_size points, under 2% of a run's budget.
+            # the optimum set is evaluated once more for its real F[:, 0] and
+            # F[:, 1] -- whichever pair `objectives` names. At most pop_size
+            # points, under 2% of a run's budget.
             X_r = np.atleast_2d(np.asarray(res.X, dtype=float))
             with _silence_fd_stderr(quiet_solver):
                 R_r = np.asarray(

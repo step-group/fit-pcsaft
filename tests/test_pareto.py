@@ -764,3 +764,31 @@ def test_str_is_table_driven_and_labels_each_mode_correctly():
         "  best AARD_psat: 1.00% (AARD_rho there: 2.00%)\n"
         "  best AARD_rho: 1.00% (AARD_psat there: 2.00%)"
     )
+
+
+def test_select_resolves_per_mode_default_refs_and_reports_sft():
+    """refs=None -> _DEFAULT_REFS[objectives], and under ("psat", "rho") that
+    is what newly reaches select()'s len(data.T_sft) > 0 functional build --
+    the "DFT-solves once regardless of objectives" precedent the module and
+    fit_pure_pareto docstrings assert. X uses the real, self-consistent
+    HEXANE_P so _build_eos/_build_functional succeed."""
+    from fit_pcsaft._pure.pareto import ParetoResult
+
+    def _front(objectives):
+        return ParetoResult(
+            X=np.array([HEXANE_P]), F=np.array([[1.0, 2.0]]),
+            data=_hexane_data_with_sft(), compound=HEXANE, spec=HEXANE_SPEC,
+            units=Units(), fit_mu=False, is_associative=False, time_elapsed=0.0,
+            objectives=objectives,
+        )
+
+    rehner = _front(("vle", "sft")).select()
+    assert "refs=(2.0, 0.7)" in rehner.scipy_result.message
+    assert rehner.scipy_result.success and np.isfinite(rehner.aad_sft)
+
+    forte = _front(("psat", "rho")).select()
+    assert "refs=(2.0, 2.0)" in forte.scipy_result.message
+    assert forte.scipy_result.success
+    # never an objective under this pair, but still reported -- self-consistent
+    # fixture makes it exactly 0, not merely finite by accident
+    assert forte.aad_sft == pytest.approx(0.0, abs=1e-9)
