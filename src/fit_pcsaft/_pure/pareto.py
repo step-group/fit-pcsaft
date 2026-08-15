@@ -1465,17 +1465,17 @@ def fit_pure_pareto(
     )
 
 
-# Lazy re-export of front_quality.py's public functions -- see that module's
-# docstring for why this is a PEP 562 module __getattr__ and not a plain
-# top-level `from .front_quality import ...`: front_quality imports
-# `coverage`/`non_dominated` from this module, so a straight-line re-export
-# here would form an import cycle that breaks whenever front_quality is
-# imported first (which the tests do).
-_FRONT_QUALITY_EXPORTS = ("front_metrics", "reference_front", "compare_fronts")
-
-
-def __getattr__(name):
-    if name in _FRONT_QUALITY_EXPORTS:
-        from fit_pcsaft._pure import front_quality
-        return getattr(front_quality, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+# Re-export of front_quality.py's public functions. front_quality imports
+# `coverage`/`non_dominated` from this module, so this line has to come after
+# both are defined above -- but not deferred further than that: fit_pcsaft's
+# own __init__.py imports this module before anything else reaches
+# front_quality, so front_quality.py's top-level code never runs before this
+# point in the file has executed, in any import order. Verified directly:
+# importing `fit_pcsaft._pure.front_quality` first in a fresh interpreter
+# still works, because it drags in `fit_pcsaft/__init__.py` -> this module
+# first regardless of which submodule the caller names.
+from fit_pcsaft._pure.front_quality import (  # noqa: E402
+    compare_fronts,
+    front_metrics,
+    reference_front,
+)

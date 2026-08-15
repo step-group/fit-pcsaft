@@ -68,13 +68,16 @@ def test_hv_reference_point_defaults_above_the_worst_point():
     assert front_metrics(F)["hv"] > 0.0
 
 
-def test_hv_is_comparable_across_fronts_with_a_shared_ref_point():
+def test_hv_ranks_a_dominating_front_higher_under_a_shared_ref_point():
     """Task 3 scores ~45 fronts against one shared ref_point specifically so the
-    hypervolumes can be read side by side. pymoo's HV defaults norm_ref_point=True,
-    which -- if it renormalized ref_point per front's own ideal/nadir, the way the
-    name suggests -- would silently break that comparison. front_metrics passes
-    norm_ref_point=False. Pin: same ref_point, a strictly dominating front must score
-    strictly higher, not just a front-relative number that happens to differ."""
+    hypervolumes can be read side by side. This pins that comparability directly:
+    same ref_point, a strictly dominating front must score strictly higher.
+
+    It does NOT pin pymoo's norm_ref_point flag -- on this pymoo build (0.6.2) that
+    flag is a no-op regardless of value (see front_quality.py's module docstring), so
+    this test passes identically whether front_metrics passes norm_ref_point=False or
+    True. The explicit False there is a defensive default against a future pymoo
+    release wiring the flag up for real, not something this test can detect."""
     from fit_pcsaft._pure.front_quality import front_metrics
 
     good = np.array([[1.0, 4.0], [2.0, 2.0], [4.0, 1.0]])

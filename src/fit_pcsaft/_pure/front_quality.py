@@ -14,35 +14,33 @@ an extreme point nobody would ever select. See
 ``non_dominated`` and ``coverage`` are reused from ``pareto.py``, not
 reimplemented. This module imports from ``pareto.py``, never the reverse.
 ``pareto.py``'s re-export of ``front_metrics``/``reference_front``/
-``compare_fronts`` is a module-level ``__getattr__`` (PEP 562) rather than a
-top-level ``from .front_quality import ...`` -- the straight-line version is
-NOT safe here: the tests (and any other caller) import this module directly
-as ``fit_pcsaft._pure.front_quality``, and when that happens first, Python
-starts executing this file, hits its own top-level
-``from fit_pcsaft._pure.pareto import coverage, non_dominated``, and begins
-importing ``pareto.py`` from scratch -- which would then reach a top-level
-``from .front_quality import front_metrics, ...`` line while this module is
-still mid-import and hasn't defined ``front_metrics`` yet, raising
-``ImportError: cannot import name 'front_metrics' from partially initialized
-module``. The lazy ``__getattr__`` defers that import until something actually
-does ``pareto.front_metrics(...)``, by which point both modules have finished
-loading.
+``compare_fronts`` is a plain top-level ``from .front_quality import ...``,
+placed after ``non_dominated``/``coverage`` are defined (this module needs
+them at its own top level). That ordering is the only thing that matters --
+not import order at the call site: ``fit_pcsaft/__init__.py`` unconditionally
+imports ``pareto.py`` before anything else can reach ``front_quality.py``, so
+this file's top-level code never runs before ``pareto.py`` has executed down
+to the re-export line, regardless of which module a caller names first.
+Verified directly: importing ``fit_pcsaft._pure.front_quality`` first, in a
+fresh interpreter, still works, because that import drags in
+``fit_pcsaft/__init__.py`` -> ``pareto.py`` first either way.
 
-HV note: ``ref_point`` is deliberately passed with ``norm_ref_point=False``.
-Reading pymoo 0.6.2's ``pymoo/indicators/hv.py`` and
-``pymoo/util/normalization.py`` shows ``norm_ref_point`` only has an effect
-when ``zero_to_one=True`` is also passed to ``Hypervolume`` -- which nothing
-here does -- so ``self.normalization`` is always ``NoNormalization()`` and
-``norm_ref_point`` is currently a no-op either way (confirmed empirically:
-identical HV for the same front under both settings). ``False`` is set anyway
-so a future pymoo release that makes the flag do something again can't
-silently start renormalizing ``ref_point`` per front. That renormalization is
-exactly what Task 3 cannot tolerate: it scores ~45 fronts against one shared
-``ref_point`` specifically so the hypervolumes are comparable across them, and
-a per-front renormalization would silently answer a different question. See
-``test_hv_is_comparable_across_fronts_with_a_shared_ref_point``, which pins
-it: two fronts, one strictly dominating the other, scored with the same
-``ref_point``, must come back with the dominating front's HV strictly higher.
+HV note: ``ref_point`` is passed with ``norm_ref_point=False``, but that flag
+is inert on pymoo 0.6.2 as installed here -- confirmed by reading
+``pymoo/indicators/hv.py`` and ``pymoo/util/normalization.py``:
+``norm_ref_point`` only has an effect when ``Hypervolume`` also receives
+``zero_to_one=True``, which nothing in this codebase passes, so
+``self.normalization`` is always ``NoNormalization()`` and ``norm_ref_point``
+changes nothing (confirmed empirically too: identical HV for the same front
+under both settings). ``False`` is set anyway, purely as a defensive default:
+it costs nothing today and means a future pymoo release that wires the flag
+up for real can't silently start renormalizing ``ref_point`` per front, which
+would break the thing that actually matters here -- one shared ``ref_point``
+producing comparable hypervolumes across the ~45 fronts Task 3 sweeps. What
+``test_hv_is_comparable_across_fronts_with_a_shared_ref_point`` pins is that
+comparability itself (same ``ref_point``, strictly dominating front scores
+strictly higher), not the ``norm_ref_point`` flag -- on this pymoo build the
+flag has nothing to pin.
 
 A hypervolume is only meaningful when compared against another HV computed
 with the *same* ``ref_point`` -- that is the one easy way to get a
@@ -193,6 +191,8 @@ def compare_fronts(A, B, *, reference=None, region=None) -> dict[str, float]:
     B = _clip(np.asarray(B, dtype=float), region)
     if reference is None:
         reference = reference_front(A, B)  # already region-clipped above
+    else:
+        reference = _clip(np.asarray(reference, dtype=float), region)
 
     cov_ab = coverage(A, B) if len(A) and len(B) else float("nan")
     cov_ba = coverage(B, A) if len(A) and len(B) else float("nan")
@@ -200,6 +200,7 @@ def compare_fronts(A, B, *, reference=None, region=None) -> dict[str, float]:
     return {
         "coverage_ab": cov_ab,
         "coverage_ba": cov_ba,
-        "a": front_metrics(A, reference=reference, region=region),
-        "b": front_metrics(B, reference=reference, region=region),
+        # A/B/reference are already region-clipped above; no region= here.
+        "a": front_metrics(A, reference=reference),
+        "b": front_metrics(B, reference=reference),
     }
