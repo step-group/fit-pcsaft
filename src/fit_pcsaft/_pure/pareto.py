@@ -15,8 +15,10 @@ and the arbitrariness of a weight choice becomes visible.
 
 Two objectives either way: n_obj is 2 and every measured knob below -- the
 nr=2 replacement cap, n_restarts, _densify, the Das-Dennis weight fan --
-assumes it. The second pair never touches the DFT at all, which is most of
-its point: measured on this machine's locally-built feos wheel, whole-search
+assumes it. The second pair never touches the DFT during the search, which
+is most of its point (``ParetoResult.select()`` is the one exception -- it
+still DFT-solves once, for the point it returns, whenever ``sft_path`` was
+given): measured on this machine's locally-built feos wheel, whole-search
 average over a 600-evaluation budget (pop_size=30, n_gen=20, n_restarts=1,
 refine=0, seed=1, n_jobs=1, same surface-tension file loaded either way so
 only the solving differs), objectives=("psat", "rho") averaged 3.69
@@ -915,10 +917,11 @@ def fit_pure_pareto(
     reproduces Rehner & Gross, J. Chem. Eng. Data 2020, 65, 5698-5707: bulk
     error and interfacial error as two separate AADs (eq 30/31, see the module
     docstring). ``("psat", "rho")`` reproduces Forte et al. 2018: the two bulk
-    AARDs on their own axes instead of pooled behind eq 30, and no surface
-    tension or DFT solve at all. See ``_OBJECTIVES`` for what each key reports
-    and the ``objectives`` paragraph below for how the two modes differ in
-    cost and in what the graded violation covers.
+    AARDs on their own axes instead of pooled behind eq 30, with no surface
+    tension in the objectives and no DFT solve anywhere in the search itself
+    -- ``.select()`` is the one exception, see below. See ``_OBJECTIVES`` for
+    what each key reports and the ``objectives`` paragraph below for how the
+    two modes differ in cost and in what the graded violation covers.
 
     Cost is ``pop_size * n_gen`` objective evaluations, each roughly 120 ms at
     sensible parameters and up to 1 s where the VLE solve fails -- measured
