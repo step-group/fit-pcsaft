@@ -1,6 +1,7 @@
-"""Knob sweep for MOEA/D on the water Forte front. Writes CSV + figures; draws
-no conclusions -- a human reads the figures and gives the verdict (Task 4 is
-blocked on that reading, see .superpowers/sdd/.../task-3-brief.md).
+"""Knob sweep for MOEA/D on the water Forte front. Writes CSV + figures +
+fronts.json (every cell's raw front, for rescore.py); draws no conclusions --
+a human reads the figures and gives the verdict (Task 4 is blocked on that
+reading, see .superpowers/sdd/.../task-3-brief.md).
 
 One-factor-at-a-time around a fixed baseline (pop_size=80, n_gen=80,
 n_restarts=8, refine=4, objectives=("psat", "rho")) -- not a full factorial:
@@ -38,17 +39,28 @@ from fit_pcsaft._pure.front_quality import front_metrics, reference_front
 REPO = Path(__file__).parent.parent
 DATA = REPO / "examples" / "data"
 OUT = Path(__file__).parent / "knob-sweep"
-# Raw per-cell checkpoint -- NOT one of the committed artefacts (those are
-# water_forte_knobs.csv and the PNGs). Appended to as each cell's fit
-# finishes, so a crash mid-sweep (e.g. a PubChem blip on a cache miss) costs
-# only the cell in flight: the next invocation reloads it and skips whatever
-# is already there. water_forte_knobs.csv itself still needs every front
-# gathered first (front_metrics' hv/igd_plus need the one shared reference
-# front/ref_point built after all runs complete -- per-cell values would make
-# the columns incomparable), so it stays a single batch write at the end;
-# this checkpoint is what actually protects the expensive part, the ~15s/cell
+# Raw per-cell checkpoint -- crash recovery only, NOT one of the committed
+# artefacts (those are water_forte_knobs.csv, fronts.json and the PNGs).
+# Appended to as each cell's fit finishes, so a crash mid-sweep (e.g. a
+# PubChem blip on a cache miss) costs only the cell in flight: the next
+# invocation reloads it and skips whatever is already there.
+# water_forte_knobs.csv itself still needs every front gathered first
+# (front_metrics' hv/igd_plus need the one shared reference front/ref_point
+# built after all runs complete -- per-cell values would make the columns
+# incomparable), so it stays a single batch write at the end; this
+# checkpoint is what actually protects the expensive part, the ~15s/cell
 # fit_pure_pareto call. Deleted automatically once the sweep finishes clean.
 CHECKPOINT = OUT / "_checkpoint.csv"
+# Every cell's raw front, kept for good -- unlike the checkpoint, this is
+# committed. The fitting is the expensive part (~16 min total); hv/igd_plus/
+# spacing are cheap derived values that depend on one particular
+# reference-front choice, and re-deriving them against a different reference
+# (e.g. excluding one variant from the yardstick, see rescore.py) should
+# never require a refit. One JSON array, written once at the end next to
+# water_forte_knobs.csv -- not JSONL, because nothing writes it
+# incrementally the way the checkpoint is appended to; a plain array is the
+# simplest thing that round-trips with one json.load().
+FRONTS = OUT / "fronts.json"
 
 BASE = dict(
     id="water",
@@ -338,6 +350,19 @@ def main() -> None:
             runs.append(run)
             _append_checkpoint(CHECKPOINT, {**run, "F": front.F.tolist()})
             print(f"{knob}={label} seed={seed}: {len(front.F)} pts, {dt:.1f}s")
+
+    with open(FRONTS, "w") as f:
+        json.dump(
+            [
+                {
+                    "knob": r["knob"], "level": r["level"], "seed": r["seed"],
+                    "seconds": r["seconds"], "F": np.asarray(r["F"]).tolist(),
+                }
+                for r in runs
+            ],
+            f,
+        )
+    print(f"wrote {FRONTS} ({len(runs)} cells)")
 
     # ONE shared reference front and ONE shared ref_point for the whole sweep --
     # per-cell values would make the columns incomparable.
