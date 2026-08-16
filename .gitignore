@@ -17,6 +17,7 @@ test_feos_params.py
 benchmarks/*.log
 benchmarks/dashboard.html
 benchmarks/knob-sweep/_checkpoint.csv
+benchmarks/variant-sft/_checkpoint.csv
 
 # Git worktrees
 .worktrees/
