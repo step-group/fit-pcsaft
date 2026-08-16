@@ -984,6 +984,7 @@ def fit_pure_pareto(
     lhs: bool = True,
     n_jobs: int = -1,
     refine: int = 4,
+    polish: bool = False,
     objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
     refs: "Optional[tuple[float, float]]" = None,
     n_restarts: int = 1,
@@ -1198,6 +1199,20 @@ def fit_pure_pareto(
     and interpolating across it walks through neither, which is exactly why
     arithmetic cannot close it. It needs a run that lands on the other side, not
     more interpolation. Set refine=0 to see the raw population. See ``_densify``.
+
+    ``polish=False`` by default -- it is a new numerical path (deterministic
+    epsilon-constraint SLSQP, ``_pure/polish.py``) and the paper-validation
+    tests must not move. When True it runs once, after ``refine``, sweeping
+    the merged-and-densified front in order of increasing ``F[:, 0]`` and
+    re-solving each point to minimize that axis subject to the other axis
+    staying at or below its value there -- see ``polish.polish_front`` for
+    the warm-start/never-regress details. The ``evaluate`` closure it is
+    given costs exactly what ``_evaluate_point`` costs under this call's
+    ``objectives``: under ``("vle", "sft")`` each finite-difference gradient
+    is about six DFT solves (~0.6 s each), so polishing a 200-point front
+    takes on the order of tens of minutes; under ``("psat", "rho")`` there is
+    no DFT solve at all and the same front polishes in seconds. That is on
+    top of the search and refine costs above, not instead of them.
 
     ``bounds`` is the second-biggest knob and the one most often left alone. The
     default box is deliberately wide -- m in [1, 20], sigma in [2, 6], eps/k in
@@ -1448,6 +1463,25 @@ def fit_pure_pareto(
                 )
             if verbose:
                 print(f"refine: {n_before} -> {len(F)} front points")
+
+        if polish and len(X) > 1:
+            from fit_pcsaft._pure.polish import polish_front
+
+            n_before = len(F)
+
+            def _evaluate(rows):
+                return np.asarray(
+                    _map_evaluate(
+                        list(rows), pool, compound, spec, data, units,
+                        sft_options, objectives,
+                    ),
+                    dtype=float,
+                )
+
+            with _silence_fd_stderr(quiet_solver):
+                X, F = polish_front(X, F, _evaluate, bounds)
+            if verbose:
+                print(f"polish: {n_before} -> {len(F)} front points")
 
     return ParetoResult(
         X=X,
