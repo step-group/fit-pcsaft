@@ -16,6 +16,12 @@ def test_polish_moves_a_point_off_the_front_onto_it():
     Xp, Fp = polish_front(X, F, evaluate, [(0.5, 4.0)])
     assert np.all(Fp[:, 1] <= F[:, 1] + 1e-9)
     assert np.all(Fp[:, 0] <= F[:, 0] + 1e-9)
+    # Closed form: minimising f1 s.t. f2 <= cap on f2 = 1/f1 lands exactly at
+    # f1 = 1/cap, f2 = cap -- a strict check a no-op (or a sign-flipped or
+    # non-converging solver) cannot pass merely by not regressing.
+    cap = F[:, 1]
+    assert Fp[:, 0] == pytest.approx(1.0 / cap, rel=1e-6)
+    assert Fp[:, 1] == pytest.approx(cap, rel=1e-6)
 
 
 def test_polish_never_returns_a_worse_point_than_it_was_given():
@@ -47,6 +53,10 @@ def test_polished_front_is_non_dominated():
     F = evaluate(X)[:, :2] + 0.25          # every point pushed off the front
     _, Fp = polish_front(X, F, evaluate, [(0.5, 4.0)])
     assert non_dominated(Fp).all()
+    # Non-dominance alone passes for a no-op too (the pushed-off points are
+    # still mutually non-dominated). Require each point back on the true
+    # front f2 == 1/f1, which a no-op -- sitting at 1/f1 + 0.25 -- fails.
+    assert Fp[:, 1] == pytest.approx(1.0 / Fp[:, 0], rel=1e-6)
 
 
 def test_warm_start_uses_the_previous_polished_point():
