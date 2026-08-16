@@ -18,6 +18,7 @@ benchmarks/*.log
 benchmarks/dashboard.html
 benchmarks/knob-sweep/_checkpoint.csv
 benchmarks/variant-sft/_checkpoint.csv
+benchmarks/de-confirm/_checkpoint.csv
 
 # Git worktrees
 .worktrees/
