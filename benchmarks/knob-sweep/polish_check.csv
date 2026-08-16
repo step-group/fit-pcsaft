@@ -1,0 +1,7 @@
+# water Forte front (objectives=('psat','rho')), seed=101, polish=False vs polish=True, same baseline as knob_sweep.py's 80x80* cell -- see task-5-step6-report.md
+# hv/igd_plus/spacing/max_gap are region-clipped to AARD_psat in [0, 3]% against one reference front (reference_front(F_before, F_after, region=REGION)) and one ref_point shared by both rows
+# moved-point check (not a column, both rows describe the same comparison): 32/36 polished points moved by more than 0.001 bounds-span-normalized in some parameter; median relative change among them = 0.0387654
+# read with pl.read_csv(path, comment_prefix='#')
+run,polish,seconds,n_points,hv,igd_plus,spacing,max_gap,extent_0,extent_1
+before,false,14.222141707985429,89,10.282386763798673,0.1541569080641588,0.01652100488324477,0.2516550111770524,2.412672296005855,1.2147806747728955
+after,true,108.89474324998446,26,10.788949688868973,1.4233986608428292e-10,0.057002081455825894,0.4546621487857288,2.5184068107701365,1.0145654982873928
