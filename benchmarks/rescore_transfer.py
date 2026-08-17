@@ -41,13 +41,11 @@ import numpy as np  # noqa: E402
 # why the tests pass either way -- put it on the path here so both work.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmarks._problems import PROBLEMS  # noqa: E402
+from benchmarks._problems import PROBLEMS, requested  # noqa: E402
 from fit_pcsaft._pure.front_quality import front_metrics, reference_front  # noqa: E402
 from fit_pcsaft._pure.pareto import coverage  # noqa: E402
 
-COMPOUND = sys.argv[1] if len(sys.argv) > 1 else "camphor"
-if COMPOUND not in PROBLEMS:
-    raise SystemExit(f"unknown problem {COMPOUND!r}; use one of {sorted(PROBLEMS)}")
+COMPOUND = requested(__file__)
 PROBLEM = PROBLEMS[COMPOUND]
 OUT = Path(__file__).parent / f"{COMPOUND}-transfer"
 # Per-axis, from the registry. A single scalar cap was fine while both axes were

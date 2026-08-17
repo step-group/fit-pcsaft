@@ -71,6 +71,27 @@ def test_an_sft_objective_implies_an_sft_path():
             assert "sft_path" in p.paths()
 
 
+def test_benchmark_sbx_arms_pin_the_operator_explicitly():
+    """The library default is now variant="de". Any benchmark arm labelled "sbx"
+    that relies on the default silently becomes a second DE arm -- and its
+    committed artefacts keep saying sbx. Every arm states its operator.
+
+    knob_sweep is the one where this bites hardest and least visibly: its
+    n_neighbors / prob_neighbor_mating / n_replace levels pass only their own
+    knob, so all of them take the crossover from BASE. If BASE stopped pinning
+    it, four one-factor studies would quietly be measured against a different
+    baseline than their "*" labels claim, with nothing failing.
+    """
+    from benchmarks.knob_sweep import BASE as SWEEP_BASE
+    from benchmarks.knob_sweep import EXTRA
+    from benchmarks.transfer_check import OPS
+
+    assert OPS["sbx"]["variant"] == "sbx"
+    assert OPS["de-cr1.0"]["variant"] == "de"
+    assert SWEEP_BASE["variant"] == "sbx"
+    assert EXTRA["variant"]["sbx*"]["variant"] == "sbx"
+
+
 def test_no_unpublished_thesis_data_reaches_examples():
     """fit-pcsaft is still the public step-group/fit-pcsaft. TESIS's processed CSVs
     carry a `source` column, and rows reading "This work (2026)" are unpublished

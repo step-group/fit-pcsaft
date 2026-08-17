@@ -503,23 +503,59 @@ def test_algorithm_caps_neighbour_replacement():
     assert algorithm.n_replace == _N_REPLACE == 2
 
 
-def test_moead_defaults_reproduce_pymoos_inherited_settings():
-    """These six were pymoo defaults inherited through _CappedMOEAD and unreachable.
-    Exposing them must not change what an unmodified call runs, so pin the values
-    against the algorithm object rather than against the signature."""
+def test_moead_settings_that_still_match_pymoo_stock():
+    """Four of the six settings exposed on this branch are still pymoo's own.
+    Pinned so a pymoo upgrade that moves one is loud rather than silent; the two
+    that are deliberately different have their own test below."""
     from pymoo.decomposition.tchebicheff import Tchebicheff
-    from pymoo.operators.crossover.sbx import SBX
+    from pymoo.operators.mutation.pm import PM
 
     from fit_pcsaft._pure.pareto import _make_algorithm
 
     algo = _make_algorithm(20, True)
     assert algo.n_neighbors == 20
     assert algo.selection.prob.value == pytest.approx(0.9)
-    assert algo.n_replace == 2
-    assert isinstance(algo.mating.crossover, SBX)
-    assert algo.mating.crossover.eta.value == pytest.approx(20)
+    assert isinstance(algo.mating.mutation, PM)
+    assert algo.mating.mutation.eta.value == pytest.approx(20)
     # decomposition is resolved in _setup when left as None; ours is set eagerly
     assert isinstance(algo.decomposition, Tchebicheff)
+
+
+def test_moead_settings_deliberately_moved_from_pymoo_stock():
+    """Two, and only two.
+
+    ``n_replace=2`` is Li & Zhang (2009)'s MOEA/D-DE replacement cap n_r, where
+    pymoo's stock MOEA/D lets one offspring take over every neighbour it beats.
+    It predates this branch.
+
+    The crossover is what this branch moved: pymoo ships ``SBX(eta=20)`` and the
+    default is now DE/rand/1/bin. The two belong together -- n_r=2 was adopted
+    while pymoo's SBX stayed, which is half of MOEA/D-DE; this pairs the cap with
+    the operator it was designed for. Evidence in CLAUDE.md and
+    ``benchmarks/*-transfer/``.
+    """
+    from pymoo.operators.crossover.dex import DEX
+
+    from fit_pcsaft._pure.pareto import _make_algorithm
+
+    algo = _make_algorithm(20, True)
+    assert algo.n_replace == 2
+    assert isinstance(algo.mating.crossover, DEX)
+    assert algo.mating.crossover.F == pytest.approx(0.5)
+    assert algo.mating.crossover.CR == pytest.approx(1.0)
+
+
+def test_sbx_variant_is_still_reachable():
+    """The old default has to stay available and stay SBX: TESIS's committed
+    parameters were produced under it, so reproducing them means passing
+    ``variant="sbx"`` explicitly."""
+    from pymoo.operators.crossover.sbx import SBX
+
+    from fit_pcsaft._pure.pareto import _make_algorithm
+
+    algo = _make_algorithm(20, True, variant="sbx")
+    assert isinstance(algo.mating.crossover, SBX)
+    assert algo.mating.crossover.eta.value == pytest.approx(20)
 
 
 def test_de_variant_swaps_the_crossover_operator():

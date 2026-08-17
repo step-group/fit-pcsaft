@@ -730,7 +730,7 @@ def _make_algorithm(
     n_replace: int = _N_REPLACE,
     decomposition: str = "tchebi",
     pbi_theta: float = 5.0,
-    variant: str = "sbx",
+    variant: str = "de",
     de_f: float = 0.5,
     de_cr: float = 1.0,
 ):
@@ -1078,7 +1078,7 @@ def fit_pure_pareto(
     n_replace: int = _N_REPLACE,
     decomposition: str = "tchebi",
     pbi_theta: float = 5.0,
-    variant: str = "sbx",
+    variant: str = "de",
     de_f: float = 0.5,
     de_cr: float = 1.0,
 ) -> ParetoResult:
@@ -1395,9 +1395,12 @@ def fit_pure_pareto(
     the same search it always has. See ``_make_algorithm`` for what each one
     does; in short, ``decomposition`` picks the scalarizing function
     (``"tchebi"``, the default, or ``"pbi"`` with its ``pbi_theta``), and
-    ``variant`` picks the crossover operator (``"sbx"``, the default, or
-    ``"de"`` for MOEA/D-DE's own ``DEX(F=de_f, CR=de_cr)``, which needs
-    ``n_neighbors >= 3``).
+    ``variant`` picks the crossover operator: ``"de"`` (the default,
+    MOEA/D-DE's own ``DEX(F=de_f, CR=de_cr)`` after Li & Zhang 2009, and it
+    needs ``n_neighbors >= 3``) or ``"sbx"`` (pymoo's own default, and what
+    every parameter set committed before 2026-08 was fitted with -- pass it to
+    reproduce one). See CLAUDE.md for the measurements behind the change, and
+    for the budget below which DE is *not* established.
     """
     objectives = tuple(objectives)
     if objectives not in _DEFAULT_REFS:

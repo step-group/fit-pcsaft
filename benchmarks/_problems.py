@@ -12,12 +12,38 @@ This module imports from `fit_pcsaft` but from neither script, so there is no cy
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from fit_pcsaft import SurfaceTensionOptions
 
 DATA = Path(__file__).parent.parent / "examples" / "data"
+
+
+def requested(script: str, default: str = "camphor") -> str:
+    """The problem named on the command line, or ``default``.
+
+    Both benchmark scripts take the problem as ``argv[1]`` and resolve it at
+    import time, and both are also *imported* rather than run -- by the tests,
+    and by multiprocessing spawn re-importing ``__main__`` in every worker. In
+    those cases ``argv[1]`` belongs to pytest or to the worker, not to us:
+    reading it raised ``SystemExit: unknown problem
+    'tests/test_benchmark_problems.py'`` and took the whole test session with it.
+
+    So an unrecognised name is an error only when this file really is the
+    program being run -- compared against ``argv[0]`` by resolved path, not by
+    suffix, because ``python -m pytest``'s own ``argv[0]`` ends in ``.py`` too.
+    """
+    if len(sys.argv) > 1:
+        name = sys.argv[1]
+        if name in PROBLEMS:
+            return name
+        if Path(sys.argv[0]).resolve() == Path(script).resolve():
+            raise SystemExit(
+                f"unknown problem {name!r}; use one of {sorted(PROBLEMS)}"
+            )
+    return default
 
 
 @dataclass(frozen=True)

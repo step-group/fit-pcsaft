@@ -69,6 +69,13 @@ BASE = dict(
     na=1, nb=1, objectives=("psat", "rho"),
     bounds=[(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
     pop_size=80, n_gen=80, n_restarts=8, refine=4, verbose=False,
+    # Pinned, not inherited. Every level in LEVELS passes only its own knob, so
+    # they all take the library default for the crossover -- which moved to "de"
+    # after this sweep was measured. Without this line the committed
+    # water_forte_knobs.csv would not reproduce, and the four one-factor knobs
+    # would silently be measured against a different baseline than the one their
+    # "*" labels claim. The "variant" block in EXTRA overrides it per level.
+    variant="sbx",
 )
 SEEDS = (101, 202, 303)
 REGION = [(0.0, 3.0), None]  # AARD_psat <= 3%, the region of interest
@@ -87,7 +94,7 @@ EXTRA = {
         "pbi-10": {"decomposition": "pbi", "pbi_theta": 10.0},
     },
     "variant": {
-        "sbx*": {}, "de-cr1.0": {"variant": "de", "de_cr": 1.0},
+        "sbx*": {"variant": "sbx"}, "de-cr1.0": {"variant": "de", "de_cr": 1.0},
         "de-cr0.5": {"variant": "de", "de_cr": 0.5},
     },
     "budget_shape": {

@@ -2,7 +2,7 @@
 objective pair, ``objectives=("vle", "sft")`` (Rehner & Gross)?
 
 ``benchmarks/knob_sweep.py`` found ``variant="de"`` clearly ahead of the
-default ``variant="sbx"`` -- but only under ``objectives=("psat", "rho")``
+then-default ``variant="sbx"`` -- but only under ``objectives=("psat", "rho")``
 (Forte et al. 2018), which never touches the DFT interface solve and is
 ~28x cheaper per evaluation than ``("vle", "sft")`` (see ``pareto.py``'s
 ``objectives`` paragraph). Nobody has checked whether that result holds once
@@ -75,7 +75,8 @@ BASE = dict(
 )
 SEEDS = (101, 202, 303)
 LEVELS = {  # level label -> fit_pure_pareto kwarg overrides; baseline marked with *
-    "sbx*":     {},
+    # Explicit, not inherited: the library default moved to "de" after this ran.
+    "sbx*":     {"variant": "sbx"},
     "de-cr1.0": {"variant": "de", "de_cr": 1.0},
     "de-cr0.5": {"variant": "de", "de_cr": 0.5},
 }

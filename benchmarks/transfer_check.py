@@ -1,6 +1,10 @@
-"""Does the ``variant="de"`` win over the default ``variant="sbx"`` --
+"""Does the ``variant="de"`` win over the then-default ``variant="sbx"`` --
 decisive on water at every budget (``de_confirm_check.py``) -- survive on an
 *easier* problem?
+
+(``"de"`` is the library default as of 2026-08, decided partly on this file's
+thymol run. Both arms in ``OPS`` pin their operator explicitly rather than
+inherit it, so this script still measures what its labels say.)
 
 The working explanation for water's result is that water has a complicated
 Pareto set: strongly associating (na=1, nb=1), two disconnected parameter
@@ -106,21 +110,20 @@ import polars as pl
 # why the tests pass either way -- put it on the path here so both work.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmarks._problems import PROBLEMS  # noqa: E402
+from benchmarks._problems import PROBLEMS, requested  # noqa: E402
 from fit_pcsaft import fit_pure_pareto  # noqa: E402
 from fit_pcsaft._pure.front_quality import front_metrics, reference_front  # noqa: E402
 
 REPO = Path(__file__).parent.parent
 DATA = REPO / "examples" / "data"
 
-# ponytail: argv, not an env var. multiprocessing spawn re-imports this module
-# in each worker with a different sys.argv, so COMPOUND there falls back to the
-# default -- harmless, because the workers evaluate fit_pcsaft's own picklable
-# closure and never read these globals. main() is __main__-guarded, so it does
-# not re-run either. Switch to an env var only if a worker ever needs the name.
-COMPOUND = sys.argv[1] if len(sys.argv) > 1 else "camphor"
-if COMPOUND not in PROBLEMS:
-    raise SystemExit(f"unknown problem {COMPOUND!r}; use one of {sorted(PROBLEMS)}")
+# ponytail: argv, not an env var. `requested` reads it only when this file is
+# the program being run -- multiprocessing spawn re-imports this module in each
+# worker with a different sys.argv, and so does pytest, and neither of those
+# argv[1]s is a compound name. Falling back to the default there is harmless:
+# the workers evaluate fit_pcsaft's own picklable closure and never read these
+# globals, and main() is __main__-guarded so it does not re-run either.
+COMPOUND = requested(__file__)
 PROBLEM = PROBLEMS[COMPOUND]
 
 OUT = Path(__file__).parent / f"{COMPOUND}-transfer"
@@ -169,7 +172,10 @@ def make_rho6() -> Path:
     return dst
 
 LADDER = {"2.7k": (30, 30, 3), "10.8k": (40, 45, 6), "28.8k": (60, 80, 6)}
-OPS = {"sbx": {}, "de-cr1.0": {"variant": "de", "de_cr": 1.0}}
+# Both arms state their operator. `sbx: {}` relied on the library default, which
+# is now "de" -- that arm would have run DE and still written "sbx" into the
+# artefacts, a failure that looks like clean output.
+OPS = {"sbx": {"variant": "sbx"}, "de-cr1.0": {"variant": "de", "de_cr": 1.0}}
 SEEDS = (101, 202, 303)
 REGION = None  # see module docstring
 

@@ -19,7 +19,10 @@ def sig(f):
     return (F.shape[0], round(float(F[:,0].min()),6), round(float(F[:,1].min()),6))
 
 def main():
-    for label, over in (("sbx", {}), ("de", dict(variant="de", de_cr=1.0, de_f=0.5))):
+    # Both arms state their operator: "sbx" relied on the library default, which
+    # moved to "de", and this script's whole point is telling the two apart.
+    for label, over in (("sbx", dict(variant="sbx")),
+                        ("de", dict(variant="de", de_cr=1.0, de_f=0.5))):
         s = [sig(fit_pure_pareto(**BASE, **over)) for _ in range(3)]
         same = all(x == s[0] for x in s)
         print(f"{label:>4}: {'REPRODUCIBLE' if same else 'DIVERGED'}  {s}")

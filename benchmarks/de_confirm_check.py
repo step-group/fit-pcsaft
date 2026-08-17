@@ -93,7 +93,9 @@ LADDER = {                      # label -> (pop_size, n_gen, n_restarts)
     "10.8k": (40, 45, 6),       #  10 800 evals/cell
     "28.8k": (60, 80, 6),       #  28 800 evals/cell
 }
-LADDER_OPS = {"sbx": {}, "de-cr1.0": {"variant": "de", "de_cr": 1.0}}
+# Both arms state their operator -- `sbx: {}` relied on the library default,
+# which is now "de". See transfer_check.py's OPS.
+LADDER_OPS = {"sbx": {"variant": "sbx"}, "de-cr1.0": {"variant": "de", "de_cr": 1.0}}
 LADDER_SEEDS = (101, 202)
 
 # --- Part B: DE parameter grid ----------------------------------------------
