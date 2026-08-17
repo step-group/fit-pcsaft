@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import numpy as np
@@ -530,6 +531,64 @@ def test_de_variant_swaps_the_crossover_operator():
 
     algo = _make_algorithm(20, True, variant="de")
     assert isinstance(algo.mating.crossover, DEX)
+
+
+def test_dex_do_pinned_to_vendored_pymoo_version():
+    """pareto.py's ``_SeededDEX`` (inside ``_make_algorithm``, variant="de")
+    vendors ``DEX.do``'s body verbatim from pymoo 0.6.2, with one line fixed:
+    the ``repair_random_init`` call upstream makes with no ``random_state``,
+    which silently fabricated a fresh unseeded RNG and made ``variant="de"``
+    non-reproducible even at a fixed seed.
+
+    This test pins ``pymoo.__version__`` on purpose, so that upgrading pymoo
+    fails this test loudly instead of letting the vendored copy silently drift
+    out of sync with upstream's ``DEX.do``. If this test fails after a pymoo
+    bump: re-diff ``pymoo/operators/crossover/dex.py``'s ``DEX.do`` against
+    ``_SeededDEX.do`` in pareto.py by hand (has upstream fixed the missing
+    ``random_state``? did anything else in ``do`` change?) before touching
+    this pin -- do not just bump the version and move on.
+    """
+    import pymoo
+
+    assert pymoo.__version__ == "0.6.2"
+
+
+def test_de_variant_is_reproducible():
+    """The bug this whole vendored override exists for: variant="de" used to
+    give a different front on every run at an identical config and seed,
+    because DEX.do's out-of-bounds repair (see _SeededDEX's docstring in
+    pareto.py) drew from a fresh unseeded RNG every time it fired -- and it
+    fires often, because DE extrapolates outside the parameter box. variant
+    "sbx" never hit this (interpolates within the parent hull), which is why
+    only "de" needed the fix.
+
+    Confirmed against the unfixed code before writing this test: reverting
+    _SeededDEX's one corrected line (dropping ``random_state=random_state``
+    from the ``repair_random_init`` call, i.e. upstream's own bug) makes this
+    test fail -- two runs below returned different front shapes/objectives.
+    With the fix in place they are identical.
+    """
+    if bool(os.environ.get("NO_NETWORK")):
+        pytest.skip("fit_pure_pareto -> _fetch_compound hits PubChem")
+
+    from fit_pcsaft import fit_pure_pareto
+
+    d = Path(__file__).parent.parent / "examples" / "data"
+    kwargs = dict(
+        id="water",
+        psat_path=d / "psat" / "water.csv",
+        density_path=d / "density" / "water.csv",
+        na=1, nb=1,
+        objectives=("psat", "rho"),
+        bounds=[(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
+        pop_size=20, n_gen=10, n_restarts=1, refine=0,
+        seed=7, variant="de", n_jobs=1, verbose=False,
+    )
+    r1 = fit_pure_pareto(**kwargs)
+    r2 = fit_pure_pareto(**kwargs)
+    assert r1.X.shape == r2.X.shape
+    assert np.array_equal(r1.X, r2.X)
+    assert np.array_equal(r1.F, r2.F)
 
 
 def test_pbi_decomposition_is_selectable_and_carries_theta():

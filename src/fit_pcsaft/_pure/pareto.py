@@ -793,8 +793,93 @@ def _make_algorithm(
         decomp = Tchebicheff()
 
     if variant == "de":
-        from pymoo.operators.crossover.dex import DEX
-        crossover = DEX(F=de_f, CR=de_cr)
+        from pymoo.operators.crossover.binx import mut_binomial
+        from pymoo.operators.crossover.dex import DEX, de_differential, rnd_F
+        from pymoo.operators.crossover.expx import mut_exp
+        from pymoo.operators.repair.bounds_repair import (
+            is_out_of_bounds_by_problem,
+            repair_random_init,
+        )
+        from pymoo.core.population import Population
+
+        class _SeededDEX(DEX):
+            """Vendored ``DEX.do`` (pymoo 0.6.2,
+            ``pymoo/operators/crossover/dex.py``) with one call fixed.
+
+            Upstream bug: ``DEX.do`` threads the seeded ``random_state`` into
+            ``rnd_F``, ``de_differential`` and ``mut_binomial``/``mut_exp``,
+            but its out-of-bounds repair call
+
+                Xp = repair_random_init(Xp, X[0], *problem.bounds())
+
+            omits ``random_state`` entirely. ``repair_random_init`` (in
+            ``pymoo/operators/repair/bounds_repair.py``) is decorated
+            ``@default_random_state``, so a missing ``random_state`` makes it
+            fabricate a fresh, unseeded ``np.random.default_rng()`` on every
+            call -- which is why ``variant="de"`` was not reproducible even
+            at a fixed seed. Only DE trips this: DE extrapolates outside the
+            parameter box, so this repair path fires, while SBX interpolates
+            within the parent hull and never reaches it.
+
+            Everything below is ``DEX.do``'s body copied verbatim from the
+            installed pymoo 0.6.2, with ``random_state=random_state`` added
+            to that one ``repair_random_init`` call and nothing else changed.
+            ``test_dex_do_pinned_to_vendored_pymoo_version`` (tests/
+            test_pareto.py) asserts ``pymoo.__version__`` so an upstream
+            pymoo bump fails that test loudly instead of silently drifting.
+            Delete this class (and use plain ``DEX`` again) once pymoo fixes
+            the missing ``random_state`` upstream.
+            """
+
+            def do(self, problem, pop, parents=None, *args, random_state, **kwargs):
+                if parents is not None:
+                    pop = [pop[mating] for mating in parents]
+
+                X = np.swapaxes(
+                    np.array(
+                        [[parent.get("X") for parent in mating] for mating in pop]
+                    ),
+                    0, 1,
+                ).copy()
+
+                n_parents, n_matings, n_var = X.shape
+                m = np.arange(n_matings)
+
+                F = self.F if self.F is not None else rnd_F(m, random_state=random_state)
+
+                Xp = de_differential(X[:, m], F, random_state=random_state)
+
+                if problem.has_bounds():
+                    for _ in range(self.n_iter):
+                        m = is_out_of_bounds_by_problem(problem, Xp)
+                        F = rnd_F(m, random_state=random_state)
+                        Xp[m] = de_differential(X[:, m], F, random_state=random_state)
+
+                    # The fix: upstream calls this with no random_state (see
+                    # class docstring above).
+                    Xp = repair_random_init(
+                        Xp, X[0], *problem.bounds(), random_state=random_state
+                    )
+
+                if self.variant == "bin":
+                    M = mut_binomial(
+                        n_matings, n_var, self.CR,
+                        at_least_once=self.at_least_once, random_state=random_state,
+                    )
+                elif self.variant == "exp":
+                    M = mut_exp(
+                        n_matings, n_var, self.CR,
+                        at_least_once=self.at_least_once, random_state=random_state,
+                    )
+                else:
+                    raise Exception(f"Unknown variant: {self.variant}")
+
+                X = X[0]
+                X[M] = Xp[M]
+
+                return Population.new("X", X)
+
+        crossover = _SeededDEX(F=de_f, CR=de_cr)
     else:
         crossover = SBX(prob=1.0, eta=20)
 
