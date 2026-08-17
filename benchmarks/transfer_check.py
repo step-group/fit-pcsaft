@@ -325,10 +325,13 @@ def _ladder_figure(df: pl.DataFrame, path: Path) -> None:
     ax.set_xscale("log")
     ax.set_xlabel("evaluations per cell")
     ax.set_ylabel("hv")
+    # Three short lines at a smaller size, not two long ones: the objectives tuple
+    # pushed the second line wider than the 6in axes and it rendered off-frame.
     ax.set_title(
         f"{COMPOUND} budget ladder: hv vs. evals/cell\n"
-        f"objectives={tuple(BASE['objectives'])}; shared reference front/ref_point; "
-        "band = seed min-max"
+        f"objectives={tuple(BASE['objectives'])}; band = seed min-max\n"
+        "unclipped; shared reference front/ref_point",
+        fontsize=10,
     )
     ax.legend(title="operator", fontsize=8)
     fig.tight_layout()
