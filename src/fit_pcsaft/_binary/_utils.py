@@ -124,6 +124,61 @@ and least_squares would walk k_ij toward the region where the flash breaks.
 """
 
 
+LIQUID_Z_MAX = 0.5
+"""Compressibility factor below which a phase counts as a liquid.
+
+`feos.State.tp_flash` returns a `PhaseEquilibrium` exposing `.liquid` and
+`.vapor` whatever the two phases actually are, and every LLE path here takes
+`min`/`max` of their compositions -- which discards the labels entirely. So a
+genuine *vapour*-liquid equilibrium is indistinguishable from a liquid-liquid
+one unless something checks, and above the solvent's boiling point that is
+exactly what `tp_flash` returns.
+
+Z = p / (rho R T) separates them and, unlike an absolute density floor, does so
+at any pressure -- an ideal gas at 50 bar and 473 K is already 1272 mol/m3,
+above any fixed floor that would still pass a real liquid. Measured on
+water-terpene LLE, the eugenol + water_2B_pcpsaft_rehner2020 pair:
+
+    473 K, 1.013 bar   Z = 0.98  and 0.005   <- the 0.98 phase is a gas
+    473 K, 50 bar      Z = 0.101 and 0.028   <- both liquids
+    298 K, 1.013 bar   Z = 0.006 and 0.001
+
+Every genuine liquid phase measured there sits at Z <= 0.101 and the gas at
+0.98, so 0.5 keeps a five-fold margin below and a two-fold margin above.
+"""
+
+
+def _is_liquid(state, z_max: float = LIQUID_Z_MAX) -> bool:
+    """True when `state` is dense enough to be a liquid rather than a vapour."""
+    try:
+        z = state.pressure() / (state.density * si.RGAS * state.temperature)
+        return float(np.asarray(z)) < z_max
+    except Exception:
+        # A phase whose Z will not evaluate is not evidence of a liquid.
+        return False
+
+
+def _lle_split(pe, require_liquid_phases: bool = False,
+               min_split: float = 1e-4) -> "tuple[float, float] | None":
+    """(x1 of the lean phase, x1 of the rich phase) from a tp_flash result.
+
+    None when the two compositions are too close to be a split, or -- with
+    require_liquid_phases -- when either phase is a vapour. Returning None lets
+    the caller keep walking its feed list rather than accept the wrong
+    equilibrium, which is what every LLE path here did before.
+
+    Off by default: switching it on moves numbers that existing callers have
+    already committed to.
+    """
+    x_a = float(pe.liquid.molefracs[0])
+    x_b = float(pe.vapor.molefracs[0])
+    if abs(x_a - x_b) < min_split:
+        return None
+    if require_liquid_phases and not (_is_liquid(pe.liquid) and _is_liquid(pe.vapor)):
+        return None
+    return min(x_a, x_b), max(x_a, x_b)
+
+
 def _comp_resid(pred: float, exp: float, log_residuals: bool,
                 relative: bool = False) -> float:
     """One composition residual, in ln-space or linear/relative space.

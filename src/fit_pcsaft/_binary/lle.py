@@ -16,6 +16,7 @@ from fit_pcsaft._binary._utils import (
     _comp_resid,
     _fit_kij_polynomial,
     _kij_at_T,
+    _lle_split,
     _load_pure_records,
 )
 from fit_pcsaft._csv import SCHEMA_LLE, load_csv
@@ -52,6 +53,7 @@ def fit_kij_lle(
     ucst_target: bool = False,
     relative_residuals: bool = True,
     log_residuals: bool = False,
+    require_liquid_phases: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE tieline data.
 
@@ -81,6 +83,19 @@ def fit_kij_lle(
         for water-rich branches at x ~ 1e-4, where the relative residual is
         asymmetric (overshoot unbounded, undershoot floored at -1) and the
         absolute one is numerically invisible. `ard` is NaN in this mode.
+    require_liquid_phases : bool
+        Reject a tp_flash split where either phase is a vapour, and keep
+        walking the feed list. Default: False, which is the historical
+        behaviour -- `pe.liquid`/`pe.vapor` are labels feos applies to whatever
+        two phases it found, and taking min/max of their compositions discards
+        them, so a vapour-liquid equilibrium is recorded as a tie line. Above
+        the solvent's boiling point that is what tp_flash returns: water +
+        eugenol at 473 K and 1.013 bar hands back a phase at 26.3 mol/m3,
+        against 25.8 for an ideal gas, and its composition then lands in the
+        aqueous branch. Switching this on moves any number a caller has already
+        committed to, which is why it is opt-in. See `_utils.LIQUID_Z_MAX`.
+        Raising `pressure` past the solvent's saturation pressure is the other
+        half of the fix; this guard is what catches the fault at any pressure.
     temperature_unit : si.SIObject
         Unit of T column in CSV (default: K).
     t_min : si.SIObject | None
@@ -187,6 +202,7 @@ def fit_kij_lle(
                 relative_residuals=relative_residuals,
                 log_residuals=log_residuals,
                 errors=errors,
+                require_liquid_phases=require_liquid_phases,
             )
 
         # Coarse scan to find best initial k_ij guess (avoids getting trapped in
@@ -256,6 +272,7 @@ def fit_kij_lle(
                 T_anchor_K=T_anchor_K,
                 relative_residuals=relative_residuals,
                 log_residuals=log_residuals,
+                require_liquid_phases=require_liquid_phases,
             )
             ard_poly.append(100.0 * float(np.mean(np.abs(r))))
         except Exception:
@@ -311,6 +328,8 @@ def fit_kij_lle(
         t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
         _record1=record1,
         _record2=record2,
+        lle_pressure_bar=float(pressure / si.BAR),
+        lle_require_liquid_phases=require_liquid_phases,
     )
 
 
@@ -398,6 +417,7 @@ def _residuals_at_T(
     relative_residuals: bool = True,
     log_residuals: bool = False,
     errors: "list | None" = None,
+    require_liquid_phases: bool = False,
 ) -> np.ndarray:
     """Residual vector for least_squares at a single temperature.
 
@@ -445,11 +465,10 @@ def _residuals_at_T(
                 density_initialization="liquid",
             )
             pe = feed_state.tp_flash(initial_state=anchor_pe, max_iter=1000)
-            x_a = float(pe.liquid.molefracs[0])
-            x_b = float(pe.vapor.molefracs[0])
-            if abs(x_a - x_b) < 1e-4:
+            split = _lle_split(pe, require_liquid_phases)
+            if split is None:
                 continue
-            pred_I, pred_II = min(x_a, x_b), max(x_a, x_b)
+            pred_I, pred_II = split
             resids = []
             if exp_I is not None:
                 resids.append(_comp_resid(pred_I, exp_I, log_residuals,

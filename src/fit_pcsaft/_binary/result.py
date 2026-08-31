@@ -6,7 +6,7 @@ from pathlib import Path
 import feos
 import numpy as np
 
-from fit_pcsaft._binary._utils import _kij_at_T
+from fit_pcsaft._binary._utils import _kij_at_T, _lle_split
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,14 @@ class BinaryFitResult:
     # LLE-specific: pure records needed to rebuild EOS at each T with k_ij(T)
     _record1: object = None
     _record2: object = None
+    # LLE-specific: the conditions the fit ran at, so re-prediction matches it.
+    # Both default to what this class did before they existed, so a result built
+    # without them scores exactly as it used to. fit_kij_lle sets them from its
+    # own `pressure=` and `require_liquid_phases=` arguments -- it took the
+    # first one already and dropped it here, which meant the fit and every
+    # re-prediction of it silently disagreed about pressure.
+    lle_pressure_bar: float = 1.01325
+    lle_require_liquid_phases: bool = False
     # SLE-specific (NaN / 0 for VLE/LLE)
     tm_K: float = float("nan")
     delta_hfus_J: float = float("nan")
@@ -164,14 +172,16 @@ class BinaryFitResult:
                                 feed = np.array([z1, 1.0 - z1]) * si.MOL
                                 state = feos.State(
                                     eos_i, T * si.KELVIN,
-                                    pressure=1.01325 * si.BAR, composition=feed,
+                                    pressure=self.lle_pressure_bar * si.BAR,
+                                    composition=feed,
                                     density_initialization="liquid",
                                 )
                                 pe = state.tp_flash(max_iter=1000)
-                                xa = float(pe.liquid.molefracs[0])
-                                xb = float(pe.vapor.molefracs[0])
-                                if abs(xa - xb) > 1e-4:
-                                    x1_I_pred, x1_II_pred = min(xa, xb), max(xa, xb)
+                                split = _lle_split(
+                                    pe, self.lle_require_liquid_phases
+                                )
+                                if split is not None:
+                                    x1_I_pred, x1_II_pred = split
                                     break
                             except Exception:
                                 continue

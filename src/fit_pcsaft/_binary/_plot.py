@@ -404,10 +404,15 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
     if result._record1 is None or result._record2 is None:
         return np.array([]), [], []
 
+    from fit_pcsaft._binary._utils import _lle_split
     from fit_pcsaft._binary.lle import _LLE_FEEDS
 
     dT = (T_max - T_min) / npoints  # step size from data range
-    pressure = 1.0 * si.BAR
+    # Whatever the fit ran at, so the drawn curve and the scored residuals are
+    # the same calculation. Defaults to 1.01325 bar on a result built before the
+    # field existed; it was hardcoded to 1.0 bar here, a third pressure again.
+    pressure = getattr(result, "lle_pressure_bar", 1.01325) * si.BAR
+    require_liquid = getattr(result, "lle_require_liquid_phases", False)
     # Primary feed + sigmoid grid as fallback (mirrors fitting routine)
     base_feeds = [z1] + _LLE_FEEDS
 
@@ -466,20 +471,17 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
                     density_initialization="liquid",
                 )
                 candidate = s.tp_flash(initial_state=anchor_pe)
-                x_a = float(candidate.liquid.molefracs[0])
-                x_b = float(candidate.vapor.molefracs[0])
-                if max(x_a, x_b) - min(x_a, x_b) > min_split:
-                    pe = candidate
+                split = _lle_split(candidate, require_liquid, min_split)
+                if split is not None:
+                    pe, pe_split = candidate, split
                     break
             except Exception:
                 pass
 
         if pe is not None:
-            x_a = float(pe.liquid.molefracs[0])
-            x_b = float(pe.vapor.molefracs[0])
             T_out.append(T_K)
-            x_I_out.append(min(x_a, x_b))  # Phase I  = id1-lean
-            x_II_out.append(max(x_a, x_b))  # Phase II = id1-rich
+            x_I_out.append(pe_split[0])  # Phase I  = id1-lean
+            x_II_out.append(pe_split[1])  # Phase II = id1-rich
             n_consec_fail = 0
         else:
             n_consec_fail += 1
