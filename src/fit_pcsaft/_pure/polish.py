@@ -32,12 +32,12 @@ through ``non_dominated`` before it is returned.
 ``evaluate`` is the only place a solve costs anything, so it decides the
 budget: it is not feos-specific here (the tests below pass a three-line
 analytic function and run in milliseconds), but when ``fit_pure_pareto``
-wires this in behind ``polish=True``, ``evaluate`` closes over the same
-worker pool MOEA/D used and its cost is exactly ``_evaluate_point``'s. Under
-``objectives=("vle", "sft")`` that means a DFT solve per call, so a
-5-parameter finite-difference gradient is ~6 evaluations (~0.6 s each,
-~3.6 s/gradient) and a 200-point front polishes in tens of minutes.
-``objectives=("psat", "rho")`` never builds a functional, so the same front
+wires this in behind ``polish=True``, ``evaluate`` goes through the same
+``_map_evaluate`` MOEA/D used: the worker pool under ``objectives=("vle",
+"sft")``, where each call is a DFT solve, so a 5-parameter finite-difference
+gradient is ~6 evaluations (~0.6 s each, ~3.6 s/gradient) and a 200-point
+front polishes in tens of minutes; the batched in-process
+``_evaluate_population`` under ``("psat", "rho")``, where the same front
 polishes in seconds.
 """
 

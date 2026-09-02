@@ -223,21 +223,22 @@ def test_objectives_cross_the_process_boundary():
     _worker_init's initargs: a spawned worker re-imports the module and inherits
     nothing else. Two plain strings pickle; feos.Identifier does not, which is
     why nothing else can ride along.
+
+    Under ("vle", "sft"), the pair that still runs through the pool: the bulk
+    pair is batched in-process and never reaches a worker.
     """
     from fit_pcsaft._pure.pareto import _map_evaluate, _worker_pool
 
     data = _hexane_data_with_sft()
     units = Units()
-    expected = aad_objectives(
-        HEXANE_P, HEXANE, HEXANE_SPEC, data, units, objectives=FORTE
-    )
+    expected = aad_objectives(HEXANE_P, HEXANE, HEXANE_SPEC, data, units)
     with _worker_pool(
-        2, HEXANE, HEXANE_SPEC, data, units, None, False, FORTE
+        2, HEXANE, HEXANE_SPEC, data, units, None, False, ("vle", "sft")
     ) as pool:
         got = _map_evaluate(
-            [HEXANE_P], pool, HEXANE, HEXANE_SPEC, data, units, None, FORTE
+            [HEXANE_P], pool, HEXANE, HEXANE_SPEC, data, units, None, ("vle", "sft")
         )
-    assert got[0][:2] == pytest.approx(expected)
+    assert got[0][:2] == pytest.approx(expected, abs=1e-9)
 
 
 # Rehner & Gross 2020, water, PC-SAFT: parameters from Table 1, AADs from Table 2.
@@ -944,3 +945,127 @@ def test_select_resolves_per_mode_default_refs_and_reports_sft():
     # never an objective under this pair, but still reported -- self-consistent
     # fixture makes it exactly 0, not merely finite by accident
     assert forte.aad_sft == pytest.approx(0.0, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Batched in-process evaluation for the bulk pair
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_population_matches_evaluate_point_row_for_row():
+    """Under ('psat','rho') the search evaluates the whole population with one
+    vectorised feos AD call per property. It must reproduce _evaluate_point on
+    every row -- feasible, failing at some temperatures, failing at all of them,
+    and outside the default box -- and the batch must actually contain those
+    kinds, or the failure handling is untested.
+    """
+    from fit_pcsaft._pure.pareto import (
+        _MIN_VALID_FRACTION, _evaluate_point, _evaluate_population,
+    )
+    from fit_pcsaft._types import ModelSpec
+
+    water, water_c = _water_data()
+    cases = [
+        (HEXANE, HEXANE_SPEC, _hexane_data_with_sft(), [
+            HEXANE_P,                            # feasible
+            np.array([20.0, 6.0, 700.0]),        # inside the default box, no VLE here
+            np.array([1e-6, 1e-6, 1e-6]),        # outside it; the old path's "hopeless" row
+        ]),
+        (water_c, ModelSpec(mu=0.0, na=1, nb=1, q=0.0), water, [
+            np.array(WATER_SCHEMES[0][1]),                    # Table 1, feasible
+            np.array([1.0, 2.0, 50.0, 1e-4, 500.0]),          # Tc far below every data point
+            np.array([1.0, 2.9375, 150.0, 0.0445, 1500.0]),   # 7 of 23 points converge: partial
+        ]),
+    ]
+    seen_partial = False
+    for comp, spec, data, rows in cases:
+        got = _evaluate_population(np.array(rows), comp, spec, data, Units(), FORTE)
+        want = np.array([_evaluate_point(x, comp, spec, data, Units(), None, FORTE) for x in rows])
+        assert got.shape == (len(rows), 3)
+        np.testing.assert_allclose(got[:, :2], want[:, :2], rtol=1e-9)
+        np.testing.assert_array_equal(got[:, 2], want[:, 2])
+        v = got[:, 2]
+        assert (v <= 0.0).any(), "no feasible row in the batch"
+        assert (v == _MIN_VALID_FRACTION).any(), "no all-failed row in the batch"
+        seen_partial |= bool(((v > 0.0) & (v < _MIN_VALID_FRACTION)).any())
+    assert seen_partial, "no partially-failing row in either batch"
+
+
+def test_evaluate_population_takes_a_2d_array_and_a_single_row():
+    """pymoo hands _evaluate a (pop, n_var) array; polish_front hands one row at a time."""
+    from fit_pcsaft._pure.pareto import _evaluate_population
+
+    data = _hexane_data_with_sft()
+    one = _evaluate_population(HEXANE_P, HEXANE, HEXANE_SPEC, data, Units(), FORTE)
+    two = _evaluate_population(
+        np.array([HEXANE_P, HEXANE_P * 1.01]), HEXANE, HEXANE_SPEC, data, Units(), FORTE
+    )
+    assert one.shape == (1, 3) and two.shape == (2, 3)
+    assert np.isfinite(one).all() and np.isfinite(two).all()
+
+
+def test_map_evaluate_routes_the_bulk_pair_to_the_batched_path(monkeypatch):
+    """With sft out of the objectives, _map_evaluate never calls _evaluate_point."""
+    from fit_pcsaft._pure import pareto
+
+    def _boom(*args, **kwargs):
+        raise _NoDft("the per-point path was entered")
+
+    monkeypatch.setattr(pareto, "_evaluate_point", _boom)
+    got = np.asarray(
+        pareto._map_evaluate(
+            [HEXANE_P], None, HEXANE, HEXANE_SPEC, _hexane_data_with_sft(), Units(), None, FORTE
+        ),
+        dtype=float,
+    )
+    assert got.shape == (1, 3) and np.isfinite(got).all()
+
+
+@pytest.mark.parametrize("spec,objectives", [
+    (HEXANE_SPEC, ("vle", "sft")),   # sft needs the DFT: per point, through the pool
+    (None, FORTE),                   # q != 0 has no feos AD model: per point
+])
+def test_sft_mode_and_quadrupole_stay_on_the_per_point_path(monkeypatch, spec, objectives):
+    from fit_pcsaft._pure import pareto
+    from fit_pcsaft._types import ModelSpec
+
+    if spec is None:
+        spec = ModelSpec(mu=0.0, na=None, nb=None, q=1.0)
+
+    def _boom(*args, **kwargs):
+        raise _NoDft("the batched path was entered")
+
+    monkeypatch.setattr(pareto, "_evaluate_population", _boom)
+    got = pareto._map_evaluate(
+        [HEXANE_P], None, HEXANE, spec, _hexane_data_with_sft(), Units(), None, objectives
+    )
+    assert np.isfinite(got[0][0])
+
+
+def test_bulk_pair_never_spawns_a_pool(monkeypatch, tmp_path):
+    """n_jobs is a no-op for ('psat','rho'): feos's rayon threads do the work
+    in-process, and a spawn pool would only add pickling and one-thread workers."""
+    from contextlib import contextmanager
+
+    from fit_pcsaft._pure import fit as fit_mod
+    from fit_pcsaft._pure import pareto
+
+    seen = []
+
+    @contextmanager
+    def fake_pool(n_jobs, *args):
+        seen.append(n_jobs)
+        yield None
+
+    monkeypatch.setattr(pareto, "_worker_pool", fake_pool)
+    monkeypatch.setattr(fit_mod, "_fetch_compound", lambda _id: (HEXANE.identifier, HEXANE.mw))
+    (tmp_path / "psat.csv").write_text("T,psat\n300.0,21.9\n320.0,43.9\n340.0,79.5\n")
+    (tmp_path / "rho.csv").write_text("T,rho\n300.0,654.9\n320.0,635.6\n340.0,615.4\n")
+
+    res = pareto.fit_pure_pareto(
+        id="hexane", psat_path=tmp_path / "psat.csv", density_path=tmp_path / "rho.csv",
+        objectives=FORTE, bounds=[(2.0, 4.0), (3.5, 4.0), (200.0, 260.0)],
+        pop_size=20, n_gen=2, n_restarts=1, refine=0, n_jobs=4, verbose=False,
+    )
+    assert seen == [1], "the bulk pair must run in-process, never through workers"
+    assert len(res.F) >= 1

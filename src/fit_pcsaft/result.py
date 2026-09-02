@@ -6,88 +6,47 @@ from typing import Optional
 import feos
 import numpy as np
 
+from fit_pcsaft._fit_utils import predict_bulk
 from fit_pcsaft._types import Compound, ModelSpec, PureData, Units
 
 
-def _predict_per_property(eos, data, units, *, functional=None):
-    """Return (model_arr, exp_arr) per property, NaN where feos raises.
+def _predict_per_property(eos, mw, data, units, *, functional=None):
+    """Return (model_arr, exp_arr) per property, NaN where feos did not converge.
 
-    Returns dict keyed by "psat", "rho", "hvap", "sft". Each value is a tuple
-    (model: np.ndarray, exp: np.ndarray) of equal length. Empty datasets
-    produce zero-length arrays. Never raises.
+    Keys "psat", "rho", "hvap", "sft"; each value a tuple (model, exp) of equal
+    length. Bulk properties come from ``predict_bulk`` -- one feos call each --
+    and surface tension from the DFT, point by point. Empty datasets produce
+    zero-length arrays. Never raises.
     """
-    tu = units.temperature
-    pu = units.pressure
-    du = units.density
-    eu = units.enthalpy
-
-    def _psat_model(T_vals, p_exp_vals):
-        model = np.full(len(T_vals), np.nan)
-        for i, T in enumerate(T_vals):
-            try:
-                model[i] = float(feos.PhaseEquilibrium.vapor_pressure(eos, float(T) * tu)[0] / pu)
-            except Exception:
-                pass
-        return model, np.asarray(p_exp_vals, dtype=float)
-
-    def _rho_model(T_vals, rho_exp_vals):
-        model = np.full(len(T_vals), np.nan)
-        for i, T in enumerate(T_vals):
-            try:
-                model[i] = float(
-                    feos.PhaseEquilibrium.pure(eos, float(T) * tu).liquid.mass_density() / du
-                )
-            except Exception:
-                pass
-        return model, np.asarray(rho_exp_vals, dtype=float)
-
-    def _hvap_model(T_vals, hvap_exp_vals):
-        model = np.full(len(T_vals), np.nan)
-        for i, T in enumerate(T_vals):
-            try:
-                vle = feos.PhaseEquilibrium.pure(eos, float(T) * tu)
-                model[i] = float(
-                    (vle.vapor.molar_enthalpy(feos.Contributions.Residual)
-                     - vle.liquid.molar_enthalpy(feos.Contributions.Residual)) / eu
-                )
-            except Exception:
-                pass
-        return model, np.asarray(hvap_exp_vals, dtype=float)
-
-    def _sft_model(T_vals, sft_exp_vals):
-        exp = np.asarray(sft_exp_vals, dtype=float)
-        if functional is None or len(T_vals) == 0:
-            return np.full(len(T_vals), np.nan), exp
+    model = predict_bulk(eos, mw, data, units)
+    if functional is None or len(data.T_sft) == 0:
+        model["sft"] = np.full(len(data.T_sft), np.nan)
+    else:
         from fit_pcsaft._pure.surface_tension import predict_surface_tension
-        return predict_surface_tension(functional, T_vals, units), exp
-
-    return {
-        "psat": _psat_model(data.T_psat, data.p_psat),
-        "rho":  _rho_model(data.T_rho, data.rho),
-        "hvap": _hvap_model(data.T_hvap, data.hvap),
-        "sft":  _sft_model(data.T_sft, data.sft),
-    }
+        model["sft"] = predict_surface_tension(functional, data.T_sft, units)
+    exp = {"psat": data.p_psat, "rho": data.rho, "hvap": data.hvap, "sft": data.sft}
+    return {k: (model[k], np.asarray(exp[k], dtype=float)) for k in exp}
 
 
-def _compute_pure_metrics(eos, data, units, *, functional=None):
+def _compute_pure_metrics(eos, mw, data, units, *, functional=None):
     """Compute per-property Metrics from an EOS + experimental data.
 
     Returns dict keyed by "psat", "rho", "hvap", "sft". Properties with no input rows
     return Metrics.empty(0).
     """
     from fit_pcsaft._metrics import compute_metrics_from_arrays
-    preds = _predict_per_property(eos, data, units, functional=functional)
+    preds = _predict_per_property(eos, mw, data, units, functional=functional)
     return {
         prop: compute_metrics_from_arrays(model, exp, n_total=len(exp))
         for prop, (model, exp) in preds.items()
     }
 
 
-def _compute_per_point_rd(eos, data, units, *, functional=None):
+def _compute_per_point_rd(eos, mw, data, units, *, functional=None):
     """Compute per-point signed RD% and ARD% for all experimental datasets."""
     import polars as pl
 
-    preds = _predict_per_property(eos, data, units, functional=functional)
+    preds = _predict_per_property(eos, mw, data, units, functional=functional)
 
     rows = []
     prop_labels = {"psat": (data.T_psat, data.p_psat),
@@ -349,7 +308,7 @@ class FitResult:
         name = self.input_name or self.compound.identifier.name
 
         # --- experimental CSV (long/tidy: one row per data point) ---
-        _compute_per_point_rd(self.eos, self.data, self.units).write_csv(
+        _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units).write_csv(
             path / f"{name}_exp.csv"
         )
 
@@ -412,8 +371,7 @@ class FitResult:
 
         Export: ``result.residuals().write_csv("out.csv")``.
         """
-        return _compute_per_point_rd(
-            self.eos, self.data, self.units, functional=self.functional
+        return _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units, functional=self.functional
         )
 
     def plot_residuals(self, path=None):
@@ -612,7 +570,7 @@ class EvalResult:
         name = self.input_name or self.compound.identifier.name
 
         # --- experimental CSV (long/tidy: one row per data point) ---
-        _compute_per_point_rd(self.eos, self.data, self.units).write_csv(
+        _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units).write_csv(
             path / f"{name}_exp.csv"
         )
 
@@ -650,8 +608,7 @@ class EvalResult:
 
         Export: ``result.residuals().write_csv("out.csv")``.
         """
-        return _compute_per_point_rd(
-            self.eos, self.data, self.units, functional=self.functional
+        return _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units, functional=self.functional
         )
 
     def plot_residuals(self, path=None):

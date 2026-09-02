@@ -5,22 +5,13 @@ _derivatives each return (values, jacobian, mask) in a single vectorized AD call
 
 Structure
 ---------
-4 private setup functions handle the case-specific differences:
-  _setup_nonassoc      — non-associating, mu fixed
-  _setup_nonassoc_mu   — non-associating, mu fitted
-  _setup_assoc         — associating, mu fixed
-  _setup_assoc_mu      — associating, mu fitted
-
-Each returns (eos_ad, fit_params, make_row) where make_row(p) → a 1-D parameter
-row. feos accepts a shared 1-D row for every input point, so no per-property
-tiling is needed.
-
-_make_core takes those three plus data/compound/units/config and builds the
-shared _compute/fun/jac closures. fun and jac cache the result of _compute so
-scipy's sequential fun(x) → jac(x) calls per optimizer step trigger only one
-feos evaluation.
-
-_make_f_and_df dispatches to the right setup function and calls _make_core.
+_make_f_and_df derives the feos AD model, the differentiable parameter names
+and the AD row from one place -- ``_fit_utils.ad_model`` / ``param_names`` /
+``ad_rows`` -- and hands them to _make_core, which builds the shared
+_compute/fun/jac closures. fun and jac cache the result of _compute so scipy's
+sequential fun(x) → jac(x) calls per optimizer step trigger only one feos
+evaluation. feos accepts a shared 1-D row for every input point, so no
+per-property tiling is needed.
 
 feos AD returns SI (Pa, kmol/m³, J/mol); ``units`` converts to the user's CSV
 units. Quadrupole (q) has no AD support — feos silently returns a zero gradient
@@ -31,68 +22,8 @@ import feos
 import numpy as np
 import si_units as si
 
-from fit_pcsaft._fit_utils import _PENALTY
+from fit_pcsaft._fit_utils import _PENALTY, ad_model, ad_rows, param_names
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
-
-# ---------------------------------------------------------------------------
-# Setup functions — return (eos_ad, fit_params, make_row)
-# ---------------------------------------------------------------------------
-
-
-def _setup_nonassoc(spec: ModelSpec):
-    """Non-associating, mu fixed."""
-    mu = spec.mu
-
-    def make_row(p):
-        return np.array([p[0], p[1], p[2], mu], dtype=float)
-
-    return (
-        feos.EquationOfStateAD.PcSaftNonAssoc,
-        ["m", "sigma", "epsilon_k"],
-        make_row,
-    )
-
-
-def _setup_nonassoc_mu(spec: ModelSpec):
-    """Non-associating, mu fitted."""
-
-    def make_row(p):
-        return np.array([p[0], p[1], p[2], p[3]], dtype=float)
-
-    return (
-        feos.EquationOfStateAD.PcSaftNonAssoc,
-        ["m", "sigma", "epsilon_k", "mu"],
-        make_row,
-    )
-
-
-def _setup_assoc(spec: ModelSpec):
-    """Associating, mu fixed."""
-    mu, na, nb = spec.mu, float(spec.na), float(spec.nb)
-
-    def make_row(p):
-        return np.array([p[0], p[1], p[2], mu, p[3], p[4], na, nb], dtype=float)
-
-    return (
-        feos.EquationOfStateAD.PcSaftFull,
-        ["m", "sigma", "epsilon_k", "kappa_ab", "epsilon_k_ab"],
-        make_row,
-    )
-
-
-def _setup_assoc_mu(spec: ModelSpec):
-    """Associating, mu fitted. Uses 6 gradient parameters — the feos maximum."""
-    na, nb = float(spec.na), float(spec.nb)
-
-    def make_row(p):
-        return np.array([p[0], p[1], p[2], p[3], p[4], p[5], na, nb], dtype=float)
-
-    return (
-        feos.EquationOfStateAD.PcSaftFull,
-        ["m", "sigma", "epsilon_k", "mu", "kappa_ab", "epsilon_k_ab"],
-        make_row,
-    )
-
 
 # ---------------------------------------------------------------------------
 # Shared core — _compute / fun / jac closures
@@ -269,20 +200,9 @@ def _make_f_and_df(
             "Use the numerical Jacobian."
         )
 
-    assoc = spec.na is not None and spec.nb is not None and spec.na > 0 and spec.nb > 0
-    fit_mu = spec.mu is None
-
-    if assoc and fit_mu:
-        eos_ad, fit_params, make_row = _setup_assoc_mu(spec)
-    elif assoc:
-        eos_ad, fit_params, make_row = _setup_assoc(spec)
-    elif fit_mu:
-        eos_ad, fit_params, make_row = _setup_nonassoc_mu(spec)
-    else:
-        eos_ad, fit_params, make_row = _setup_nonassoc(spec)
-
     errors: list = []
     fun, jac = _make_core(
-        data, compound, units, config, eos_ad, fit_params, make_row, errors
+        data, compound, units, config,
+        ad_model(spec), param_names(spec), lambda p: ad_rows(p, spec)[0], errors,
     )
     return fun, jac, errors

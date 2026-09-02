@@ -144,8 +144,7 @@ def _plot_residuals_pure(result, path=None):
     sns.set_context("talk")
     sns.set_style("ticks")
 
-    df = _compute_per_point_rd(
-        result.eos, result.data, result.units,
+    df = _compute_per_point_rd(result.eos, result.compound.mw, result.data, result.units,
         functional=getattr(result, "functional", None),
     )
     present = set(df["property"].to_list())

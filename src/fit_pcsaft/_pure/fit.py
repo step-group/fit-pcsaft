@@ -3,7 +3,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
-import feos
 import numpy as np
 import si_units as si
 from scipy.optimize import differential_evolution, least_squares
@@ -16,8 +15,11 @@ from fit_pcsaft._fit_utils import (
     _fetch_compound,
     _first_error,
     _first_error_hint,
+    _is_assoc,
     _make_f_and_df_numerical,
     _normalize_f_scale,
+    param_names,
+    params_dict,
 )
 from fit_pcsaft._pure.jacobian import _make_f_and_df
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
@@ -93,55 +95,6 @@ def _default_de_bounds(fit_mu: bool, assoc: bool) -> list:
     return bounds
 
 
-def _predict_psat(eos, T_psat, temperature_unit, pressure_unit) -> Optional[np.ndarray]:
-    try:
-        return np.array(
-            [
-                feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)[0]
-                / pressure_unit
-                for T in T_psat
-            ]
-        )
-    except Exception:
-        return None
-
-
-def _predict_rho(eos, T_rho, temperature_unit, density_unit) -> Optional[np.ndarray]:
-    if len(T_rho) == 0:
-        return None
-    try:
-        return np.array(
-            [
-                feos.PhaseEquilibrium.pure(
-                    eos, T * temperature_unit
-                ).liquid.mass_density()
-                / density_unit
-                for T in T_rho
-            ]
-        )
-    except Exception:
-        return None
-
-
-def _predict_hvap(eos, T_hvap, temperature_unit, enthalpy_unit) -> Optional[np.ndarray]:
-    if len(T_hvap) == 0:
-        return None
-    try:
-        return np.array(
-            [
-                (
-                    vle.vapor.molar_enthalpy(feos.Contributions.Residual)
-                    - vle.liquid.molar_enthalpy(feos.Contributions.Residual)
-                )
-                / enthalpy_unit
-                for T in T_hvap
-                for vle in [feos.PhaseEquilibrium.pure(eos, T * temperature_unit)]
-            ]
-        )
-    except Exception:
-        return None
-
-
 def _compute_pure_metrics(
     params_fitted: np.ndarray,
     data: PureData,
@@ -167,28 +120,7 @@ def _compute_pure_metrics(
         if len(data.T_sft) > 0
         else None
     )
-    return eos, functional, _result_metrics(eos, data, units, functional=functional)
-
-
-def _extract_params_dict(
-    params_fitted: np.ndarray, mu: Optional[float], assoc: bool = False
-):
-    """Extract fitted parameters into output dict."""
-    idx = 3
-    d = {
-        "m": float(params_fitted[0]),
-        "sigma": float(params_fitted[1]),
-        "epsilon_k": float(params_fitted[2]),
-    }
-    if mu is None:
-        d["mu"] = float(params_fitted[idx])
-        idx += 1
-    if assoc:
-        d["kappa_ab"] = float(params_fitted[idx])
-        idx += 1
-        d["epsilon_k_ab"] = float(params_fitted[idx])
-        idx += 1
-    return d
+    return eos, functional, _result_metrics(eos, compound.mw, data, units, functional=functional)
 
 
 def _setup_pure_fit(
@@ -229,7 +161,8 @@ def _setup_pure_fit(
     elif nb is not None and na is None:
         na = 0
 
-    is_associative = na is not None and nb is not None and na > 0 and nb > 0
+    spec = ModelSpec(mu=mu, na=na, nb=nb, q=q)
+    is_associative = _is_assoc(spec)
 
     identifier, mw = _fetch_compound(id)
 
@@ -258,7 +191,6 @@ def _setup_pure_fit(
     )
 
     compound = Compound(identifier=identifier, mw=float(mw))
-    spec = ModelSpec(mu=mu, na=na, nb=nb, q=q)
     units = Units(
         temperature=temperature_unit,
         pressure=pressure_unit,
@@ -477,10 +409,8 @@ def fit_pure(
         units,
     )
 
-    params_dict = _extract_params_dict(params_fitted, mu, assoc=is_associative)
-
     return FitResult(
-        params=params_dict,
+        params=params_dict(params_fitted, spec),
         eos=eos_final,
         data=data,
         compound=compound,
@@ -662,10 +592,8 @@ def fit_pure_de(
         units,
     )
 
-    params_dict = _extract_params_dict(params_fitted, mu, assoc=is_associative)
-
     return FitResult(
-        params=params_dict,
+        params=params_dict(params_fitted, spec),
         eos=eos_final,
         data=data,
         compound=compound,
@@ -789,12 +717,8 @@ def eval_pure(
         surface_tension=surface_tension_unit,
     )
 
-    # Build params_vec: [m, sigma, epsilon_k, (kappa_ab, epsilon_k_ab if assoc)]
-    # mu is fixed via spec.mu, so it does NOT go into the vec
-    params_vec = [params["m"], params["sigma"], params["epsilon_k"]]
-    if has_assoc_params:
-        params_vec += [params["kappa_ab"], params["epsilon_k_ab"]]
-    params_vec = np.array(params_vec, dtype=float)
+    # mu is fixed via spec.mu, so it is not in the vector; param_names says what is.
+    params_vec = np.array([params[k] for k in param_names(spec)], dtype=float)
 
     eos, functional, metrics = _compute_pure_metrics(
         params_vec, data, compound, spec, units

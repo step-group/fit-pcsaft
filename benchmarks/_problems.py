@@ -79,9 +79,10 @@ class Problem:
 
 _FORTE_AXES = ("AARD_psat [%]", "AARD_rho [%]")
 
-# Measured in fit_pure_pareto's own docstring: ("psat","rho") averages 3.69 ms/eval
-# single-core. Wall time under the n_jobs=-1 pool is lower.
-_MS_FORTE = 0.0037
+# Measured in fit_pure_pareto's own docstring: ("psat","rho") averages 0.108 ms/eval
+# over a 600-evaluation search, batched in-process on feos's rayon threads (2026-09-01;
+# it was 3.69 ms/eval single-core under the old per-point loop and pool).
+_MS_FORTE = 0.00011
 # Measured on this machine, wall, under the pool: de-confirm's ladder ran 2700 evals
 # in ~48 s, 10800 in ~190 s and 28800 in ~460 s -> 16-18 ms/eval.
 _MS_VLE_SFT = 0.017

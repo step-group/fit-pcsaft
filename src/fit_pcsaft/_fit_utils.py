@@ -8,6 +8,7 @@ import feos
 import numpy as np
 import polars as pl
 import pubchempy as pcp
+import si_units as si
 
 from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv
 from fit_pcsaft._pure.surface_tension import predict_surface_tension
@@ -130,70 +131,83 @@ def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
 
 
 
+def _is_assoc(spec: ModelSpec) -> bool:
+    return spec.na is not None and spec.nb is not None and spec.na > 0 and spec.nb > 0
+
+
+def param_names(spec: ModelSpec) -> list[str]:
+    """The optimiser vector's layout -- the one rule every consumer reads.
+
+    ``[m, sigma, epsilon_k]`` (+ ``mu`` when it is fitted, i.e. ``spec.mu is None``)
+    (+ ``kappa_ab, epsilon_k_ab`` when associating).
+    """
+    names = ["m", "sigma", "epsilon_k"]
+    if spec.mu is None:
+        names.append("mu")
+    if _is_assoc(spec):
+        names += ["kappa_ab", "epsilon_k_ab"]
+    return names
+
+
+def params_dict(params_vec, spec: ModelSpec) -> dict[str, float]:
+    """``param_names`` zipped with the vector; a length mismatch is a bug, so it raises."""
+    return dict(zip(param_names(spec), map(float, params_vec), strict=True))
+
+
+def ad_model(spec: ModelSpec):
+    """The feos AD model whose row layout ``ad_rows`` produces. Neither takes q."""
+    if _is_assoc(spec):
+        return feos.EquationOfStateAD.PcSaftFull
+    return feos.EquationOfStateAD.PcSaftNonAssoc
+
+
+def ad_rows(X, spec: ModelSpec) -> np.ndarray:
+    """``(n, k)`` optimiser vectors -> ``(n, 4|8)`` rows in feos's AD order.
+
+    ``[m, sigma, epsilon_k, mu]`` for ``PcSaftNonAssoc``, plus ``[kappa_ab,
+    epsilon_k_ab, na, nb]`` for ``PcSaftFull``. Fixed values (``mu``, ``na``,
+    ``nb``) are filled from ``spec``. A single ``(k,)`` vector gives ``(1, ...)``.
+    """
+    X = np.atleast_2d(np.asarray(X, dtype=float))
+    n = len(X)
+    cols = [
+        X[:, 0],
+        X[:, 1],
+        X[:, 2],
+        X[:, 3] if spec.mu is None else np.full(n, float(spec.mu)),
+    ]
+    if _is_assoc(spec):
+        k = 4 if spec.mu is None else 3
+        cols += [X[:, k], X[:, k + 1], np.full(n, float(spec.na)), np.full(n, float(spec.nb))]
+    return np.ascontiguousarray(np.column_stack(cols))
+
+
 def _build_record(
     params_vec: np.ndarray,
     compound: Compound,
     spec: ModelSpec,
 ) -> feos.PureRecord:
-    """
-    Build a feos PureRecord from a parameter vector.
-
-    Non-associating (na/nb are None):
-        mu fixed: params_vec = [m, sigma, epsilon_k]
-        mu fitted: params_vec = [m, sigma, epsilon_k, mu]
-
-    Associating (na/nb are integers):
-        mu fixed: params_vec = [m, sigma, epsilon_k, kappa_ab, epsilon_k_ab]
-        mu fitted: params_vec = [m, sigma, epsilon_k, mu, kappa_ab, epsilon_k_ab]
-    """
-    identifier = compound.identifier
-    mw = compound.mw
-    mu = spec.mu
-    q = spec.q
-    na = spec.na
-    nb = spec.nb
-
-    idx = 0
-    m = float(params_vec[idx])
-    idx += 1
-    sigma = float(params_vec[idx])
-    idx += 1
-    epsilon_k = float(params_vec[idx])
-    idx += 1
-
-    if mu is None:
-        mu_val = float(params_vec[idx])
-        idx += 1
-    else:
-        mu_val = float(mu)
-
-    assoc = na is not None and nb is not None and na > 0 and nb > 0
-    if assoc:
-        kappa_ab = float(params_vec[idx])
-        idx += 1
-        epsilon_k_ab = float(params_vec[idx])
-        idx += 1
-        return feos.PureRecord(
-            identifier=identifier,
-            molarweight=mw,
-            m=m,
-            sigma=sigma,
-            epsilon_k=epsilon_k,
-            mu=mu_val,
-            q=q,
-            association_sites=[
-                {"na": na, "nb": nb, "epsilon_k_ab": epsilon_k_ab, "kappa_ab": kappa_ab}
-            ],
-        )
-    return feos.PureRecord(
-        identifier=identifier,
-        molarweight=mw,
-        m=m,
-        sigma=sigma,
-        epsilon_k=epsilon_k,
-        mu=mu_val,
-        q=q,
+    """Build a feos PureRecord from a vector laid out as ``param_names(spec)``."""
+    p = params_dict(params_vec, spec)
+    kwargs = dict(
+        identifier=compound.identifier,
+        molarweight=compound.mw,
+        m=p["m"],
+        sigma=p["sigma"],
+        epsilon_k=p["epsilon_k"],
+        mu=p["mu"] if spec.mu is None else float(spec.mu),
+        q=spec.q,
     )
+    if _is_assoc(spec):
+        kwargs["association_sites"] = [
+            {
+                "na": spec.na,
+                "nb": spec.nb,
+                "epsilon_k_ab": p["epsilon_k_ab"],
+                "kappa_ab": p["kappa_ab"],
+            }
+        ]
+    return feos.PureRecord(**kwargs)
 
 
 def _build_eos(
@@ -219,6 +233,33 @@ def _build_functional(
     """
     parameters = feos.Parameters.new_pure(_build_record(params_vec, compound, spec))
     return feos.HelmholtzEnergyFunctional.pcsaft(parameters)
+
+
+def predict_bulk(eos, mw: float, data: PureData, units: Units) -> dict[str, np.ndarray]:
+    """psat, rho and hvap at every data temperature, in ``units``.
+
+    One rayon-parallel feos call per property (``feos.Property.*``), so the cost
+    is per call, not per point. NaN wherever the VLE solve did not converge
+    (supercritical T, or parameters with no VLE); nothing raises per point.
+    ``mw`` (g/mol) turns feos's kmol/m3 into kg/m3 -- the EoS does not expose it.
+    """
+    to_K = units.temperature / si.KELVIN
+    to_p = 1.0 / (units.pressure / si.PASCAL)
+    to_rho = mw / (units.density / (si.KILOGRAM / si.METER**3))
+    to_h = 1.0 / (units.enthalpy / (si.JOULE / si.MOL))
+
+    def run(fn, T, factor):
+        T = np.asarray(T, dtype=float)
+        if T.size == 0:
+            return np.empty(0)
+        vals, ok = fn(eos, np.ascontiguousarray(T[:, None] * to_K))
+        return np.where(ok, vals, np.nan) * factor
+
+    return {
+        "psat": run(feos.Property.vapor_pressure, data.T_psat, to_p),
+        "rho": run(feos.Property.equilibrium_liquid_density, data.T_rho, to_rho),
+        "hvap": run(feos.Property.enthalpy_of_vaporization, data.T_hvap, to_h),
+    }
 
 
 _EPS_2PT = np.sqrt(np.finfo(float).eps)  # ~1.49e-8
@@ -285,7 +326,10 @@ def _make_cost_fn(
     """Create cost function closure for non-associating optimization.
 
     ``errors`` collects swallowed exceptions so a fit that never leaves its
-    initial guess can report *why* instead of claiming convergence.
+    initial guess can report *why* instead of claiming convergence. The bulk
+    properties come from ``predict_bulk``, which reports non-convergence as
+    NaN rather than raising, so ``errors`` only sees a failure to build the
+    EoS or to call feos -- never a point that merely did not converge.
     """
     T_psat = data.T_psat
     d_psat = data.p_psat
@@ -295,11 +339,6 @@ def _make_cost_fn(
     d_hvap = data.hvap
     T_sft = data.T_sft
     d_sft = data.sft
-    temperature_unit = units.temperature
-    psat_unit = units.pressure
-    rho_unit = units.density
-    enthalpy_unit = units.enthalpy
-
     n_psat = len(T_psat)
     n_rho = len(T_rho)
     n_hvap = len(T_hvap)
@@ -325,6 +364,7 @@ def _make_cost_fn(
         """Compute weighted relative residuals."""
         try:
             eos = _build_eos(params_vec**2, compound, spec)
+            pred = predict_bulk(eos, compound.mw, data, units)
         except Exception as exc:
             if errors is not None:
                 errors.append(exc)
@@ -332,69 +372,31 @@ def _make_cost_fn(
 
         residuals = []
 
-        # Vapor pressure residuals
-        p_pred = np.empty(n_psat)
-        success = np.ones(n_psat, dtype=bool)
-        for i, T in enumerate(T_psat):
-            try:
-                p_pred[i] = (
-                    feos.PhaseEquilibrium.vapor_pressure(eos, T * temperature_unit)[0]
-                    / psat_unit
-                )
-            except Exception as exc:
-                if errors is not None:
-                    errors.append(exc)
-                success[i] = False
-
+        # Vapor pressure: the only block allowed to extrapolate
+        p_pred = pred["psat"]
+        success = np.isfinite(p_pred)
         if not success.all():
             if config.extrapolate_psat and success.sum() >= 2:
                 # August eqn.: ln(P) = a + b/T — linear regression in log space
                 X = np.column_stack([np.ones(success.sum()), inv_T_psat[success]])
                 coeffs = np.linalg.lstsq(X, np.log(p_pred[success]), rcond=None)[0]
+                p_pred = p_pred.copy()
                 p_pred[~success] = np.exp(coeffs[0] + coeffs[1] * inv_T_psat[~success])
             else:
                 return np.full(n_total, _PENALTY)
 
         residuals.append(psat_cost_scale * (p_pred * inv_d_psat - 1.0))
 
-        # Density residuals
+        # Density and enthalpy of vaporization: one failed point voids the property
         if n_rho > 0:
-            try:
-                rho_pred_vals = [
-                    feos.PhaseEquilibrium.pure(
-                        eos, T * temperature_unit
-                    ).liquid.mass_density()
-                    / rho_unit
-                    for T in T_rho
-                ]
-                rho_pred = np.array(rho_pred_vals)
-            except Exception as exc:
-                if errors is not None:
-                    errors.append(exc)
+            if not np.isfinite(pred["rho"]).all():
                 return np.full(n_total, _PENALTY)
+            residuals.append(rho_cost_scale * (pred["rho"] * inv_d_rho - 1.0))
 
-            residuals.append(rho_cost_scale * (rho_pred * inv_d_rho - 1.0))
-
-        # Enthalpy of vaporization residuals
         if n_hvap > 0:
-            try:
-                hvap_pred_vals = []
-                for T in T_hvap:
-                    vle = feos.PhaseEquilibrium.pure(eos, T * temperature_unit)
-                    hvap_pred_vals.append(
-                        (
-                            vle.vapor.molar_enthalpy(feos.Contributions.Residual)
-                            - vle.liquid.molar_enthalpy(feos.Contributions.Residual)
-                        )
-                        / enthalpy_unit
-                    )
-                hvap_pred = np.array(hvap_pred_vals)
-            except Exception as exc:
-                if errors is not None:
-                    errors.append(exc)
+            if not np.isfinite(pred["hvap"]).all():
                 return np.full(n_total, _PENALTY)
-
-            residuals.append(hvap_cost_scale * (hvap_pred * inv_d_hvap - 1.0))
+            residuals.append(hvap_cost_scale * (pred["hvap"] * inv_d_hvap - 1.0))
 
         # Surface tension residuals (absolute, normalized by mean gamma — a
         # relative residual diverges as gamma -> 0 at the critical point)

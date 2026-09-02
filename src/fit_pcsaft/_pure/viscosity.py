@@ -33,7 +33,7 @@ import si_units as si
 
 from fit_pcsaft._csv import SCHEMA_VISCOSITY, load_csv
 from fit_pcsaft._binary._utils import _apply_induced_association
-from fit_pcsaft._fit_utils import _first_error, _first_error_hint
+from fit_pcsaft._fit_utils import _first_error, _first_error_hint, _is_assoc
 from fit_pcsaft._pure.viscosity_gc import compute_a_gc
 
 
@@ -311,7 +311,7 @@ def _rebuild_eos_with_viscosity(source, viscosity_list: list) -> Optional[object
             if mu_val is None:
                 mu_val = 0.0
             na, nb = spec.na, spec.nb
-            assoc = na is not None and nb is not None and na > 0 and nb > 0
+            assoc = _is_assoc(spec)
             kw = {
                 'identifier': fr.compound.identifier,
                 'molarweight': fr.compound.mw,

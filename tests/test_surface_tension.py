@@ -168,7 +168,7 @@ def test_metrics_include_sft_aad():
     data = _hexane_data_with_sft()
     eos = _build_eos(HEXANE_P, HEXANE, HEXANE_SPEC)
     func = _build_functional(HEXANE_P, HEXANE, HEXANE_SPEC)
-    metrics = _compute_pure_metrics(eos, data, Units(), functional=func)
+    metrics = _compute_pure_metrics(eos, HEXANE.mw, data, Units(), functional=func)
     assert "sft" in metrics
     # self-consistent data -> zero deviation
     assert metrics["sft"].mae == pytest.approx(0.0, abs=1e-9)
@@ -179,7 +179,7 @@ def test_metrics_sft_empty_without_functional():
     from fit_pcsaft.result import _compute_pure_metrics
     data = _hexane_data_with_sft()
     eos = _build_eos(HEXANE_P, HEXANE, HEXANE_SPEC)
-    metrics = _compute_pure_metrics(eos, data, Units())
+    metrics = _compute_pure_metrics(eos, HEXANE.mw, data, Units())
     assert metrics["sft"].n == 0
 
 
@@ -189,7 +189,7 @@ def test_residuals_df_carries_sft_rows():
     data = _hexane_data_with_sft()
     eos = _build_eos(HEXANE_P, HEXANE, HEXANE_SPEC)
     func = _build_functional(HEXANE_P, HEXANE, HEXANE_SPEC)
-    df = _compute_per_point_rd(eos, data, Units(), functional=func)
+    df = _compute_per_point_rd(eos, HEXANE.mw, data, Units(), functional=func)
     assert "sft" in set(df["property"].to_list())
 
 

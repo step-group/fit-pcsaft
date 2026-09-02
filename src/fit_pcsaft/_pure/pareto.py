@@ -18,13 +18,16 @@ nr=2 replacement cap, n_restarts, _densify, the Das-Dennis weight fan --
 assumes it. The second pair never touches the DFT during the search, which
 is most of its point (``ParetoResult.select()`` is the one exception -- it
 still DFT-solves once, for the point it returns, whenever ``sft_path`` was
-given): measured on this machine's locally-built feos wheel, whole-search
-average over a 600-evaluation budget (pop_size=30, n_gen=20, n_restarts=1,
-refine=0, seed=1, n_jobs=1, same surface-tension file loaded either way so
-only the solving differs), objectives=("psat", "rho") averaged 3.69
-ms/evaluation against 103.33 ms/evaluation for ("vle", "sft") -- 28x cheaper.
-Full numbers, and why the run's 15-vs-2 front-point counts are not evidence
-about front quality, live with fit_pure_pareto's ``objectives`` paragraph.
+given), and it is evaluated a whole population at a time: ``_evaluate_population``
+makes one vectorised ``feos.Property.*_derivatives`` call per property for
+every candidate and every temperature, rayon-parallel in Rust, with no
+process pool. Measured on this machine's locally-built feos wheel,
+whole-search average over a 600-evaluation budget (pop_size=30, n_gen=20,
+n_restarts=1, refine=0, seed=1, water): 0.108 ms per evaluation (0.06 s
+total) against 1.49 ms (0.89 s) for the per-point loop it replaced, measured
+the same day on the same code otherwise; ("vle", "sft") was last measured at
+103.33 ms per evaluation in 2026-08. The full numbers live with
+fit_pure_pareto's ``objectives`` paragraph.
 
 Eq 30 is read here as a *mean* of the two AARDs, not their sum. Written out, the
 equation looks like a sum of two separately-normalized terms,
@@ -80,10 +83,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
+import feos
 import numpy as np
 import si_units as si
 
-from fit_pcsaft._fit_utils import _build_eos, _build_functional
+from fit_pcsaft._fit_utils import (
+    _build_eos,
+    _build_functional,
+    ad_model,
+    ad_rows,
+    param_names,
+    params_dict,
+)
 from fit_pcsaft._metrics import compute_metrics_from_arrays
 from fit_pcsaft._pure.surface_tension import predict_surface_tension
 from fit_pcsaft._types import Compound, ModelSpec, PureData, Units
@@ -304,8 +315,11 @@ def _evaluate_point(
     **The DFT solve is skipped entirely when ``"sft"`` is not an objective** --
     no ``_build_functional``, no ``predict_surface_tension``. That solve
     dominates the cost of an evaluation, so the ``("psat", "rho")`` pair is
-    markedly cheaper; the measured figures live with the timing run that
-    produces them.
+    markedly cheaper -- and under that pair the search does not call this
+    function at all: ``_map_evaluate`` routes it to ``_evaluate_population``,
+    which computes the same three numbers for a whole population at once.
+    This stays the sft-mode evaluator and the reference the batched path is
+    tested against.
     """
     from fit_pcsaft.result import _predict_per_property
 
@@ -318,7 +332,7 @@ def _evaluate_point(
     def _fraction(metrics, n_total):
         return 1.0 if n_total == 0 else metrics.n / n_total
 
-    preds = _predict_per_property(eos, data, units)
+    preds = _predict_per_property(eos, compound.mw, data, units)
     m_psat = compute_metrics_from_arrays(*preds["psat"])
     m_rho = compute_metrics_from_arrays(*preds["rho"])
     worst = min(
@@ -347,6 +361,66 @@ def _evaluate_point(
         _finite(aad[objectives[1]]),
         _MIN_VALID_FRACTION - worst,
     )
+
+
+def _batched(spec: ModelSpec, objectives) -> bool:
+    """Whether the search runs through ``_evaluate_population``.
+
+    The bulk pair on a model feos can differentiate: one vectorised AD call per
+    property for the whole population, no process pool. ``q != 0`` has no AD
+    model and surface tension needs the DFT, so both stay on ``_evaluate_point``.
+    """
+    return "sft" not in objectives and spec.q == 0.0
+
+
+def _evaluate_population(X, compound, spec, data, units, objectives) -> np.ndarray:
+    """``_evaluate_point`` for a whole population at once: rows of ``(f1, f2, violation)``.
+
+    Same numbers, same validity rule (finite model, finite exp, exp != 0 --
+    ``compute_metrics_from_arrays``), same graded violation. Two feos calls in
+    total instead of two per parameter set per temperature: every AD row is
+    repeated once per temperature and feos solves the whole matrix in parallel
+    across its rayon threads (``FEOS_MAX_THREADS``, or ``feos.set_num_threads``
+    before the first feos call). Measured on thymol, 100 candidates x 88
+    temperatures: 5 ms against 174 ms for the per-point loop, single-threaded.
+
+    One difference from ``_evaluate_point``: a vector ``_build_eos`` would refuse
+    reports violation 0.5 (nothing evaluated) here rather than 1.0. Inside a
+    bounds box that never happens, and ``_front_from`` drops both.
+    """
+    X = np.atleast_2d(np.asarray(X, dtype=float))
+    n = len(X)
+    rows, model = ad_rows(X, spec), ad_model(spec)
+    to_K = units.temperature / si.KELVIN
+    to_p = 1.0 / (units.pressure / si.PASCAL)
+    to_rho = compound.mw / (units.density / (si.KILOGRAM / si.METER**3))
+
+    def aard(fn, T, exp, factor):
+        """Per-row AARD% (NaN with no valid point) and valid fraction (1.0 for an empty set)."""
+        nT = len(T)
+        if nT == 0:
+            return np.full(n, np.nan), np.ones(n)
+        P = np.repeat(rows, nT, axis=0)
+        Tin = np.ascontiguousarray(np.tile(np.asarray(T, dtype=float) * to_K, n)[:, None])
+        vals, _, ok = fn(model, [], P, Tin)
+        m = (np.where(ok, vals, np.nan) * factor).reshape(n, nT)
+        e = np.asarray(exp, dtype=float)
+        valid = np.isfinite(m) & np.isfinite(e) & (e != 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rd = np.where(valid, np.abs((m - e) / e) * 100.0, 0.0)
+        k = valid.sum(axis=1)
+        return np.where(k > 0, rd.sum(axis=1) / np.maximum(k, 1), np.nan), k / nT
+
+    a_psat, f_psat = aard(
+        feos.Property.vapor_pressure_derivatives, data.T_psat, data.p_psat, to_p
+    )
+    a_rho, f_rho = aard(
+        feos.Property.equilibrium_liquid_density_derivatives, data.T_rho, data.rho, to_rho
+    )
+    aad = {"psat": a_psat, "rho": a_rho, "vle": 0.5 * (a_psat + a_rho)}
+    F = np.column_stack([aad[objectives[0]], aad[objectives[1]]])
+    F = np.where(np.isfinite(F), F, _BIG)  # _finite, vectorised
+    return np.column_stack([F, _MIN_VALID_FRACTION - np.minimum(f_psat, f_rho)])
 
 
 def aad_objectives(
@@ -401,7 +475,9 @@ def _silence_fd_stderr(active: bool = True):
 
 
 # --------------------------------------------------------------------------
-# Parallel evaluation
+# Parallel evaluation -- the ("vle", "sft") pair only. The bulk pair never
+# reaches this pool: _evaluate_population hands the whole population to feos
+# in one call per property and feos parallelises across its rayon threads.
 #
 # feos does not release the GIL — measured speedup with a 16-thread pool is
 # 0.89x, i.e. slower than serial — so threads are useless and worker *processes*
@@ -539,11 +615,16 @@ def _map_evaluate(rows, pool, compound, spec, data, units, sft_options,
                   objectives: tuple[str, str] = _DEFAULT_OBJECTIVES):
     """Evaluate parameter vectors, through the worker pool when there is one.
 
+    Batched in-process for the bulk pair (``_batched``), where ``pool`` is
+    ignored -- see ``_evaluate_population``.
+
     ``objectives`` is only read on the serial path -- a pooled worker takes it
     from ``_WORKER``, set once in the initializer. The two agree because
     ``fit_pure_pareto`` builds the pool and every call here from the same
     variable.
     """
+    if _batched(spec, objectives):
+        return _evaluate_population(rows, compound, spec, data, units, objectives)
     if pool is None:
         return [
             _evaluate_point(x, compound, spec, data, units, sft_options, objectives)
@@ -943,12 +1024,7 @@ class ParetoResult:
 
     @property
     def param_names(self) -> list[str]:
-        names = ["m", "sigma", "epsilon_k"]
-        if self.fit_mu:
-            names.append("mu")
-        if self.is_associative:
-            names += ["kappa_ab", "epsilon_k_ab"]
-        return names
+        return param_names(self.spec)
 
     def select(self, refs: "Optional[tuple[float, float]]" = None):
         """Pick the point on the front that minimises eq 32, as a FitResult.
@@ -963,7 +1039,6 @@ class ParetoResult:
         of the mode is the front itself, not that one point. Set ``refs`` from
         the two properties' expected error scales if the selection matters.
         """
-        from fit_pcsaft._pure.fit import _extract_params_dict
         from fit_pcsaft.result import FitResult, _compute_pure_metrics
 
         if refs is None:
@@ -977,11 +1052,8 @@ class ParetoResult:
             if len(self.data.T_sft) > 0
             else None
         )
-        params = _extract_params_dict(
-            params_vec, self.spec.mu, assoc=self.is_associative
-        )
-        metrics = _compute_pure_metrics(
-            eos, self.data, self.units, functional=functional
+        params = params_dict(params_vec, self.spec)
+        metrics = _compute_pure_metrics(eos, self.compound.mw, self.data, self.units, functional=functional
         )
         cost = float(self.F[i, 0] / refs[0] + self.F[i, 1] / refs[1])
         scipy_result = SimpleNamespace(
@@ -1098,9 +1170,9 @@ def fit_pure_pareto(
     sensible parameters and up to 1 s where the VLE solve fails -- measured
     under ``objectives=('vle', 'sft')``, which is what every table in this
     docstring documents; they do not apply to ``('psat', 'rho')``, which is
-    measured about 28x cheaper per evaluation over a whole search (this
-    machine's locally-built feos wheel, 600-evaluation budget -- see the
-    ``objectives`` paragraph below for the full numbers), so budget it
+    evaluated a whole population at a time in-process (``_evaluate_population``)
+    and measured at 0.108 ms per evaluation over a whole search -- see the
+    ``objectives`` paragraph below for the full numbers -- so budget it
     accordingly. Budget decides front quality far more than anything else;
     measured on water (2B, 14 workers), best-of-front and the largest hole in
     it:
@@ -1253,10 +1325,15 @@ def fit_pure_pareto(
     ``lhs`` uses Latin hypercube sampling for generation zero instead of uniform
     random draws, which covers the box more evenly. Pass False to compare.
 
-    ``n_jobs`` evaluates the population across worker processes; -1 (the
-    default) uses every core bar two. Processes rather than threads because feos
-    does not release the GIL. On a spawn platform, call this from inside an
-    ``if __name__ == "__main__":`` guard.
+    ``n_jobs`` applies to ``("vle", "sft")`` only. There the population is
+    evaluated across worker processes, -1 (the default) meaning every core bar
+    two -- processes rather than threads because feos does not release the
+    GIL -- and on a spawn platform the call must sit inside an
+    ``if __name__ == "__main__":`` guard. Under ``("psat", "rho")`` with
+    ``q == 0`` it is a no-op: the whole population goes through one vectorised
+    feos call per property in this process (``_evaluate_population``), and the
+    thread count is feos's own rayon pool -- ``FEOS_MAX_THREADS``, or
+    ``feos.set_num_threads`` before the first feos call.
 
     ``refine`` interpolates roughly this many parameter sets between each
     adjacent pair of front points once the search is done, keeping the ones that
@@ -1358,15 +1435,22 @@ def fit_pure_pareto(
     nothing under that pair is asking for one. It also means no DFT solve at
     all during the search -- no ``_build_functional``, no
     ``predict_surface_tension`` -- which is most of why the pair is cheap.
+    Under that pair the search never builds an EoS object either: the whole
+    population goes through ``_evaluate_population``, one vectorised
+    ``feos.Property.*_derivatives`` call per property with ``parameter_names=[]``
+    and one AD row per candidate per temperature, rayon-parallel in Rust.
     Measured on this machine's locally-built feos wheel, whole-search average
     over a 600-evaluation budget (pop_size=30, n_gen=20, n_restarts=1,
-    refine=0, seed=1, n_jobs=1, same surface-tension file loaded by both modes
-    so only the solving differs): ``objectives=("psat", "rho")`` averaged 3.69
-    ms per evaluation (2.2 s total) against 103.33 ms (62.0 s total) for
-    ``("vle", "sft")`` -- 28x cheaper per evaluation. That run also returned
-    15 front points against 2; do not read that as a front-quality comparison
-    -- 600 evaluations at refine=0/n_restarts=1 is far too small a budget for
-    the sft mode, and the gap is a budget artefact, not a resolution one.
+    refine=0, seed=1, water): 0.108 ms per evaluation (0.06 s total) against
+    1.49 ms (0.89 s total) for the per-point loop it replaced, measured the
+    same day on the same code otherwise; on thymol, 100 candidates x 88
+    temperatures cost 5 ms against 174 ms single-threaded. ``("vle", "sft")``
+    was last measured at 103.33 ms per evaluation (62.0 s over the same
+    budget) in 2026-08 and has not been re-measured since -- it still
+    DFT-solves every point. That older run also returned 15 front points
+    against 2; do not read that as a front-quality comparison -- 600
+    evaluations at refine=0/n_restarts=1 is far too small a budget for the sft
+    mode, and the gap is a budget artefact, not a resolution one.
 
     ``refs`` scales the two objectives for the decomposition, and is the same
     eq-32 reference pair ``select()`` takes. Defaults are per mode: water
@@ -1450,11 +1534,15 @@ def fit_pure_pareto(
     if bounds is None:
         bounds = _default_de_bounds(fit_mu, is_associative)
 
-    n_workers = _resolve_n_jobs(n_jobs)
+    # The bulk pair is evaluated in-process, whole population at a time, on
+    # feos's own thread pool; a spawn pool would only add pickling on top.
+    batched = _batched(spec, objectives)
+    n_workers = 1 if batched else _resolve_n_jobs(n_jobs)
     if verbose:
+        where = "feos AD, batched in-process" if batched else f"{n_workers} process(es)"
         print(
             f"MOEA/D: {pop_size} weight vectors x {n_gen} gen "
-            f"x {n_restarts} restart(s) on {n_workers} process(es)"
+            f"x {n_restarts} restart(s) on {where}"
             f" [{objectives[0]} vs {objectives[1]}]"
         )
 

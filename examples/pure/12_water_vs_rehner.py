@@ -100,7 +100,7 @@ def _plot(results, path):
         top[2].plot(T_fine, predict_surface_tension(res.functional, T_fine, u),
                     label=label, **line)
 
-        preds = _predict_per_property(res.eos, d, u, functional=res.functional)
+        preds = _predict_per_property(res.eos, res.compound.mw, d, u, functional=res.functional)
         pt = dict(color=color, marker="o" if ls == "-" else "s", ms=6, lw=1.4,
                   ls=ls, label=label, zorder=4)
         for k, (prop, T) in enumerate((("psat", d.T_psat), ("rho", d.T_rho))):
