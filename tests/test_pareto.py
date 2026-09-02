@@ -1069,3 +1069,48 @@ def test_bulk_pair_never_spawns_a_pool(monkeypatch, tmp_path):
     )
     assert seen == [1], "the bulk pair must run in-process, never through workers"
     assert len(res.F) >= 1
+
+
+@pytest.mark.parametrize("refine", [0, 2])
+def test_polished_front_is_densified_again_and_sorted(monkeypatch, refine):
+    """polish moves points onto the true front and drops what they now dominate,
+    which can leave a handful of anchors (2-phenylethanol, 2026-09-02: 51 -> 6).
+    A second _densify pass after it interpolates between those anchors -- real
+    parameter sets, re-evaluated -- and whatever runs last, the front comes back
+    sorted by F[:, 0], the ParetoResult contract that polish alone broke (five of
+    seven TESIS fronts came back unsorted). polish_front is wrapped to hand its
+    rows back reversed, so the sort has to be done by the caller to pass.
+    """
+    from fit_pcsaft._pure import fit as fit_mod
+    from fit_pcsaft._pure import pareto, polish
+
+    data, water = _water_data()
+    calls = []
+    real_densify = pareto._densify
+
+    def spy(X, F, *args, **kwargs):
+        calls.append(len(F))
+        return real_densify(X, F, *args, **kwargs)
+
+    real_polish = polish.polish_front
+
+    def reversed_polish(X, F, evaluate, bounds, **kwargs):
+        X_p, F_p = real_polish(X, F, evaluate, bounds, **kwargs)
+        return X_p[::-1], F_p[::-1]
+
+    monkeypatch.setattr(pareto, "_densify", spy)
+    # fit_pure_pareto imports polish_front inside the function, so the patch goes
+    # on the polish module, where that import looks it up.
+    monkeypatch.setattr(polish, "polish_front", reversed_polish)
+    monkeypatch.setattr(fit_mod, "_fetch_compound", lambda _id: (water.identifier, water.mw))
+    d = Path(__file__).parent.parent / "examples" / "data"
+    res = pareto.fit_pure_pareto(
+        id="water", psat_path=d / "psat" / "water.csv", density_path=d / "density" / "water.csv",
+        na=1, nb=1, objectives=FORTE,
+        bounds=[(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
+        pop_size=20, n_gen=30, n_restarts=1, refine=refine, polish=True, seed=7,
+        n_jobs=1, verbose=False,
+    )
+    assert len(res.F) > 1, "the search must return a front for this test to mean anything"
+    assert len(calls) == (0 if refine == 0 else 2), "densify runs before AND after polish"
+    assert np.all(np.diff(res.F[:, 0]) >= 0), "rows must be sorted by F[:, 0] after polish"

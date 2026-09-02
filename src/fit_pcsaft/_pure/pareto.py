@@ -1368,7 +1368,12 @@ def fit_pure_pareto(
     the merged-and-densified front in order of increasing ``F[:, 0]`` and
     re-solving each point to minimize that axis subject to the other axis
     staying at or below its value there -- see ``polish.polish_front`` for
-    the warm-start/never-regress details. The ``evaluate`` closure it is
+    the warm-start/never-regress details. Polished points dominate most of
+    their raw neighbours, so the pass can leave a front of a few anchors
+    (2-phenylethanol, 2026-09-02: 51 -> 6); ``refine`` therefore runs a
+    second time on the polished front, and the rows are re-sorted by
+    ``F[:, 0]`` afterwards -- ``polish_front`` returns them in input order,
+    which a polished point can break. The ``evaluate`` closure it is
     given costs exactly what ``_evaluate_point`` costs under this call's
     ``objectives``: under ``("vle", "sft")`` each finite-difference gradient
     is about six DFT solves (~0.6 s each), so polishing a 200-point front
@@ -1658,6 +1663,24 @@ def fit_pure_pareto(
                 X, F = polish_front(X, F, _evaluate, bounds)
             if verbose:
                 print(f"polish: {n_before} -> {len(F)} front points")
+
+            # Polish moves points onto the true front and drops what they now
+            # dominate, which can leave a handful of anchors (2-phenylethanol,
+            # 2026-09-02: 51 -> 6). Interpolate between them once more -- real
+            # parameter sets, re-evaluated -- and restore the sort polish_front
+            # does not keep (it returns rows in input order, and a polished row
+            # can overtake its neighbour on F[:, 0]).
+            if refine > 0 and len(X) > 1:
+                n_before = len(F)
+                with _silence_fd_stderr(quiet_solver):
+                    X, F = _densify(
+                        X, F, refine, pool, compound, spec, data, units,
+                        sft_options, objectives,
+                    )
+                if verbose:
+                    print(f"refine after polish: {n_before} -> {len(F)} front points")
+            order = np.argsort(F[:, 0])
+            X, F = X[order], F[order]
 
     return ParetoResult(
         X=X,
