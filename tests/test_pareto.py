@@ -1209,3 +1209,302 @@ def test_pareto_result_renders_three_objectives_and_selects_by_summed_cost(tmp_p
     assert fit.params["m"] == pytest.approx(3.0576)
     assert fit.scipy_result.fun[0] == pytest.approx(6.0)
     assert "refs=(1.0, 1.0, 1.0)" in fit.scipy_result.message
+
+
+# ---------------------------------------------------------------------------
+# ("psat", "rho", "cp"): liquid heat capacity as the third objective
+# ---------------------------------------------------------------------------
+
+TRIPLE = ("psat", "rho", "cp")
+
+# DIPPR 107, J/(kmol K): hexane (Perry's), for the offline end-to-end run.
+HEXANE_DIPPR107 = [104400.0, 352300.0, 1694.6, 236900.0, 761.6]
+
+
+def _water_data_with_cp(explicit_p: bool, factor: float = 1.0):
+    """Water quasi-data plus a self-consistent cp set: the total cp the 2B model
+    itself predicts at four temperatures, times ``factor``, with the DIPPR-107
+    ideal part. AARD_cp is 0 at WATER_2B and 100*|1 - 1/factor| otherwise.
+    ``explicit_p`` writes liquid-side pressures into P_cp; else NaN = saturation.
+    """
+    import dataclasses
+
+    from fit_pcsaft._fit_utils import _build_eos, ideal_gas_cp, predict_bulk
+    from tests.test_fit_utils import WATER_DIPPR107
+    from tests.test_surface_tension import WATER_2B, WATER_2B_SPEC
+
+    data, water = _water_data()
+    T = np.array([300.0, 350.0, 400.0, 450.0])
+    P = np.array([200.0, 300.0, 400.0, 1500.0]) if explicit_p else np.full(4, np.nan)
+    probe = dataclasses.replace(
+        data, T_cp=T, P_cp=P, cp=np.ones(4), cp_ig=ideal_gas_cp(water, WATER_DIPPR107, T)
+    )
+    eos = _build_eos(np.array(WATER_2B), water, WATER_2B_SPEC)
+    cp = predict_bulk(eos, water.mw, probe, Units())["cp"] * factor
+    return dataclasses.replace(probe, cp=cp), water
+
+
+def test_cp_objective_needs_cp_path_and_cp_ig():
+    """Raised before _setup_pure_fit, so offline with paths that do not exist.
+    cp_ig is required whenever cp_path is given -- feos's residual cp is not
+    comparable to a measured total without the ideal-gas part."""
+    from fit_pcsaft import fit_pure_pareto
+
+    base = dict(id="water", psat_path="nope.csv", density_path="nope.csv")
+    with pytest.raises(ValueError, match="cp_path"):
+        fit_pure_pareto(**base, objectives=TRIPLE)
+    with pytest.raises(ValueError, match="cp_ig"):
+        fit_pure_pareto(**base, cp_path="nope.csv", objectives=TRIPLE)
+    with pytest.raises(ValueError, match="cp_ig"):          # reporting-only cp, same rule
+        fit_pure_pareto(**base, cp_path="nope.csv", objectives=FORTE)
+    with pytest.raises(ValueError, match="cp_ig"):
+        fit_pure_pareto(**base, cp_path="nope.csv", cp_ig=[1.0, 2.0], objectives=TRIPLE)
+    with pytest.raises(ValueError, match="refs"):
+        fit_pure_pareto(**base, cp_path="nope.csv", cp_ig=[1.0] * 5, objectives=TRIPLE,
+                        refs=(2.0, 2.0))
+
+
+def test_objective_tuples_containing_cp_must_be_the_triple():
+    from fit_pcsaft import fit_pure_pareto
+
+    for objectives in [("vle", "cp"), ("psat", "cp"), ("psat", "rho", "sft"), ("cp",)]:
+        with pytest.raises(ValueError, match="objectives"):
+            fit_pure_pareto(
+                id="water", psat_path="nope.csv", density_path="nope.csv",
+                sft_path="nope.csv", cp_path="nope.csv", cp_ig=[1.0] * 5,
+                objectives=objectives,
+            )
+
+
+def test_cp_axis_is_in_the_tables():
+    from fit_pcsaft._pure.pareto import _DEFAULT_REFS, _OBJECTIVES
+
+    assert _OBJECTIVES["cp"] == ("AARD_cp", "%", "aad_cp_pct")
+    assert _DEFAULT_REFS[TRIPLE] == (2.0, 2.0, 2.0)
+
+
+def test_cp_objective_is_the_aard_of_total_cp_and_leaves_the_bulk_axes_alone():
+    """Third axis = AARD of the *total* cp (residual + ideal gas). Scaling the
+    experimental totals by 1.1 must read exactly 100*(1 - 1/1.1) %; an objective
+    on the residual alone would not. The first two axes are the pair's, untouched."""
+    from tests.test_surface_tension import WATER_2B, WATER_2B_SPEC
+
+    data, water = _water_data_with_cp(explicit_p=False)
+    got = aad_objectives(np.array(WATER_2B), water, WATER_2B_SPEC, data, Units(), None, TRIPLE)
+    pair = aad_objectives(np.array(WATER_2B), water, WATER_2B_SPEC, data, Units(), None, FORTE)
+    assert len(got) == 3 and got[:2] == pair
+    assert got[2] == pytest.approx(0.0, abs=1e-9)
+
+    off, _ = _water_data_with_cp(explicit_p=False, factor=1.1)
+    got = aad_objectives(np.array(WATER_2B), water, WATER_2B_SPEC, off, Units(), None, TRIPLE)
+    assert got[2] == pytest.approx(100.0 * (1.0 - 1.0 / 1.1), rel=1e-9)
+
+
+def test_cp_is_reported_but_never_optimized_under_the_bulk_pair():
+    """The hvap precedent: cp_path under ("psat", "rho") is loaded and reported,
+    and absurd cp values move neither objective by an ulp -- while under the
+    triple the same values blow the third axis up."""
+    import dataclasses
+
+    from tests.test_surface_tension import WATER_2B, WATER_2B_SPEC
+
+    data, water = _water_data_with_cp(explicit_p=False)
+    absurd = dataclasses.replace(data, cp=np.array([1.0e6, -5.0e6, 3.0, 7.0]))
+    args = (np.array(WATER_2B), water, WATER_2B_SPEC)
+    assert aad_objectives(*args, data, Units(), None, FORTE) == (
+        aad_objectives(*args, absurd, Units(), None, FORTE)
+    )
+    third = aad_objectives(*args, absurd, Units(), None, TRIPLE)[2]
+    assert 100.0 < third < _BIG, "a real, huge AARD -- not the infeasible sentinel"
+
+
+def test_evaluate_population_matches_evaluate_point_row_for_row_with_cp():
+    """The batched path on the triple must reproduce _evaluate_point on every
+    row. Explicit pressures give identical feos inputs on both paths (tight);
+    with NaN pressures psat comes from vapor_pressure on one path and
+    vapor_pressure_derivatives on the other, which agree to ~1e-10, not the ulp.
+    atol: the fixture is self-consistent, so the per-point AARD_cp is exactly 0
+    while the AD path lands at ~1e-13 %."""
+    from fit_pcsaft._pure.pareto import (
+        _MIN_VALID_FRACTION,
+        _evaluate_point,
+        _evaluate_population,
+    )
+    from tests.test_surface_tension import WATER_2B, WATER_2B_SPEC
+
+    rows = [
+        np.array(WATER_2B),                               # feasible
+        np.array([1.0, 2.0, 50.0, 1e-4, 500.0]),          # Tc far below every data point
+        np.array([1.0, 2.9375, 150.0, 0.0445, 1500.0]),   # converges at some points only
+    ]
+    for explicit_p, rtol in ((True, 1e-9), (False, 1e-6)):
+        data, water = _water_data_with_cp(explicit_p)
+        got = _evaluate_population(np.array(rows), water, WATER_2B_SPEC, data, Units(), TRIPLE)
+        want = np.array([
+            _evaluate_point(x, water, WATER_2B_SPEC, data, Units(), None, TRIPLE) for x in rows
+        ])
+        assert got.shape == (3, 4)
+        np.testing.assert_allclose(got[:, :3], want[:, :3], rtol=rtol, atol=1e-9)
+        np.testing.assert_array_equal(got[:, 3], want[:, 3])
+        v = got[:, 3]
+        assert (v <= 0.0).any(), "no feasible row"
+        assert (v == _MIN_VALID_FRACTION).any(), "no all-failed row"
+
+
+def test_cp_valid_fraction_counts_only_when_cp_is_an_objective():
+    """A cp set usable at one point in four is a violation under the triple
+    (0.5 - 0.25) and invisible to the pair -- objectives and violation alike."""
+    import dataclasses
+
+    from fit_pcsaft._pure.pareto import _evaluate_point
+    from tests.test_surface_tension import WATER_2B, WATER_2B_SPEC
+
+    data, water = _water_data_with_cp(explicit_p=False)
+    sparse = dataclasses.replace(data, cp=np.array([data.cp[0], np.nan, np.nan, np.nan]))
+    args = (np.array(WATER_2B), water, WATER_2B_SPEC)
+    assert _evaluate_point(*args, sparse, Units(), None, FORTE) == (
+        _evaluate_point(*args, data, Units(), None, FORTE)
+    )
+    row = _evaluate_point(*args, sparse, Units(), None, TRIPLE)
+    assert row[-1] == pytest.approx(0.5 - 0.25)
+
+
+def test_pareto_result_for_the_triple_selects_reports_and_writes_cp(tmp_path):
+    import polars as pl
+
+    from fit_pcsaft._pure.pareto import ParetoResult
+    from tests.test_surface_tension import WATER_2B, WATER_2B_SPEC
+
+    data, water = _water_data_with_cp(explicit_p=False)
+    X = np.array([WATER_2B, np.array(WATER_2B) * [1.02, 1.0, 1.0, 1.0, 1.0]])
+    F = np.array([[4.56, 1.76, 0.0], [5.0, 1.5, 0.3]])       # eq-32 costs 3.16, 3.40
+    res = ParetoResult(
+        X=X, F=F, data=data, compound=water, spec=WATER_2B_SPEC, units=Units(),
+        fit_mu=False, is_associative=True, time_elapsed=0.0, input_name="water",
+        objectives=TRIPLE,
+    )
+    assert "best AARD_cp: 0.00% (AARD_psat there: 4.56%, AARD_rho there: 1.76%)" in str(res)
+    res.to_csv(tmp_path / "front.csv")
+    assert pl.read_csv(tmp_path / "front.csv").columns == [
+        "aad_psat_pct", "aad_rho_pct", "aad_cp_pct", "m", "sigma", "epsilon_k", "kappa_ab", "epsilon_k_ab",
+    ]
+    fit = res.select()
+    assert "refs=(2.0, 2.0, 2.0)" in fit.scipy_result.message
+    assert fit.params["m"] == pytest.approx(1.0)
+    assert fit.ard_cp == pytest.approx(0.0, abs=1e-9)
+    assert "Heat capacity" in str(fit)
+
+
+def test_densify_interpolates_between_nearest_neighbours_on_a_surface(monkeypatch):
+    """Three objectives: 'adjacent after sorting by F[:, 0]' is meaningless on a
+    surface, so edges are nearest neighbours in normalized objective space.
+    Analytic front f = (a, b, 1/(a b)): every interpolant is on it, so every
+    input point survives, the result is non-dominated, and the pass costs O(n)
+    evaluations -- kNN edges, not all pairs."""
+    from fit_pcsaft._pure import pareto
+
+    def analytic(rows, *args):
+        t = np.atleast_2d(np.asarray(rows, dtype=float))
+        a, b = t[:, 0], t[:, 1]
+        return np.column_stack([a, b, 1.0 / (a * b), np.zeros_like(a)])
+
+    calls = []
+
+    def counting(rows, *args):
+        calls.append(len(rows))
+        return analytic(rows)
+
+    monkeypatch.setattr(pareto, "_map_evaluate", counting)
+    g = np.linspace(0.5, 2.0, 4)
+    X = np.array([[a, b] for a in g for b in g])              # 16 points on the surface
+    F = analytic(X)[:, :3]
+    Xd, Fd = pareto._densify(X, F, 2, None, None, None, None, None, None, TRIPLE)
+    assert len(Fd) > len(F)
+    assert pareto.non_dominated(Fd).all()
+    assert all(any(np.allclose(f, h) for h in Fd) for f in F)
+    assert sum(calls) <= 4 * len(X)
+    # Sorted-by-F[:, 0] adjacency only ever steps in b (same a) or wraps between
+    # a-groups (both change). An interpolant with a strictly between grid values
+    # and b exactly on the grid can only come from a nearest-neighbour edge
+    # along a -- the edges a surface needs and a curve never has.
+    new = np.array([x for x in Xd if not any(np.allclose(x, y) for y in X)])
+    on_grid = np.isclose(new[:, 1][:, None], g[None, :]).any(axis=1)
+    off_grid = ~np.isclose(new[:, 0][:, None], g[None, :]).any(axis=1)
+    assert (on_grid & off_grid).any(), "no edge along the a-direction: adjacency, not kNN"
+
+
+def test_map_evaluate_routes_the_triple_to_the_batched_path(monkeypatch):
+    from fit_pcsaft._pure import pareto
+    from tests.test_surface_tension import WATER_2B, WATER_2B_SPEC
+
+    def boom(*args, **kwargs):
+        raise AssertionError("per-point path taken")
+
+    monkeypatch.setattr(pareto, "_evaluate_point", boom)
+    data, water = _water_data_with_cp(explicit_p=True)
+    R = np.asarray(pareto._map_evaluate([np.array(WATER_2B)], None, water, WATER_2B_SPEC,
+                                        data, Units(), None, TRIPLE))
+    assert R.shape == (1, 4) and R[0, 3] <= 0.0
+
+
+def test_plot_draws_three_pairwise_projections_for_the_triple():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from fit_pcsaft._pure.pareto import ParetoResult
+
+    def front(F, objectives):
+        return ParetoResult(
+            X=np.tile([3.0576, 3.7983, 236.77], (len(F), 1)), F=F,
+            data=_hexane_data_with_sft(), compound=HEXANE, spec=HEXANE_SPEC, units=Units(),
+            fit_mu=False, is_associative=False, time_elapsed=0.0, input_name="hexane",
+            objectives=objectives,
+        )
+
+    fig, axes = front(np.array([[1.0, 2.0, 3.0], [2.0, 1.0, 3.0], [3.0, 3.0, 0.5]]), TRIPLE).plot()
+    assert len(axes) == 3
+    plt.close(fig)
+    fig, ax = front(np.array([[1.0, 2.0], [2.0, 1.0]]), FORTE).plot()
+    assert len(ax.lines) == 2, "two-objective plot keeps the front line and the eq-32 tangent"
+    plt.close(fig)
+
+
+def test_end_to_end_triple_runs_batched_in_process(monkeypatch, tmp_path):
+    """A tiny real search on the triple: three columns, sorted by F[:, 0], and
+    -- like the pair -- never through a worker pool."""
+    from contextlib import contextmanager
+
+    from fit_pcsaft._fit_utils import _build_eos, ideal_gas_cp, predict_bulk
+    from fit_pcsaft._pure import fit as fit_mod
+    from fit_pcsaft._pure import pareto
+    from fit_pcsaft._types import PureData
+
+    seen = []
+
+    @contextmanager
+    def fake_pool(n_jobs, *args):
+        seen.append(n_jobs)
+        yield None
+
+    monkeypatch.setattr(pareto, "_worker_pool", fake_pool)
+    monkeypatch.setattr(fit_mod, "_fetch_compound", lambda _id: (HEXANE.identifier, HEXANE.mw))
+    (tmp_path / "psat.csv").write_text("T,psat\n300.0,21.9\n320.0,43.9\n340.0,79.5\n")
+    (tmp_path / "rho.csv").write_text("T,rho\n300.0,654.9\n320.0,635.6\n340.0,615.4\n")
+    T = np.array([300.0, 320.0, 340.0])
+    probe = PureData(T_psat=T, p_psat=np.ones(3), T_rho=T, rho=np.ones(3), T_cp=T,
+                     P_cp=np.full(3, np.nan), cp=np.ones(3),
+                     cp_ig=ideal_gas_cp(HEXANE, HEXANE_DIPPR107, T))
+    cp = predict_bulk(_build_eos(HEXANE_P, HEXANE, HEXANE_SPEC), HEXANE.mw, probe, Units())["cp"]
+    (tmp_path / "cp.csv").write_text("T,cp\n" + "\n".join(f"{t},{c:.4f}" for t, c in zip(T, cp)) + "\n")
+
+    res = pareto.fit_pure_pareto(
+        id="hexane", psat_path=tmp_path / "psat.csv", density_path=tmp_path / "rho.csv",
+        cp_path=tmp_path / "cp.csv", cp_ig=HEXANE_DIPPR107, objectives=TRIPLE,
+        bounds=[(2.0, 4.0), (3.5, 4.0), (200.0, 260.0)],
+        pop_size=20, n_gen=2, n_restarts=1, refine=1, n_jobs=4, verbose=False,
+    )
+    assert seen == [1]
+    assert res.F.shape[1] == 3 and res.objectives == TRIPLE
+    assert np.all(np.diff(res.F[:, 0]) >= 0)
+    assert np.isfinite(res.select().ard_cp)

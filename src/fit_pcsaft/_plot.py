@@ -193,6 +193,9 @@ def _plot_residuals_pure(result, path=None):
 def _plot_pareto(result, path=None, refs: tuple[float, float] | None = None):
     """Objective 2 vs objective 1 with the selected point and its tangent (paper Fig. 1).
 
+    Three objectives get three pairwise projections instead, coloured by the
+    third axis, and no tangent (it would be a plane).
+
     Axis names, and which unit each carries, come from ``result.objectives``
     read through ``_OBJECTIVES`` -- so a ``("psat", "rho")`` front is labeled
     AARD_psat / AARD_rho, not the ``("vle", "sft")`` defaults. Plain-text axis
@@ -218,9 +221,29 @@ def _plot_pareto(result, path=None, refs: tuple[float, float] | None = None):
     # _OBJECTIVES stores the prose unit ("mN/m"); axis labels use plot
     # notation instead -- the only remap, not a new _OBJECTIVES field.
     _axis_unit = {"mN/m": "mN m^-1"}
-    (n0, u0, _), (n1, u1, _) = (_OBJECTIVES[k] for k in objectives)
-    xlabel = f"{n0} / {_axis_unit.get(u0, u0)}"
-    ylabel = f"{n1} / {_axis_unit.get(u1, u1)}"
+    labels = [f"{n} / {_axis_unit.get(u, u)}" for n, u, _ in (_OBJECTIVES[k] for k in objectives)]
+
+    if len(objectives) == 3:
+        # The front is a surface and the eq-32 tangent a plane, so there is no
+        # line worth drawing. Three pairwise projections instead, each coloured
+        # by the axis it does not show, with the selected point marked on all.
+        fig, axes = plt.subplots(1, 3, figsize=(16.5, 4.8))
+        for ax, (a, b, c) in zip(axes, [(0, 1, 2), (0, 2, 1), (1, 2, 0)]):
+            sc = ax.scatter(F[:, a], F[:, b], c=F[:, c], cmap="viridis", s=26)
+            ax.scatter([F[i, a]], [F[i, b]], s=160, marker="X", color="#E32F2F",
+                       zorder=6, label="selected")
+            ax.set_xlabel(labels[a])
+            ax.set_ylabel(labels[b])
+            fig.colorbar(sc, ax=ax, label=labels[c])
+        axes[0].legend(loc="best", framealpha=0.9)
+        fig.suptitle(f"Pareto front — {result.input_name}")
+        sns.despine(offset=10)
+        plt.tight_layout()
+        if path is not None:
+            fig.savefig(path, dpi=300, bbox_inches="tight")
+        return fig, axes
+
+    xlabel, ylabel = labels
 
     fig, ax = plt.subplots(figsize=(7, 5.5))
     ax.plot(F[:, 0], F[:, 1], "-o", color="#1F77B4", ms=5, lw=1.5,

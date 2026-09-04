@@ -13,7 +13,11 @@ and the arbitrariness of a weight choice becomes visible.
         1          AARD(psat)  [%]
         2          AARD(rho)   [%]
 
-n_obj is ``len(objectives)``: two for the pairs above. Every measured knob
+    objective triple ("psat", "rho", "cp")  -- the bulk pair plus liquid heat capacity
+        1, 2       as above
+        3          AARD(cp)    [%]   total cp = feos residual at (T, P) + DIPPR-107 ideal gas
+
+n_obj is ``len(objectives)``: two for the pairs, three for the triple. Every measured knob
 below -- the nr=2 replacement cap, n_restarts, _densify, the Das-Dennis weight
 fan -- was measured with two objectives and has not been re-measured with
 more. The second pair never touches the DFT during the search, which
@@ -123,6 +127,7 @@ _OBJECTIVES = {
     "psat": ("AARD_psat", "%",    "aad_psat_pct"),
     "rho":  ("AARD_rho",  "%",    "aad_rho_pct"),
     "sft":  ("AAD_sft",   "mN/m", "aad_sft"),
+    "cp":   ("AARD_cp",   "%",    "aad_cp_pct"),    # total liquid cp: residual + DIPPR-107 ideal gas
 }
 
 # The supported pairs, each mapped to the eq-32 references it defaults to.
@@ -133,6 +138,7 @@ _OBJECTIVES = {
 _DEFAULT_REFS = {
     ("vle", "sft"): (2.0, 0.7),
     ("psat", "rho"): (2.0, 2.0),
+    ("psat", "rho", "cp"): (2.0, 2.0, 2.0),
 }
 _DEFAULT_OBJECTIVES = ("vle", "sft")
 
@@ -305,7 +311,10 @@ def _evaluate_point(
     is asking it to -- exact for the two supported pairs, but not a general
     rule: ``worst`` below always folds in the psat and rho fractions
     regardless of ``objectives``, so a hypothetical ``("psat", "sft")`` pair
-    would still penalize on rho with nothing asking for it.
+    would still penalize on rho with nothing asking for it. Heat capacity
+    follows the sft rule -- folded in only under the triple -- but, unlike
+    sft, its AARD is computed whenever cp data is loaded (one feos call, noise
+    against the DFT solve; nothing when ``cp_path`` was not given).
 
     That grading matters: roughly 80% of a wide parameter box has no stable
     interface for an associating fluid, and a single flat penalty maps all of
@@ -352,6 +361,11 @@ def _evaluate_point(
         # two data sets are the same size. NOT their sum -- see the module docstring.
         "vle": 0.5 * (m_psat.aard_pct + m_rho.aard_pct),
     })
+    if len(data.T_cp):
+        m_cp = compute_metrics_from_arrays(*preds["cp"])
+        aad["cp"] = m_cp.aard_pct
+        if "cp" in objectives:
+            worst = min(worst, _fraction(m_cp, len(data.T_cp)))
 
     if "sft" in objectives:
         try:
@@ -369,9 +383,10 @@ def _evaluate_point(
 def _batched(spec: ModelSpec, objectives) -> bool:
     """Whether the search runs through ``_evaluate_population``.
 
-    The bulk pair on a model feos can differentiate: one vectorised AD call per
-    property for the whole population, no process pool. ``q != 0`` has no AD
-    model and surface tension needs the DFT, so both stay on ``_evaluate_point``.
+    The bulk pair -- and the triple, which adds cp and still has no sft -- on a
+    model feos can differentiate: one vectorised AD call per property for the
+    whole population, no process pool. ``q != 0`` has no AD model and surface
+    tension needs the DFT, so both stay on ``_evaluate_point``.
     """
     return "sft" not in objectives and spec.q == 0.0
 
@@ -397,22 +412,53 @@ def _evaluate_population(X, compound, spec, data, units, objectives) -> np.ndarr
     to_K = units.temperature / si.KELVIN
     to_p = 1.0 / (units.pressure / si.PASCAL)
     to_rho = compound.mw / (units.density / (si.KILOGRAM / si.METER**3))
+    to_cp = 1.0 / (units.heat_capacity / (si.JOULE / (si.MOL * si.KELVIN)))
+
+    def stats(m, exp):
+        """Per-row AARD% (NaN with no valid point) and valid fraction, from an (n, nT) model."""
+        e = np.asarray(exp, dtype=float)
+        valid = np.isfinite(m) & np.isfinite(e) & (e != 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rd = np.where(valid, np.abs((m - e) / e) * 100.0, 0.0)
+        k = valid.sum(axis=1)
+        return np.where(k > 0, rd.sum(axis=1) / np.maximum(k, 1), np.nan), k / m.shape[1]
 
     def aard(fn, T, exp, factor):
-        """Per-row AARD% (NaN with no valid point) and valid fraction (1.0 for an empty set)."""
+        """One AD call over every (candidate, temperature) pair; 1.0 fraction for an empty set."""
         nT = len(T)
         if nT == 0:
             return np.full(n, np.nan), np.ones(n)
         P = np.repeat(rows, nT, axis=0)
         Tin = np.ascontiguousarray(np.tile(np.asarray(T, dtype=float) * to_K, n)[:, None])
         vals, _, ok = fn(model, [], P, Tin)
-        m = (np.where(ok, vals, np.nan) * factor).reshape(n, nT)
-        e = np.asarray(exp, dtype=float)
-        valid = np.isfinite(m) & np.isfinite(e) & (e != 0.0)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            rd = np.where(valid, np.abs((m - e) / e) * 100.0, 0.0)
-        k = valid.sum(axis=1)
-        return np.where(k > 0, rd.sum(axis=1) / np.maximum(k, 1), np.nan), k / nT
+        return stats((np.where(ok, vals, np.nan) * factor).reshape(n, nT), exp)
+
+    def aard_cp():
+        """Total cp: one AD call for psat where P is NaN (saturation), one for the residual.
+
+        The cp input is ``(n*nT, 2)`` -- ``[T, P]`` -- unlike psat/rho, which
+        take T alone. A row whose psat does not converge is masked to NaN after
+        the call: feos is handed a 1 bar placeholder, never a NaN. Where P is
+        given, feos returns *some* root even above the candidate's Tc (a
+        gas-like residual cp, ``ok=True``), so cp cannot flag "no liquid" the
+        way rho does -- the bad candidate shows in AARD_cp, and psat/rho, which
+        always fold into the violation, catch it anyway.
+        """
+        T = np.asarray(data.T_cp, dtype=float)
+        nT = len(T)
+        if nT == 0:
+            return np.full(n, np.nan), np.ones(n)
+        P = np.repeat(rows, nT, axis=0)
+        Tin = np.ascontiguousarray(np.tile(T * to_K, n)[:, None])
+        Pin = np.tile(np.asarray(data.P_cp, dtype=float) / to_p, n)
+        if not np.isfinite(Pin).all():
+            psat, _, ok_p = feos.Property.vapor_pressure_derivatives(model, [], P, Tin)
+            Pin = np.where(np.isfinite(Pin), Pin, np.where(ok_p, psat, np.nan))
+        bad = ~np.isfinite(Pin)
+        inp = np.ascontiguousarray(np.column_stack([Tin[:, 0], np.where(bad, 1.0e5, Pin)]))
+        vals, _, ok = feos.Property.residual_isobaric_heat_capacity_derivatives(model, [], P, inp)
+        m = (np.where(ok & ~bad, vals, np.nan) * to_cp).reshape(n, nT)
+        return stats(m + np.asarray(data.cp_ig, dtype=float), data.cp)
 
     a_psat, f_psat = aard(
         feos.Property.vapor_pressure_derivatives, data.T_psat, data.p_psat, to_p
@@ -421,9 +467,13 @@ def _evaluate_population(X, compound, spec, data, units, objectives) -> np.ndarr
         feos.Property.equilibrium_liquid_density_derivatives, data.T_rho, data.rho, to_rho
     )
     aad = {"psat": a_psat, "rho": a_rho, "vle": 0.5 * (a_psat + a_rho)}
+    frac = np.minimum(f_psat, f_rho)
+    if "cp" in objectives:
+        aad["cp"], f_cp = aard_cp()
+        frac = np.minimum(frac, f_cp)
     F = np.column_stack([aad[k] for k in objectives])
     F = np.where(np.isfinite(F), F, _BIG)  # _finite, vectorised
-    return np.column_stack([F, _MIN_VALID_FRACTION - np.minimum(f_psat, f_rho)])
+    return np.column_stack([F, _MIN_VALID_FRACTION - frac])
 
 
 def aad_objectives(
@@ -710,15 +760,18 @@ def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options,
 
     span = np.ptp(F, axis=0)
     span[span <= 0.0] = 1.0
-    seg = np.linalg.norm(np.diff(F, axis=0) / span, axis=1)
+    edges = _edges(F / span)
+    seg = np.array([np.linalg.norm((F[b] - F[a]) / span) for a, b in edges])
     budget = n_between * (len(X) - 1)
     share = seg / seg.sum() if seg.sum() > 0 else np.full(len(seg), 1.0 / len(seg))
-    # At least one interpolant per segment, so no gap is skipped entirely.
+    # At least one interpolant per edge, so no gap is skipped entirely. With
+    # three objectives that floor is ~3n edges against a budget of
+    # n_between * (n - 1), so the pass costs max(budget, n_edges) evaluations.
     counts = np.maximum(1, np.round(budget * share).astype(int))
 
     rows = [
-        (1.0 - t) * X[k] + t * X[k + 1]
-        for k, n_k in enumerate(counts)
+        (1.0 - t) * X[a] + t * X[b]
+        for (a, b), n_k in zip(edges, counts)
         for t in np.linspace(0.0, 1.0, n_k + 2)[1:-1]
     ]
     if not rows:
@@ -737,6 +790,25 @@ def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options,
     keep = non_dominated(F_all)
     order = np.argsort(F_all[keep, 0])
     return X_all[keep][order], F_all[keep][order]
+
+
+def _edges(Fn: np.ndarray) -> list[tuple[int, int]]:
+    """Pairs of front points ``_densify`` interpolates between.
+
+    Two objectives: consecutive after the sort by ``F[:, 0]`` -- the front is
+    a curve, so adjacency is total and this is exactly what the pass did
+    before. Three: that order is meaningless on a surface, so each point is
+    paired with its three nearest neighbours in normalized objective space,
+    deduped. About 3n edges, so the pass stays O(n) evaluations, not all pairs.
+    """
+    n = len(Fn)
+    if Fn.shape[1] == 2:
+        return [(k, k + 1) for k in range(n - 1)]
+    from scipy.spatial import cKDTree
+
+    # ponytail: kNN k=3 edges; revisit if the refine pass dominates on a real 3-D front
+    _, idx = cKDTree(Fn).query(Fn, k=min(4, n))
+    return sorted({(min(i, j), max(i, j)) for i, row in enumerate(idx) for j in row[1:] if i != j})
 
 
 def _initial_sampling(use_lhs: bool):
@@ -1144,6 +1216,8 @@ def fit_pure_pareto(
     density_path: "Path | str",
     sft_path: "Optional[Path | str]" = None,
     hvap_path: "Optional[Path | str]" = None,
+    cp_path: "Optional[Path | str]" = None,
+    cp_ig: "Optional[list[float]]" = None,
     mu: "Optional[float]" = 0.0,
     q: float = 0.0,
     na: "Optional[int]" = None,
@@ -1158,6 +1232,7 @@ def fit_pure_pareto(
     density_unit: "si.SIObject" = si.KILOGRAM / (si.METER**3),
     enthalpy_unit: "si.SIObject" = si.KILO * si.JOULE / si.MOL,
     surface_tension_unit: "si.SIObject" = si.MILLI * si.NEWTON / si.METER,
+    heat_capacity_unit: "si.SIObject" = si.JOULE / (si.MOL * si.KELVIN),
     verbose: bool = True,
     quiet_solver: bool = True,
     lhs: bool = True,
@@ -1176,17 +1251,21 @@ def fit_pure_pareto(
     de_f: float = 0.5,
     de_cr: float = 1.0,
 ) -> ParetoResult:
-    """Generate a two-objective PC-SAFT pareto front with MOEA/D.
+    """Generate a multi-objective PC-SAFT pareto front with MOEA/D.
 
-    Two modes, chosen by ``objectives``. The default, ``("vle", "sft")``,
+    Three modes, chosen by ``objectives``. The default, ``("vle", "sft")``,
     reproduces Rehner & Gross, J. Chem. Eng. Data 2020, 65, 5698-5707: bulk
     error and interfacial error as two separate AADs (eq 30/31, see the module
     docstring). ``("psat", "rho")`` reproduces Forte et al. 2018: the two bulk
     AARDs on their own axes instead of pooled behind eq 30, with no surface
     tension in the objectives and no DFT solve anywhere in the search itself
-    -- ``.select()`` is the one exception, see below. See ``_OBJECTIVES`` for
-    what each key reports and the ``objectives`` paragraph below for how the
-    two modes differ in cost and in what the graded violation covers.
+    -- ``.select()`` is the one exception, see below. ``("psat", "rho", "cp")``
+    adds liquid heat capacity as a third axis (``n_obj=3``): AARD of the
+    *total* cp, feos's residual at ``(T, P)`` plus the DIPPR-107 ideal gas
+    passed as ``cp_ig`` -- see the ``cp_path`` paragraph below. It runs on the
+    same batched, DFT-free path as the bulk pair. See ``_OBJECTIVES`` for what
+    each key reports and the ``objectives`` paragraph below for how the modes
+    differ in cost and in what the graded violation covers.
 
     Cost is ``pop_size * n_gen`` objective evaluations, each roughly 120 ms at
     sensible parameters and up to 1 s where the VLE solve fails -- measured
@@ -1328,6 +1407,26 @@ def fit_pure_pareto(
     point. It never enters either objective: eq 30 is psat and rho only, and
     ``_evaluate_point`` does not look at ``data.T_hvap`` at all. Passing it will
     not pull the front towards better hvap.
+
+    ``cp_path`` / ``cp_ig`` (liquid heat capacity). The CSV has columns ``T``,
+    ``cp`` (the measured *total* liquid cp, ``heat_capacity_unit``, default
+    J/(mol K)) and optionally ``P`` (``pressure_unit``); a missing column or a
+    blank cell means "at saturation pressure". ``cp_ig`` is mandatory whenever
+    ``cp_path`` is given: the five DIPPR-107 (Aly-Lee) coefficients in DIPPR
+    units, J/(kmol K), exactly as feos takes them -- PC-SAFT is a residual
+    model and feos's bare EoS has no ideal-gas part, so without it the
+    measured total is not comparable to anything the model computes. The
+    ideal-gas cp is evaluated once, at the data temperatures, and added to the
+    residual. Under the pairs cp behaves like ``hvap_path``: reported by
+    ``.select()``, never in the search. Under the triple the cp valid
+    fraction also enters the graded violation. Two caveats. With an explicit
+    ``P`` feos returns *a* root even above the candidate's critical point (a
+    gas-like residual cp, converged), so cp never flags "no liquid" -- a bad
+    candidate shows up in AARD_cp, and psat/rho catch it in the violation.
+    And with three objectives the Das-Dennis fan has (p+1)(p+2)/2 weight
+    vectors, so ``pop_size`` is rounded up to the next such count (60 -> 66;
+    printed when ``verbose``). Every MOEA/D knob in this module was measured
+    with two objectives and has not been re-measured with three.
 
     Surface tension sits in a related but not identical position under
     ``objectives=('psat', 'rho')``: passed and loaded the same way, and never
@@ -1517,13 +1616,26 @@ def fit_pure_pareto(
     if objectives not in _DEFAULT_REFS:
         raise ValueError(
             f"objectives={objectives!r} is not supported. Use "
-            f"('vle', 'sft') for Rehner & Gross 2020 or ('psat', 'rho') for "
-            f"Forte et al. 2018."
+            f"('vle', 'sft') for Rehner & Gross 2020, ('psat', 'rho') for "
+            f"Forte et al. 2018, or ('psat', 'rho', 'cp') for the bulk pair "
+            f"plus liquid heat capacity."
         )
     if "sft" in objectives and sft_path is None:
         raise ValueError(
             "objectives=('vle', 'sft') needs surface-tension data: pass "
             "sft_path, or use objectives=('psat', 'rho'), which does not."
+        )
+    if "cp" in objectives and cp_path is None:
+        raise ValueError(
+            "objectives=('psat', 'rho', 'cp') needs heat-capacity data: pass "
+            "cp_path (columns T, cp, optional P) together with cp_ig, or use "
+            "objectives=('psat', 'rho'), which needs neither."
+        )
+    if cp_path is not None and (cp_ig is None or len(cp_ig) != 5):
+        raise ValueError(
+            "cp_path needs cp_ig: the five DIPPR-107 ideal-gas cp coefficients "
+            "in DIPPR units, J/(kmol K). feos's residual cp is not comparable "
+            f"to a measured total without them (got cp_ig={cp_ig!r})."
         )
     if refs is None:
         refs = _DEFAULT_REFS[objectives]
@@ -1562,6 +1674,9 @@ def fit_pure_pareto(
         surface_tension_unit=surface_tension_unit,
         sft_options=sft_options,
         verbose=False,
+        cp_path=cp_path,
+        cp_ig=cp_ig,
+        heat_capacity_unit=heat_capacity_unit,
     )
 
     if bounds is None:
@@ -1578,6 +1693,12 @@ def fit_pure_pareto(
             f"x {n_restarts} restart(s) on {where}"
             f" [{' vs '.join(objectives)}]"
         )
+        n_slots = len(_ref_dirs(pop_size, len(objectives)))
+        if n_slots != pop_size:
+            print(
+                f"  {len(objectives)} objectives: Das-Dennis fan of {n_slots} weight "
+                f"vectors (pop_size={pop_size} rounded up)"
+            )
 
     with _worker_pool(
         n_workers, compound, spec, data, units, sft_options, quiet_solver,
