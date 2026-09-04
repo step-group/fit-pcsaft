@@ -53,14 +53,14 @@ _TOL = 1e-6  # numerical slack for "dominates or ties" and constraint feasibilit
 
 def _solve_one(
     x0: np.ndarray,
-    cap: float,
+    caps: np.ndarray,
     bounds: list[tuple[float, float]],
     axis: int,
-    other: int,
+    others: list[int],
     evaluate: Callable[[np.ndarray], np.ndarray],
     max_iter: int,
 ) -> np.ndarray:
-    """One SLSQP solve; returns the true ``(f1, f2, violation)`` row at the optimum.
+    """One SLSQP solve; returns the true ``(*objectives, violation)`` row at the optimum.
 
     Objective and constraint share one cache keyed by parameter vector, so a
     theta scipy asks about for both the objective's gradient and the
@@ -84,7 +84,7 @@ def _solve_one(
         np.asarray(x0, dtype=float),
         method="SLSQP",
         bounds=bounds,
-        constraints=[{"type": "ineq", "fun": lambda theta: cap - _row(theta)[other]}],
+        constraints=[{"type": "ineq", "fun": lambda theta: caps - _row(theta)[others]}],
         # ftol doubles as SLSQP's internal constraint-accuracy target (the
         # Fortran routine's single `acc` parameter serves both), so tightening
         # it is what keeps the capped objective from drifting past `cap` by
@@ -108,13 +108,13 @@ def polish_front(
     """Drive each front point onto the true front by epsilon-constraint SLSQP.
 
     ``X`` is ``(n, n_params)`` physical parameter vectors, ``F`` is the matching
-    ``(n, 2)`` objective values. ``evaluate`` has the same ``(rows) -> (m, 3)``
-    contract as ``pareto._map_evaluate`` -- columns ``f1, f2, violation`` -- so
+    ``(n, n_obj)`` objective values. ``evaluate`` has the same ``(rows) -> (m, n_obj + 1)``
+    contract as ``pareto._map_evaluate`` -- the objectives, then ``violation`` -- so
     ``fit_pure_pareto`` can pass a closure over its worker pool and a test can
     pass a three-line analytic function. ``bounds`` matches ``X``'s columns.
 
-    ``axis`` picks which objective is minimized; the other is capped at its
-    value on the input point. Points are processed in order of increasing
+    ``axis`` picks which objective is minimized; every other objective is
+    capped at its value on the input point. Points are processed in order of increasing
     ``F[:, axis]``; each is warm-started from the *previous* point's polished
     parameters when that solve improved the point, else from its own ``X[i]``
     -- the continuation Graham et al. 2022 get from sweeping the front.
@@ -125,8 +125,8 @@ def polish_front(
     perturbation, so a test can observe the warm-start order.
 
     A point is replaced only when its polish is feasible (``violation <= 0``,
-    the capped objective actually respected) and dominates or ties the
-    original row on both objectives; anything else -- an exception, a NaN, a
+    every capped objective actually respected) and dominates or ties the
+    original row on every objective; anything else -- an exception, a NaN, a
     solve that drifted worse -- leaves the input row untouched. Because each
     point is optimized against its own point's original cap independently,
     one polished point can end up dominating another; the returned set is
@@ -137,7 +137,7 @@ def polish_front(
 
     X = np.atleast_2d(np.asarray(X, dtype=float))
     F = np.atleast_2d(np.asarray(F, dtype=float))
-    other = 1 - axis
+    others = [j for j in range(F.shape[1]) if j != axis]
 
     lo = np.array([b[0] for b in bounds], dtype=float)
     hi = np.array([b[1] for b in bounds], dtype=float)
@@ -150,7 +150,7 @@ def polish_front(
     prev_x = None  # previous point's polished params, only set when it improved
 
     for i in order:
-        cap = float(F[i, other])
+        caps = F[i, others]
         x0 = np.asarray(prev_x if prev_x is not None else X[i], dtype=float)
         if on_start is not None:
             on_start(x0)
@@ -163,24 +163,20 @@ def polish_front(
         best_x, best_row = None, None
         for s in starts:
             try:
-                x_sol, row = _solve_one(s, cap, bounds, axis, other, evaluate, max_iter)
+                x_sol, row = _solve_one(s, caps, bounds, axis, others, evaluate, max_iter)
             except Exception:
                 continue
             if not np.all(np.isfinite(row)):
                 continue
-            if row[2] > 0.0 or row[other] > cap + _TOL:
+            if row[-1] > 0.0 or np.any(row[others] > caps + _TOL):
                 continue
             if best_row is None or row[axis] < best_row[axis]:
                 best_x, best_row = x_sol, row
 
-        improved = (
-            best_row is not None
-            and best_row[axis] <= F[i, axis] + _TOL
-            and best_row[other] <= F[i, other] + _TOL
-        )
+        improved = best_row is not None and np.all(best_row[:-1] <= F[i] + _TOL)
         if improved:
             X_out[i] = best_x
-            F_out[i] = best_row[:2]
+            F_out[i] = best_row[:-1]
             prev_x = best_x
         else:
             prev_x = None

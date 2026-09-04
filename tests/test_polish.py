@@ -77,3 +77,26 @@ def test_warm_start_uses_the_previous_polished_point():
     # first point solved is the one with the smallest F[:, 0], i.e. theta = 1.0
     assert starts[0][0] == pytest.approx(1.0)
     assert len(starts) == 3
+
+
+def test_polish_caps_every_other_objective_in_three_dimensions():
+    """Three objectives: minimise f1 with f2 AND f3 capped at the input point.
+    Front: f = (a, b, 1/(a b)) on [0.5, 4]^2. Minimising a under b <= cap_b and
+    1/(a b) <= cap_c lands at b = cap_b, a = 1/(cap_b cap_c) in closed form."""
+    from fit_pcsaft._pure.pareto import non_dominated
+    from fit_pcsaft._pure.polish import polish_front
+
+    def evaluate(rows):
+        t = np.atleast_2d(np.asarray(rows, dtype=float))
+        a, b = t[:, 0], t[:, 1]
+        return np.column_stack([a, b, 1.0 / (a * b), np.zeros_like(a)])
+
+    X = np.array([[1.0, 1.0], [2.0, 1.0]])
+    F = evaluate(X)[:, :3] + 0.25                        # pushed off the front
+    _, Fp = polish_front(X, F, evaluate, [(0.5, 4.0), (0.5, 4.0)])
+    assert Fp.shape[1] == 3
+    assert np.all(Fp <= F + 1e-9)
+    assert non_dominated(Fp).all()
+    cap_b, cap_c = F[:, 1], F[:, 2]
+    assert Fp[:, 0] == pytest.approx(1.0 / (cap_b * cap_c), rel=1e-5)
+    assert Fp[:, 1] == pytest.approx(cap_b, rel=1e-5)

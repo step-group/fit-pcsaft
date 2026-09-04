@@ -64,6 +64,13 @@ def _clip(F: np.ndarray, region) -> np.ndarray:
     unbounded; ``region=None`` (the default) leaves everything unbounded.
     """
     F = np.atleast_2d(np.asarray(F, dtype=float))
+    if F.shape[1] != 2:
+        raise ValueError(
+            f"front_quality is two-objective only, got {F.shape[1]} objectives: the "
+            "hypervolume ref-point convention, extent_0/extent_1 and _max_gap's sort by "
+            "F[:, 0] all assume a curve. pymoo's hv/igd_plus/spacing are n-D, so only "
+            "those three need work to lift this."
+        )
     if region is None:
         return F
     keep = np.ones(len(F), dtype=bool)

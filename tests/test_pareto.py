@@ -4,7 +4,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from fit_pcsaft._pure.pareto import _BIG, _argmin_scalarized, aad_objectives, non_dominated
+from fit_pcsaft._pure.pareto import (
+    _BIG,
+    _argmin_scalarized,
+    aad_objectives,
+    non_dominated,
+)
 from fit_pcsaft._types import Units
 from tests.test_surface_tension import (
     HEXANE,
@@ -960,7 +965,9 @@ def test_evaluate_population_matches_evaluate_point_row_for_row():
     kinds, or the failure handling is untested.
     """
     from fit_pcsaft._pure.pareto import (
-        _MIN_VALID_FRACTION, _evaluate_point, _evaluate_population,
+        _MIN_VALID_FRACTION,
+        _evaluate_point,
+        _evaluate_population,
     )
     from fit_pcsaft._types import ModelSpec
 
@@ -1114,3 +1121,91 @@ def test_polished_front_is_densified_again_and_sorted(monkeypatch, refine):
     assert len(res.F) > 1, "the search must return a front for this test to mean anything"
     assert len(calls) == (0 if refine == 0 else 2), "densify runs before AND after polish"
     assert np.all(np.diff(res.F[:, 0]) >= 0), "rows must be sorted by F[:, 0] after polish"
+
+
+# ---------------------------------------------------------------------------
+# n_obj = len(objectives): everything below the objective table is dimension-generic
+# ---------------------------------------------------------------------------
+
+
+def test_ref_dirs_three_objectives_round_pop_size_up_to_the_das_dennis_fan():
+    """Das-Dennis on three objectives has (p+1)(p+2)/2 vectors, so pop_size is
+    rounded up to the smallest fan that holds it (60 -> 66). Two objectives are
+    untouched: exactly pop_size vectors, as before."""
+    from fit_pcsaft._pure.pareto import _ref_dirs
+
+    W = _ref_dirs(60, 3)
+    assert W.shape == (66, 3)
+    np.testing.assert_allclose(W.sum(axis=1), 1.0)
+    assert _ref_dirs(55, 3).shape == (55, 3)
+    assert _ref_dirs(60, 2).shape == (60, 2)
+    assert _ref_dirs(60).shape == (60, 2)
+    with pytest.raises(ValueError, match="objectives"):
+        _ref_dirs(4, 4)
+
+
+def test_scalarization_penalty_scale_and_front_take_three_objectives():
+    """The violation is the last column of an evaluation row, whatever the
+    number of objectives before it."""
+    from fit_pcsaft._pure.pareto import (
+        _BIG,
+        _argmin_scalarized,
+        _front_from,
+        _merge_fronts,
+        _objective_scale,
+        _penalize,
+    )
+
+    F = np.array([[1.0, 6.0, 2.0], [2.0, 2.0, 2.0], [6.0, 1.0, 1.0]])
+    assert _argmin_scalarized(F, (2.0, 1.0, 2.0)) == 1      # 7.5, 4.0, 4.5
+    assert _argmin_scalarized(F, (100.0, 0.1, 100.0)) == 2  # the low-f2 corner
+
+    R = np.column_stack([F, [0.0, 0.2, -0.1]])
+    P = _penalize(R, (1.0, 2.0, 4.0))
+    assert P.shape == (3, 3)
+    np.testing.assert_allclose(P[0], F[0] / [1.0, 2.0, 4.0])
+    np.testing.assert_allclose(P[2], F[2] / [1.0, 2.0, 4.0])
+    np.testing.assert_allclose(P[1], F[1] / [1.0, 2.0, 4.0] + _BIG * 0.2)
+
+    feasible = np.column_stack([np.tile(F, (2, 1)), np.zeros(6)])
+    scale = _objective_scale(feasible, (9.0, 9.0, 9.0))
+    assert len(scale) == 3 and all(s > 0 for s in scale)
+    assert _objective_scale(R, (9.0, 9.0, 9.0)) == (9.0, 9.0, 9.0)   # too few feasible rows
+
+    X = np.array([[1.0], [2.0], [3.0]])
+    Xf, Ff = _front_from(X, np.column_stack([F, [0.0, 0.5, 0.0]]))
+    assert Ff.shape == (2, 3) and Xf[:, 0].tolist() == [1.0, 3.0]
+    _, Fm = _merge_fronts([(Xf, Ff), (Xf, Ff)])
+    assert Fm.shape == (2, 3) and np.all(np.diff(Fm[:, 0]) >= 0)
+
+
+def test_pareto_result_renders_three_objectives_and_selects_by_summed_cost(tmp_path):
+    """One 'best' line per objective, the others comma-separated in the
+    parenthesis; to_csv one column per objective; select() sums F/refs over
+    every axis. Uses ("psat", "rho", "sft") purely as three table keys."""
+    import polars as pl
+
+    from fit_pcsaft._pure.pareto import ParetoResult
+
+    X = np.array([[3.0576, 3.7983, 236.77], [3.10, 3.75, 233.0], [3.0, 3.8, 240.0]])
+    F = np.array([[1.0, 2.0, 3.0], [2.0, 1.0, 3.0], [3.0, 3.0, 0.5]])
+    res = ParetoResult(
+        X=X, F=F, data=_hexane_data_with_sft(), compound=HEXANE, spec=HEXANE_SPEC,
+        units=Units(), fit_mu=False, is_associative=False, time_elapsed=0.0,
+        input_name="hexane", objectives=("psat", "rho", "sft"),
+    )
+    assert str(res) == (
+        "Pareto front — hexane\n"
+        "  points: 3   time: 0.0 s\n"
+        "  best AARD_psat: 1.00% (AARD_rho there: 2.00%, AAD_sft there: 3.00)\n"
+        "  best AARD_rho: 1.00% (AARD_psat there: 2.00%, AAD_sft there: 3.00)\n"
+        "  best AAD_sft: 0.50 (AARD_psat there: 3.00%, AARD_rho there: 3.00%)"
+    )
+    p = tmp_path / "front.csv"
+    res.to_csv(p)
+    assert pl.read_csv(p).columns == ["aad_psat_pct", "aad_rho_pct", "aad_sft", "m", "sigma", "epsilon_k"]
+
+    fit = res.select(refs=(1.0, 1.0, 1.0))      # costs 6, 6, 6.5 -> index 0
+    assert fit.params["m"] == pytest.approx(3.0576)
+    assert fit.scipy_result.fun[0] == pytest.approx(6.0)
+    assert "refs=(1.0, 1.0, 1.0)" in fit.scipy_result.message

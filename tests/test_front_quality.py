@@ -87,3 +87,22 @@ def test_hv_ranks_a_dominating_front_higher_under_a_shared_ref_point():
     hv_good = front_metrics(good, ref_point=ref_point)["hv"]
     hv_bad = front_metrics(bad, ref_point=ref_point)["hv"]
     assert hv_good > hv_bad
+
+
+def test_front_quality_is_two_objective_only():
+    """Hypervolume ref-point conventions, extent_0/extent_1 and _max_gap's sort by
+    F[:, 0] all assume a curve. A three-column front is refused loudly rather than
+    scored wrongly; pymoo's hv/igd_plus/spacing are n-D, so lifting this is small."""
+    import pytest
+
+    from fit_pcsaft._pure.front_quality import (
+        compare_fronts,
+        front_metrics,
+        reference_front,
+    )
+
+    F3 = np.array([[1.0, 2.0, 3.0], [2.0, 1.0, 3.0]])
+    for call in (lambda: front_metrics(F3), lambda: reference_front(F3),
+                 lambda: compare_fronts(F3, F3)):
+        with pytest.raises(ValueError, match="two-objective"):
+            call()

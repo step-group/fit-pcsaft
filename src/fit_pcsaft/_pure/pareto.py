@@ -13,9 +13,10 @@ and the arbitrariness of a weight choice becomes visible.
         1          AARD(psat)  [%]
         2          AARD(rho)   [%]
 
-Two objectives either way: n_obj is 2 and every measured knob below -- the
-nr=2 replacement cap, n_restarts, _densify, the Das-Dennis weight fan --
-assumes it. The second pair never touches the DFT during the search, which
+n_obj is ``len(objectives)``: two for the pairs above. Every measured knob
+below -- the nr=2 replacement cap, n_restarts, _densify, the Das-Dennis weight
+fan -- was measured with two objectives and has not been re-measured with
+more. The second pair never touches the DFT during the search, which
 is most of its point (``ParetoResult.select()`` is the one exception -- it
 still DFT-solves once, for the point it returns, whenever ``sft_path`` was
 given), and it is evaluated a whole population at a time: ``_evaluate_population``
@@ -189,19 +190,20 @@ def coverage(A: np.ndarray, B: np.ndarray) -> float:
     return float((le & lt).any(axis=0).mean())
 
 
-def _argmin_scalarized(F: np.ndarray, refs: tuple[float, float]) -> int:
-    """Index of the point minimising eq 32: F[:, 0]/refs[0] + F[:, 1]/refs[1].
+def _argmin_scalarized(F: np.ndarray, refs: tuple[float, ...]) -> int:
+    """Index of the point minimising eq 32: ``sum_k F[:, k] / refs[k]``.
 
     Geometrically this is the tangent point of the front with a line of slope
-    -refs[1]/refs[0], which is how the paper picks its published parameters.
+    -refs[1]/refs[0] (a plane, with three objectives), which is how the paper
+    picks its published parameters.
     """
     F = np.asarray(F, dtype=float)
-    return int(np.argmin(F[:, 0] / refs[0] + F[:, 1] / refs[1]))
+    return int(np.argmin((F / np.asarray(refs, dtype=float)).sum(axis=1)))
 
 
 def _objective_scale(
-    R: np.ndarray, refs: tuple[float, float]
-) -> tuple[float, float]:
+    R: np.ndarray, refs: tuple[float, ...]
+) -> tuple[float, ...]:
     """Divisors that put the two objectives on comparable spans.
 
     MOEA/D assigns each weight vector a subproblem via
@@ -229,17 +231,17 @@ def _objective_scale(
     the fallback when too little of generation zero was feasible to estimate
     anything.
     """
-    ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
+    ok = (R[:, -1] <= 0.0) & (R[:, 0] < _BIG)
     if int(ok.sum()) < _MIN_SCALE_SAMPLE:
-        return refs
-    F = R[ok, :2]
+        return tuple(refs)
+    F = R[ok, :-1]
     span = np.percentile(F, 75.0, axis=0) - np.min(F, axis=0)
     fallback = np.asarray(refs, dtype=float)
     span = np.where(span > 0.0, span, fallback)
-    return float(span[0]), float(span[1])
+    return tuple(float(s) for s in span)
 
 
-def _penalize(R: np.ndarray, scale: tuple[float, float]) -> np.ndarray:
+def _penalize(R: np.ndarray, scale: tuple[float, ...]) -> np.ndarray:
     """Scaled objectives with the feasibility violation folded in.
 
     pymoo's MOEA/D refuses a constrained problem outright (``moead.py``: its
@@ -270,8 +272,8 @@ def _penalize(R: np.ndarray, scale: tuple[float, float]) -> np.ndarray:
     ``_BIG`` point is wanted either way.
     """
     R = np.atleast_2d(np.asarray(R, dtype=float))
-    F = R[:, :2] / np.asarray(scale, dtype=float)
-    return F + (_BIG * np.maximum(R[:, 2], 0.0))[:, None]
+    F = R[:, :-1] / np.asarray(scale, dtype=float)
+    return F + (_BIG * np.maximum(R[:, -1], 0.0))[:, None]
 
 
 def _finite(v: float) -> float:
@@ -286,11 +288,11 @@ def _evaluate_point(
     data: PureData,
     units: Units,
     sft_options=None,
-    objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
-) -> tuple[float, float, float]:
-    """Return ``(f1, f2, violation)`` for a parameter vector.
+    objectives: tuple[str, ...] = _DEFAULT_OBJECTIVES,
+) -> tuple[float, ...]:
+    """Return ``(*objectives, violation)`` for a parameter vector.
 
-    ``f1``/``f2`` are the two AADs named by ``objectives`` -- see ``_OBJECTIVES``.
+    One AAD per entry of ``objectives`` (see ``_OBJECTIVES``), the violation last.
 
     ``params_vec`` is in PHYSICAL space, not sqrt-transformed.
 
@@ -324,10 +326,15 @@ def _evaluate_point(
     from fit_pcsaft.result import _predict_per_property
 
     _BIG_VIOLATION = 1.0
+    aad: dict[str, float] = {}
+
+    def _row(violation):
+        return (*(_finite(aad[k]) if k in aad else _BIG for k in objectives), violation)
+
     try:
         eos = _build_eos(params_vec, compound, spec)
     except Exception:
-        return _BIG, _BIG, _BIG_VIOLATION
+        return _row(_BIG_VIOLATION)
 
     def _fraction(metrics, n_total):
         return 1.0 if n_total == 0 else metrics.n / n_total
@@ -338,29 +345,25 @@ def _evaluate_point(
     worst = min(
         _fraction(m_psat, len(data.T_psat)), _fraction(m_rho, len(data.T_rho))
     )
-    aad = {
+    aad.update({
         "psat": m_psat.aard_pct,
         "rho": m_rho.aard_pct,
         # Mean of the two AARDs, equivalently a single 1/N_total average when the
         # two data sets are the same size. NOT their sum -- see the module docstring.
         "vle": 0.5 * (m_psat.aard_pct + m_rho.aard_pct),
-    }
+    })
 
     if "sft" in objectives:
         try:
             functional = _build_functional(params_vec, compound, spec)
         except Exception:
-            return _finite(aad[objectives[0]]), _BIG, _BIG_VIOLATION
+            return _row(_BIG_VIOLATION)
         gamma = predict_surface_tension(functional, data.T_sft, units, sft_options)
         m_sft = compute_metrics_from_arrays(gamma, data.sft)
         worst = min(worst, _fraction(m_sft, len(data.T_sft)))
         aad["sft"] = m_sft.mae
 
-    return (
-        _finite(aad[objectives[0]]),
-        _finite(aad[objectives[1]]),
-        _MIN_VALID_FRACTION - worst,
-    )
+    return _row(_MIN_VALID_FRACTION - worst)
 
 
 def _batched(spec: ModelSpec, objectives) -> bool:
@@ -374,7 +377,7 @@ def _batched(spec: ModelSpec, objectives) -> bool:
 
 
 def _evaluate_population(X, compound, spec, data, units, objectives) -> np.ndarray:
-    """``_evaluate_point`` for a whole population at once: rows of ``(f1, f2, violation)``.
+    """``_evaluate_point`` for a whole population at once: rows of ``(*objectives, violation)``.
 
     Same numbers, same validity rule (finite model, finite exp, exp != 0 --
     ``compute_metrics_from_arrays``), same graded violation. Two feos calls in
@@ -418,7 +421,7 @@ def _evaluate_population(X, compound, spec, data, units, objectives) -> np.ndarr
         feos.Property.equilibrium_liquid_density_derivatives, data.T_rho, data.rho, to_rho
     )
     aad = {"psat": a_psat, "rho": a_rho, "vle": 0.5 * (a_psat + a_rho)}
-    F = np.column_stack([aad[objectives[0]], aad[objectives[1]]])
+    F = np.column_stack([aad[k] for k in objectives])
     F = np.where(np.isfinite(F), F, _BIG)  # _finite, vectorised
     return np.column_stack([F, _MIN_VALID_FRACTION - np.minimum(f_psat, f_rho)])
 
@@ -430,19 +433,18 @@ def aad_objectives(
     data: PureData,
     units: Units,
     sft_options=None,
-    objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
-) -> tuple[float, float]:
-    """Return the two AADs named by ``objectives`` for one physical parameter vector.
+    objectives: tuple[str, ...] = _DEFAULT_OBJECTIVES,
+) -> tuple[float, ...]:
+    """Return the AADs named by ``objectives`` for one physical parameter vector.
 
-    ``params_vec`` is in PHYSICAL space, not sqrt-transformed. Returns
-    ``(_BIG, _BIG)`` when the parameter set is infeasible — see
-    ``_evaluate_point``, which the optimizer uses directly because it also
-    reports *how* infeasible.
+    ``params_vec`` is in PHYSICAL space, not sqrt-transformed. Returns ``_BIG``
+    on every axis when the parameter set is infeasible — see ``_evaluate_point``,
+    which the optimizer uses directly because it also reports *how* infeasible.
     """
-    f1, f2, g = _evaluate_point(
+    row = _evaluate_point(
         params_vec, compound, spec, data, units, sft_options, objectives
     )
-    return (_BIG, _BIG) if g > 0.0 else (f1, f2)
+    return tuple([_BIG] * len(objectives)) if row[-1] > 0.0 else tuple(row[:-1])
 
 
 @contextmanager
@@ -564,8 +566,8 @@ def _worker_pool(n_jobs, compound, spec, data, units, sft_options, quiet, object
 
 
 def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
-                  objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
-                  refs: tuple[float, float] = _DEFAULT_REFS[_DEFAULT_OBJECTIVES]):
+                  objectives: tuple[str, ...] = _DEFAULT_OBJECTIVES,
+                  refs: tuple[float, ...] = _DEFAULT_REFS[_DEFAULT_OBJECTIVES]):
     """Population-at-a-time problem, unconstrained by necessity.
 
     Deliberately a vectorized ``Problem`` rather than pymoo's
@@ -590,9 +592,9 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
     xl = np.array([b[0] for b in bounds], dtype=float)
     xu = np.array([b[1] for b in bounds], dtype=float)
 
-    class PcSaftBiObjective(Problem):
+    class PcSaftObjectives(Problem):
         def __init__(self):
-            super().__init__(n_var=len(bounds), n_obj=2, xl=xl, xu=xu)
+            super().__init__(n_var=len(bounds), n_obj=len(objectives), xl=xl, xu=xu)
             self.scale = None
 
         def _evaluate(self, X, out, *args, **kwargs):
@@ -608,11 +610,11 @@ def _make_problem(compound, spec, data, units, bounds, sft_options, pool=None,
                 self.scale = _objective_scale(R, refs)
             out["F"] = _penalize(R, self.scale)
 
-    return PcSaftBiObjective()
+    return PcSaftObjectives()
 
 
 def _map_evaluate(rows, pool, compound, spec, data, units, sft_options,
-                  objectives: tuple[str, str] = _DEFAULT_OBJECTIVES):
+                  objectives: tuple[str, ...] = _DEFAULT_OBJECTIVES):
     """Evaluate parameter vectors, through the worker pool when there is one.
 
     Batched in-process for the bulk pair (``_batched``), where ``pool`` is
@@ -641,14 +643,14 @@ def _front_from(X: np.ndarray, R: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     parameter set is never discarded for being dominated by a set that could not
     be evaluated in the first place.
     """
-    ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
+    ok = (R[:, -1] <= 0.0) & (R[:, 0] < _BIG)
     if not ok.any():
         raise RuntimeError(
             "MOEA/D returned only infeasible or degenerate solutions: no "
             "candidate produced both a vapour-liquid equilibrium and a stable "
             "interface. Check the bounds and the association scheme."
         )
-    X, F = X[ok], R[ok, :2]
+    X, F = X[ok], R[ok, :-1]
     keep = non_dominated(F)
     order = np.argsort(F[keep, 0])
     return X[keep][order], F[keep][order]
@@ -674,7 +676,7 @@ def _merge_fronts(fronts) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options,
-             objectives: tuple[str, str] = _DEFAULT_OBJECTIVES):
+             objectives: tuple[str, ...] = _DEFAULT_OBJECTIVES):
     """Fill the gaps the search leaves between adjacent front points.
 
     MOEA/D spaces its population by construction — one weight vector per slot —
@@ -727,11 +729,11 @@ def _densify(X, F, n_between, pool, compound, spec, data, units, sft_options,
         ),
         dtype=float,
     )
-    ok = (R[:, 2] <= 0.0) & (R[:, 0] < _BIG)
+    ok = (R[:, -1] <= 0.0) & (R[:, 0] < _BIG)
     if not ok.any():
         return X, F
     X_all = np.vstack([X, np.asarray(rows, dtype=float)[ok]])
-    F_all = np.vstack([F, R[ok, :2]])
+    F_all = np.vstack([F, R[ok, :-1]])
     keep = non_dominated(F_all)
     order = np.argsort(F_all[keep, 0])
     return X_all[keep][order], F_all[keep][order]
@@ -758,7 +760,7 @@ def _initial_sampling(use_lhs: bool):
     return FloatRandomSampling()
 
 
-def _ref_dirs(pop_size: int) -> np.ndarray:
+def _ref_dirs(pop_size: int, n_obj: int = 2) -> np.ndarray:
     """The weight-vector fan MOEA/D decomposes against, one per population slot.
 
     Das-Dennis on two objectives returns ``n_partitions + 1`` vectors, so
@@ -766,12 +768,27 @@ def _ref_dirs(pop_size: int) -> np.ndarray:
     NSGA-II. pymoo needs these up front: ``MOEAD.__init__`` reads
     ``len(ref_dirs)`` to set the population size before its own ``None``
     fallback in ``_setup`` ever runs.
+
+    On three objectives the fan has ``(p + 1)(p + 2) / 2`` vectors, which hits
+    ``pop_size`` only at 3, 6, 10, 15, ... -- so the smallest fan of at least
+    ``pop_size`` is taken and the population becomes that many (60 -> 66;
+    ``pop_size == len(ref_dirs)`` is MOEA/D's own invariant). Not pymoo's
+    ``"energy"`` directions, which hit any count exactly: that is a stochastic
+    optimizer whose fan can drift between pymoo versions, and reproducibility
+    here rests on the fan being fixed.
     """
     from pymoo.util.ref_dirs import get_reference_directions
 
     if pop_size < 2:
         raise ValueError(f"MOEA/D needs at least 2 weight vectors, got {pop_size}")
-    return get_reference_directions("uniform", 2, n_partitions=pop_size - 1)
+    if n_obj == 2:
+        return get_reference_directions("uniform", 2, n_partitions=pop_size - 1)
+    if n_obj != 3:
+        raise ValueError(f"MOEA/D here supports 2 or 3 objectives, got {n_obj}")
+    p = 1
+    while (p + 1) * (p + 2) // 2 < pop_size:
+        p += 1
+    return get_reference_directions("das-dennis", 3, n_partitions=p)
 
 
 def _capped_replacement(better, n_replace, random_state):
@@ -814,6 +831,7 @@ def _make_algorithm(
     variant: str = "de",
     de_f: float = 0.5,
     de_cr: float = 1.0,
+    n_obj: int = 2,
 ):
     """MOEA/D, in the variant that evaluates a whole population at a time.
 
@@ -983,7 +1001,7 @@ def _make_algorithm(
             pop[N[take]] = off
 
     return _CappedMOEAD(
-        _ref_dirs(pop_size),
+        _ref_dirs(pop_size, n_obj),
         sampling=_initial_sampling(lhs),
         n_neighbors=n_neighbors,
         prob_neighbor_mating=prob_neighbor_mating,
@@ -1019,14 +1037,14 @@ class ParetoResult:
     is_associative: bool
     time_elapsed: float
     input_name: str = ""
-    objectives: tuple[str, str] = _DEFAULT_OBJECTIVES
+    objectives: tuple[str, ...] = _DEFAULT_OBJECTIVES
     algorithm_result: object = None
 
     @property
     def param_names(self) -> list[str]:
         return param_names(self.spec)
 
-    def select(self, refs: "Optional[tuple[float, float]]" = None):
+    def select(self, refs: "Optional[tuple[float, ...]]" = None):
         """Pick the point on the front that minimises eq 32, as a FitResult.
 
         ``refs`` defaults per mode: ``(2.0, 0.7)`` for ``("vle", "sft")`` and
@@ -1055,7 +1073,7 @@ class ParetoResult:
         params = params_dict(params_vec, self.spec)
         metrics = _compute_pure_metrics(eos, self.compound.mw, self.data, self.units, functional=functional
         )
-        cost = float(self.F[i, 0] / refs[0] + self.F[i, 1] / refs[1])
+        cost = float((self.F[i] / np.asarray(refs, dtype=float)).sum())
         scipy_result = SimpleNamespace(
             # FitResult.__str__ derives RMS from 2*cost/len(fun)
             cost=0.5 * cost**2,
@@ -1079,7 +1097,7 @@ class ParetoResult:
             functional=functional,
         )
 
-    def plot(self, path=None, refs: "Optional[tuple[float, float]]" = None):
+    def plot(self, path=None, refs: "Optional[tuple[float, ...]]" = None):
         from fit_pcsaft._plot import _plot_pareto
         return _plot_pareto(self, path=path, refs=refs)
 
@@ -1089,7 +1107,7 @@ class ParetoResult:
 
         cols = [_OBJECTIVES[k][2] for k in self.objectives]
         df = pl.DataFrame(
-            {cols[0]: self.F[:, 0], cols[1]: self.F[:, 1]}
+            {c: self.F[:, k] for k, c in enumerate(cols)}
             | {n: self.X[:, k] for k, n in enumerate(self.param_names)}
         )
         df.write_csv(str(path))
@@ -1101,19 +1119,23 @@ class ParetoResult:
         # must stay byte-identical, so that omission is preserved rather than
         # "fixed" here. Under ("psat", "rho") both axes are percent
         # quantities, so both get "%" -- symmetric, no leftover mislabeling.
-        (n0, u0, _), (n1, u1, _) = (_OBJECTIVES[k] for k in self.objectives)
-        s0 = u0 if u0 == "%" else ""
-        s1 = u1 if u1 == "%" else ""
-        i_0 = int(np.argmin(self.F[:, 0]))
-        i_1 = int(np.argmin(self.F[:, 1]))
-        return (
-            f"Pareto front — {self.input_name}\n"
-            f"  points: {len(self.F)}   time: {self.time_elapsed:.1f} s\n"
-            f"  best {n0}: {self.F[i_0, 0]:.2f}{s0} "
-            f"({n1} there: {self.F[i_0, 1]:.2f}{s1})\n"
-            f"  best {n1}: {self.F[i_1, 1]:.2f}{s1} "
-            f"({n0} there: {self.F[i_1, 0]:.2f}{s0})"
-        )
+        # One "best" line per objective; the parenthesis lists the others,
+        # comma-separated -- with two objectives there is one other, so no
+        # separator is ever printed and the two-objective text is unchanged.
+        names = [_OBJECTIVES[k][0] for k in self.objectives]
+        sfx = [u if (u := _OBJECTIVES[k][1]) == "%" else "" for k in self.objectives]
+        lines = [
+            f"Pareto front — {self.input_name}",
+            f"  points: {len(self.F)}   time: {self.time_elapsed:.1f} s",
+        ]
+        for k, name in enumerate(names):
+            i = int(np.argmin(self.F[:, k]))
+            others = ", ".join(
+                f"{names[j]} there: {self.F[i, j]:.2f}{sfx[j]}"
+                for j in range(len(names)) if j != k
+            )
+            lines.append(f"  best {name}: {self.F[i, k]:.2f}{sfx[k]} ({others})")
+        return "\n".join(lines)
 
 
 def fit_pure_pareto(
@@ -1142,8 +1164,8 @@ def fit_pure_pareto(
     n_jobs: int = -1,
     refine: int = 4,
     polish: bool = False,
-    objectives: tuple[str, str] = _DEFAULT_OBJECTIVES,
-    refs: "Optional[tuple[float, float]]" = None,
+    objectives: tuple[str, ...] = _DEFAULT_OBJECTIVES,
+    refs: "Optional[tuple[float, ...]]" = None,
     n_restarts: int = 1,
     n_neighbors: int = 20,
     prob_neighbor_mating: float = 0.9,
@@ -1505,6 +1527,12 @@ def fit_pure_pareto(
         )
     if refs is None:
         refs = _DEFAULT_REFS[objectives]
+    refs = tuple(float(r) for r in refs)
+    if len(refs) != len(objectives):
+        raise ValueError(
+            f"refs={refs!r} must have one entry per objective, got "
+            f"{len(refs)} for objectives={objectives!r}."
+        )
 
     from pymoo.optimize import minimize
 
@@ -1548,7 +1576,7 @@ def fit_pure_pareto(
         print(
             f"MOEA/D: {pop_size} weight vectors x {n_gen} gen "
             f"x {n_restarts} restart(s) on {where}"
-            f" [{objectives[0]} vs {objectives[1]}]"
+            f" [{' vs '.join(objectives)}]"
         )
 
     with _worker_pool(
@@ -1573,6 +1601,7 @@ def fit_pure_pareto(
                 variant=variant,
                 de_f=de_f,
                 de_cr=de_cr,
+                n_obj=len(objectives),
             )
             with _silence_fd_stderr(quiet_solver):
                 res = minimize(
@@ -1589,11 +1618,11 @@ def fit_pure_pareto(
                     print(f"restart {r + 1}: no parameter set at all, skipped")
                 continue
             if verbose and problem.scale is not None:
-                print(
-                    f"restart {r + 1}: objective scale "
-                    f"{_OBJECTIVES[objectives[0]][0]} / {problem.scale[0]:.3g}, "
-                    f"{_OBJECTIVES[objectives[1]][0]} / {problem.scale[1]:.3g}"
+                scale = ", ".join(
+                    f"{_OBJECTIVES[k][0]} / {s:.3g}"
+                    for k, s in zip(objectives, problem.scale)
                 )
+                print(f"restart {r + 1}: objective scale {scale}")
             # res.F is in scaled, penalized space and cannot be converted back --
             # a penalized row's true objectives are not recoverable from it. So
             # the optimum set is evaluated once more for its real F[:, 0] and
