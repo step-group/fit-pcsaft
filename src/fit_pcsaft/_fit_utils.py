@@ -235,18 +235,54 @@ def _build_functional(
     return feos.HelmholtzEnergyFunctional.pcsaft(parameters)
 
 
+def ideal_gas_cp(compound: Compound, dippr107, T_K) -> np.ndarray:
+    """Ideal-gas molar cp at ``T_K`` from feos's DIPPR-107 model, in J/(mol K).
+
+    ``dippr107`` are the five Aly-Lee constants in DIPPR units, J/(kmol K), as
+    feos takes them. Parameter-independent, so it is evaluated once per fit and
+    carried on ``PureData.cp_ig``, never inside an objective.
+
+    Built as its own ideal-gas-only EoS: a bare PC-SAFT EoS has no ideal-gas
+    model and *panics* (a ``PanicException``, not an ``Exception``) when asked
+    for ``Contributions.IdealGas`` -- hence the ``BaseException`` guard.
+    """
+    coeffs = [float(c) for c in dippr107] if dippr107 is not None else []
+    if len(coeffs) != 5:
+        raise ValueError(f"cp_ig takes the five DIPPR-107 coefficients, got {coeffs!r}")
+    unit = si.JOULE / (si.MOL * si.KELVIN)
+    try:
+        record = feos.PureRecord(
+            identifier=compound.identifier, molarweight=compound.mw, DIPPR107=coeffs
+        )
+        eos = feos.EquationOfState.ideal_gas().dippr(feos.Parameters.new_pure(record))
+        return np.array([
+            float(
+                feos.State(eos, temperature=float(t) * si.KELVIN, pressure=si.BAR)
+                .molar_isobaric_heat_capacity(feos.Contributions.IdealGas) / unit
+            )
+            for t in np.asarray(T_K, dtype=float)
+        ])
+    except BaseException as exc:  # feos panics are BaseException
+        raise ValueError(f"cp_ig: feos rejected the DIPPR-107 model: {exc}") from None
+
+
 def predict_bulk(eos, mw: float, data: PureData, units: Units) -> dict[str, np.ndarray]:
-    """psat, rho and hvap at every data temperature, in ``units``.
+    """psat, rho, hvap and cp at every data temperature, in ``units``.
 
     One rayon-parallel feos call per property (``feos.Property.*``), so the cost
     is per call, not per point. NaN wherever the VLE solve did not converge
     (supercritical T, or parameters with no VLE); nothing raises per point.
     ``mw`` (g/mol) turns feos's kmol/m3 into kg/m3 -- the EoS does not expose it.
+
+    ``cp`` is the *total* liquid cp: feos's residual at ``(T, P)`` plus the
+    tabulated ``data.cp_ig``. A NaN in ``data.P_cp`` means saturation and is
+    filled from psat; a row whose psat does not converge is NaN.
     """
     to_K = units.temperature / si.KELVIN
     to_p = 1.0 / (units.pressure / si.PASCAL)
     to_rho = mw / (units.density / (si.KILOGRAM / si.METER**3))
     to_h = 1.0 / (units.enthalpy / (si.JOULE / si.MOL))
+    to_cp = 1.0 / (units.heat_capacity / (si.JOULE / (si.MOL * si.KELVIN)))
 
     def run(fn, T, factor):
         T = np.asarray(T, dtype=float)
@@ -255,10 +291,25 @@ def predict_bulk(eos, mw: float, data: PureData, units: Units) -> dict[str, np.n
         vals, ok = fn(eos, np.ascontiguousarray(T[:, None] * to_K))
         return np.where(ok, vals, np.nan) * factor
 
+    def run_cp():
+        T = np.asarray(data.T_cp, dtype=float)
+        if T.size == 0:
+            return np.empty(0)
+        P = np.asarray(data.P_cp, dtype=float) / to_p               # user units -> Pa
+        if not np.isfinite(P).all():
+            psat, ok = feos.Property.vapor_pressure(eos, np.ascontiguousarray(T[:, None] * to_K))
+            P = np.where(np.isfinite(P), P, np.where(ok, psat, np.nan))
+        bad = ~np.isfinite(P)
+        # feos is never handed a NaN: a 1 bar placeholder, masked out below.
+        inp = np.ascontiguousarray(np.column_stack([T * to_K, np.where(bad, 1.0e5, P)]))
+        vals, ok = feos.Property.residual_isobaric_heat_capacity(eos, inp)
+        return np.where(ok & ~bad, vals, np.nan) * to_cp + np.asarray(data.cp_ig, dtype=float)
+
     return {
         "psat": run(feos.Property.vapor_pressure, data.T_psat, to_p),
         "rho": run(feos.Property.equilibrium_liquid_density, data.T_rho, to_rho),
         "hvap": run(feos.Property.enthalpy_of_vaporization, data.T_hvap, to_h),
+        "cp": run_cp(),
     }
 
 

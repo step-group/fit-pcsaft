@@ -13,7 +13,7 @@ from fit_pcsaft._types import Compound, ModelSpec, PureData, Units
 def _predict_per_property(eos, mw, data, units, *, functional=None):
     """Return (model_arr, exp_arr) per property, NaN where feos did not converge.
 
-    Keys "psat", "rho", "hvap", "sft"; each value a tuple (model, exp) of equal
+    Keys "psat", "rho", "hvap", "cp", "sft"; each value a tuple (model, exp) of equal
     length. Bulk properties come from ``predict_bulk`` -- one feos call each --
     and surface tension from the DFT, point by point. Empty datasets produce
     zero-length arrays. Never raises.
@@ -24,7 +24,7 @@ def _predict_per_property(eos, mw, data, units, *, functional=None):
     else:
         from fit_pcsaft._pure.surface_tension import predict_surface_tension
         model["sft"] = predict_surface_tension(functional, data.T_sft, units)
-    exp = {"psat": data.p_psat, "rho": data.rho, "hvap": data.hvap, "sft": data.sft}
+    exp = {"psat": data.p_psat, "rho": data.rho, "hvap": data.hvap, "cp": data.cp, "sft": data.sft}
     return {k: (model[k], np.asarray(exp[k], dtype=float)) for k in exp}
 
 
@@ -52,6 +52,7 @@ def _compute_per_point_rd(eos, mw, data, units, *, functional=None):
     prop_labels = {"psat": (data.T_psat, data.p_psat),
                    "rho":  (data.T_rho,  data.rho),
                    "hvap": (data.T_hvap, data.hvap),
+                   "cp":   (data.T_cp,   data.cp),
                    "sft":  (data.T_sft,  data.sft)}
     for prop, (model_arr, exp_arr) in preds.items():
         T_arr = prop_labels[prop][0]
@@ -138,6 +139,11 @@ class FitResult:
         return self.metrics["hvap"].aard_pct
 
     @property
+    def ard_cp(self) -> float:
+        """AARD% of the total liquid heat capacity."""
+        return self.metrics["cp"].aard_pct
+
+    @property
     def ard_sft(self) -> float:
         """AARD% of surface tension."""
         return self.metrics["sft"].aard_pct
@@ -163,6 +169,10 @@ class FitResult:
     @property
     def metrics_hvap(self):
         return self.metrics["hvap"]
+
+    @property
+    def metrics_cp(self):
+        return self.metrics["cp"]
 
     @property
     def metrics_sft(self):
@@ -393,7 +403,7 @@ class FitResult:
         """Per-property metrics as a tidy polars DataFrame (one row per property)."""
         import polars as pl
         rows = []
-        for prop in ("psat", "rho", "hvap", "sft"):
+        for prop in ("psat", "rho", "hvap", "cp", "sft"):
             m = self.metrics[prop]
             rows.append({
                 "property": prop, "n": m.n, "n_total": m.n_total,
@@ -440,6 +450,7 @@ class FitResult:
         for prop, label in [("psat", "Vapor pressure   "),
                             ("rho",  "Liquid density   "),
                             ("hvap", "Hvap             "),
+                            ("cp",   "Heat capacity    "),
                             ("sft",  "Surface tension  ")]:
             m = self.metrics[prop]
             if m.n_total > 0:
@@ -506,6 +517,11 @@ class EvalResult:
         return self.metrics["hvap"].aard_pct
 
     @property
+    def ard_cp(self) -> float:
+        """AARD% of the total liquid heat capacity."""
+        return self.metrics["cp"].aard_pct
+
+    @property
     def ard_sft(self) -> float:
         """AARD% of surface tension."""
         return self.metrics["sft"].aard_pct
@@ -531,6 +547,10 @@ class EvalResult:
     @property
     def metrics_hvap(self):
         return self.metrics["hvap"]
+
+    @property
+    def metrics_cp(self):
+        return self.metrics["cp"]
 
     @property
     def metrics_sft(self):
@@ -630,7 +650,7 @@ class EvalResult:
         """Per-property metrics as a tidy polars DataFrame (one row per property)."""
         import polars as pl
         rows = []
-        for prop in ("psat", "rho", "hvap", "sft"):
+        for prop in ("psat", "rho", "hvap", "cp", "sft"):
             m = self.metrics[prop]
             rows.append({
                 "property": prop, "n": m.n, "n_total": m.n_total,
@@ -673,6 +693,7 @@ class EvalResult:
         for prop, label in [("psat", "Vapor pressure   "),
                             ("rho",  "Liquid density   "),
                             ("hvap", "Hvap             "),
+                            ("cp",   "Heat capacity    "),
                             ("sft",  "Surface tension  ")]:
             m = self.metrics[prop]
             if m.n_total > 0:

@@ -17,6 +17,10 @@ class PureData:
     hvap: np.ndarray = field(default_factory=lambda: np.array([]))  # enthalpies of vaporization (user units)
     T_sft: np.ndarray = field(default_factory=lambda: np.array([]))  # surface tension temperatures (user units)
     sft: np.ndarray = field(default_factory=lambda: np.array([]))  # surface tensions (user units)
+    T_cp: np.ndarray = field(default_factory=lambda: np.array([]))  # heat capacity temperatures (user units)
+    P_cp: np.ndarray = field(default_factory=lambda: np.array([]))  # pressures (user units); NaN = saturation
+    cp: np.ndarray = field(default_factory=lambda: np.array([]))  # total liquid cp (user units)
+    cp_ig: np.ndarray = field(default_factory=lambda: np.array([]))  # ideal-gas cp at T_cp (user units), fixed
 
 
 @dataclass
@@ -40,6 +44,7 @@ class Units:
     density: object = field(default_factory=lambda: si.KILOGRAM / si.METER**3)
     enthalpy: object = field(default_factory=lambda: si.KILO * si.JOULE / si.MOL)
     surface_tension: object = field(default_factory=lambda: si.MILLI * si.NEWTON / si.METER)
+    heat_capacity: object = field(default_factory=lambda: si.JOULE / (si.MOL * si.KELVIN))
 
 
 @dataclass

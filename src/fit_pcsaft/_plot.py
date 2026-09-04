@@ -153,6 +153,7 @@ def _plot_residuals_pure(result, path=None):
         ("psat", "Vapor pressure",    "#1F77B4", "o"),
         ("rho",  "Liquid density",    "#E32F2F", "s"),
         ("hvap", "Enthalpy of vap.",  "#2CA02C", "^"),
+        ("cp",   "Heat capacity",     "#9467BD", "v"),
         ("sft",  "Surface tension",   "#FF7F0E", "D"),
     ]
 

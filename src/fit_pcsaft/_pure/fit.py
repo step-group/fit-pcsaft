@@ -7,7 +7,13 @@ import numpy as np
 import si_units as si
 from scipy.optimize import differential_evolution, least_squares
 
-from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv, load_sft_csv
+from fit_pcsaft._csv import (
+    load_cp_csv,
+    load_density_csv,
+    load_hvap_csv,
+    load_psat_csv,
+    load_sft_csv,
+)
 from fit_pcsaft._fit_utils import (
     _PENALTY,
     _build_eos,
@@ -18,6 +24,7 @@ from fit_pcsaft._fit_utils import (
     _is_assoc,
     _make_f_and_df_numerical,
     _normalize_f_scale,
+    ideal_gas_cp,
     param_names,
     params_dict,
 )
@@ -147,12 +154,20 @@ def _setup_pure_fit(
     surface_tension_unit=si.MILLI * si.NEWTON / si.METER,
     sft_options=None,
     verbose: bool = True,
+    cp_path=None,
+    cp_ig=None,
+    heat_capacity_unit=si.JOULE / (si.MOL * si.KELVIN),
 ):
     """Load data, fetch compound, build cost function. Shared by fit_pure and fit_pure_de.
 
     ``verbose=False`` suppresses the Jacobian-fallback note; callers that only
     want the loaded data (e.g. the pareto driver, which never uses a Jacobian)
     should pass it.
+
+    ``cp_path``/``cp_ig`` load liquid heat capacity for the pareto driver only:
+    the data rides on ``PureData`` (with the DIPPR-107 ideal-gas cp evaluated
+    once, at the data temperatures) but never enters ``cost_fn`` -- cp is not a
+    ``fit_pure`` property.
     """
     fit_mu = mu is None
 
@@ -179,6 +194,18 @@ def _setup_pure_fit(
     else:
         _t_sft, _d_sft = np.array([]), np.array([])
 
+    compound = Compound(identifier=identifier, mw=float(mw))
+
+    if cp_path is not None:
+        _t_cp, _p_cp, _d_cp = load_cp_csv(cp_path)
+        # Ideal-gas cp is parameter-independent: evaluated once, here, and
+        # stored in the user's heat-capacity unit like every other field.
+        _cp_ig = ideal_gas_cp(compound, cp_ig, _t_cp * (temperature_unit / si.KELVIN)) / (
+            heat_capacity_unit / (si.JOULE / (si.MOL * si.KELVIN))
+        )
+    else:
+        _t_cp = _p_cp = _d_cp = _cp_ig = np.array([])
+
     data = PureData(
         T_psat=_t_psat,
         p_psat=_p_psat,
@@ -188,15 +215,19 @@ def _setup_pure_fit(
         hvap=_d_hvap,
         T_sft=_t_sft,
         sft=_d_sft,
+        T_cp=_t_cp,
+        P_cp=_p_cp,
+        cp=_d_cp,
+        cp_ig=_cp_ig,
     )
 
-    compound = Compound(identifier=identifier, mw=float(mw))
     units = Units(
         temperature=temperature_unit,
         pressure=pressure_unit,
         density=density_unit,
         enthalpy=enthalpy_unit,
         surface_tension=surface_tension_unit,
+        heat_capacity=heat_capacity_unit,
     )
     active = (
         {"psat", "rho"}

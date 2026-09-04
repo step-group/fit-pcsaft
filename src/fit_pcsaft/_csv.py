@@ -67,6 +67,15 @@ _COL_ALIASES: dict[str, str] = {
     "gamma_mN_m":            "sft",
     "sft_mN_m":              "sft",
     "st":                    "sft",
+    # --- Liquid isobaric heat capacity (canonical: "cp") ---
+    "heat_capacity":         "cp",
+    "heat capacity":         "cp",
+    "isobaric_heat_capacity":"cp",
+    "Cp":                    "cp",
+    "c_p":                   "cp",
+    "cp_liq":                "cp",
+    "cp_J_mol_K":            "cp",
+    "Cp (J/mol/K)":          "cp",
     # --- VLE / SLE mole fractions (canonical: "x1", "y1") ---
     "x":                     "x1",
     "x_1":                   "x1",
@@ -109,7 +118,7 @@ _COL_ALIASES: dict[str, str] = {
 # Set of all canonical names (values in the alias map plus bare canonicals).
 _CANONICAL_NAMES: frozenset[str] = frozenset(_COL_ALIASES.values()) | frozenset(
     ["T", "P", "psat", "rho", "hvap", "x1", "y1",
-     "x1_I", "x1_II", "w1_I", "w1_II", "H", "eta", "sft"]
+     "x1_I", "x1_II", "w1_I", "w1_II", "H", "eta", "sft", "cp"]
 )
 
 
@@ -131,6 +140,7 @@ SCHEMA_VISCOSITY  = CsvSchema(required=("T", "eta"), optional=("P",), name="visc
 SCHEMA_DENSITY    = CsvSchema(required=("T", "rho"),            name="density")
 SCHEMA_HVAP       = CsvSchema(required=("T", "hvap"),           name="enthalpy of vaporization")
 SCHEMA_SFT        = CsvSchema(required=("T", "sft"),            name="surface tension")
+SCHEMA_CP         = CsvSchema(required=("T", "cp"),  optional=("P",), name="heat capacity")
 SCHEMA_VLE        = CsvSchema(required=("T", "P", "x1"),        optional=("y1",),                   name="VLE")
 SCHEMA_SLE        = CsvSchema(required=("T", "x1"),             name="SLE")
 SCHEMA_LLE        = CsvSchema(required=("T",),                  optional=("x1_I", "x1_II", "w1_I", "w1_II"), name="LLE")
@@ -252,3 +262,16 @@ def load_sft_csv(path: "Path | str") -> tuple[np.ndarray, np.ndarray]:
     """Load a surface-tension CSV. Returns ``(T, sft)`` arrays."""
     data = load_csv(path, SCHEMA_SFT)
     return data["T"], data["sft"]
+
+
+def load_cp_csv(path: "Path | str") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load a liquid heat-capacity CSV. Returns ``(T, P, cp)`` arrays.
+
+    ``cp`` is the total (not residual) liquid cp. ``P`` is all-NaN when the
+    column is absent and NaN per row where a cell is blank -- NaN means "at
+    saturation pressure". ``load_csv`` NaN-checks required columns only, which
+    is what makes a blank pressure cell legal.
+    """
+    data = load_csv(path, SCHEMA_CP)
+    P = data.get("P", np.full(len(data["T"]), np.nan))
+    return data["T"], P, data["cp"]

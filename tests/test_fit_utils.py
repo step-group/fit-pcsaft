@@ -227,3 +227,146 @@ def test_predict_bulk_matches_the_per_point_solve():
 
     empty = PureData(T_psat=np.array([]), p_psat=np.array([]), T_rho=np.array([]), rho=np.array([]))
     assert all(v.size == 0 for v in predict_bulk(eos, comp.mw, empty, units).values())
+
+
+# ---------------------------------------------------------------------------
+# Liquid heat capacity: loader, ideal-gas cp, predict_bulk, reporting
+# ---------------------------------------------------------------------------
+
+# DIPPR 107 for water, in DIPPR units J/(kmol K) -- reproduces the IAPWS-95
+# ideal-gas cp to 0.03% at 300 K.
+WATER_DIPPR107 = [33363.0, 26790.0, 2610.5, 8896.0, 1169.0]
+
+
+def _aly_lee(T, c):
+    A, B, C, D, E = c
+    T = np.asarray(T, dtype=float)
+    return (A + B * ((C / T) / np.sinh(C / T)) ** 2 + D * ((E / T) / np.cosh(E / T)) ** 2) / 1000.0
+
+
+def test_load_cp_csv_pressure_column_is_optional(tmp_path):
+    """No P column -> all-NaN P of the right length; a blank P cell -> NaN in that
+    row only, and load_csv must not raise (the NaN check covers required columns)."""
+    from fit_pcsaft._csv import load_cp_csv
+
+    p = tmp_path / "a.csv"
+    p.write_text("T,cp\n300.0,75.3\n350.0,75.9\n")
+    T, P, cp = load_cp_csv(p)
+    assert T.tolist() == [300.0, 350.0] and cp.tolist() == [75.3, 75.9]
+    assert P.shape == (2,) and np.isnan(P).all()
+
+    p.write_text("T,P,cp\n300.0,101.325,75.3\n350.0,,75.9\n")
+    T, P, cp = load_cp_csv(p)
+    assert P[0] == 101.325 and np.isnan(P[1])
+
+
+@pytest.mark.parametrize("header", ["heat_capacity", "c_p", "Cp", "cp_J_mol_K"])
+def test_load_cp_csv_aliases(tmp_path, header):
+    from fit_pcsaft._csv import load_cp_csv
+
+    p = tmp_path / "a.csv"
+    p.write_text(f"T,{header}\n300.0,75.3\n")
+    _, _, cp = load_cp_csv(p)
+    assert cp.tolist() == [75.3]
+
+
+def test_puredata_and_units_carry_cp():
+    from fit_pcsaft._types import PureData, Units
+
+    d = PureData(T_psat=np.array([300.0]), p_psat=np.array([3.5]),
+                 T_rho=np.array([300.0]), rho=np.array([996.0]))
+    assert d.T_cp.size == d.P_cp.size == d.cp.size == d.cp_ig.size == 0
+    import si_units as si
+    assert Units().heat_capacity / (si.JOULE / (si.MOL * si.KELVIN)) == 1.0
+
+
+def test_ideal_gas_cp_matches_aly_lee():
+    """feos's DIPPR-107 model, evaluated through an ideal-gas-only EoS, is the
+    closed-form Aly-Lee equation. feos takes the coefficients in DIPPR units."""
+    from fit_pcsaft._fit_utils import ideal_gas_cp
+    from tests.test_surface_tension import WATER
+
+    T = np.array([300.0, 400.0, 500.0])
+    got = ideal_gas_cp(WATER, WATER_DIPPR107, T)
+    np.testing.assert_allclose(got, _aly_lee(T, WATER_DIPPR107), rtol=1e-9)
+    assert got[0] == pytest.approx(33.5859, abs=1e-3)
+
+
+def test_ideal_gas_cp_rejects_a_bad_coefficient_list():
+    from fit_pcsaft._fit_utils import ideal_gas_cp
+    from tests.test_surface_tension import WATER
+
+    with pytest.raises(ValueError, match="cp_ig"):
+        ideal_gas_cp(WATER, [1.0, 2.0], np.array([300.0]))
+
+
+def test_predict_bulk_cp_is_the_residual_plus_the_tabulated_ideal_gas():
+    """NaN pressure -> saturated liquid; explicit pressure -> the liquid root at
+    (T, P); a temperature where psat does not converge -> NaN. cp_ig is whatever
+    PureData carries -- predict_bulk only adds it."""
+    import si_units as si
+
+    from fit_pcsaft._fit_utils import predict_bulk
+    from fit_pcsaft._types import PureData, Units
+    from tests.test_surface_tension import (
+        HEXANE, HEXANE_P, HEXANE_SPEC, WATER, WATER_2B, WATER_2B_SPEC,
+    )
+
+    units = Units()
+    J_molK = si.JOULE / (si.MOL * si.KELVIN)
+    T = np.array([300.0, 320.0, 2000.0])
+    P = np.array([np.nan, 500.0, np.nan])          # kPa; NaN = saturation
+    cp_ig = np.array([30.0, 31.0, 32.0])
+    data = PureData(
+        T_psat=np.array([]), p_psat=np.array([]), T_rho=np.array([]), rho=np.array([]),
+        T_cp=T, P_cp=P, cp=np.zeros(3), cp_ig=cp_ig,
+    )
+    for vec, comp, spec in ((HEXANE_P, HEXANE, HEXANE_SPEC), (WATER_2B, WATER, WATER_2B_SPEC)):
+        eos = _build_eos(vec, comp, spec)
+        sat = feos.PhaseEquilibrium.pure(eos, 300.0 * si.KELVIN).liquid
+        at_p = feos.State(eos, temperature=320.0 * si.KELVIN, pressure=500.0 * si.KILO * si.PASCAL,
+                          density_initialization="liquid")
+        want = np.array([
+            sat.molar_isobaric_heat_capacity(feos.Contributions.Residual) / J_molK + 30.0,
+            at_p.molar_isobaric_heat_capacity(feos.Contributions.Residual) / J_molK + 31.0,
+            np.nan,
+        ])
+        got = predict_bulk(eos, comp.mw, data, units)["cp"]
+        np.testing.assert_allclose(got, want, rtol=1e-10, equal_nan=True)
+
+    empty = PureData(T_psat=np.array([]), p_psat=np.array([]), T_rho=np.array([]), rho=np.array([]))
+    assert predict_bulk(eos, comp.mw, empty, units)["cp"].size == 0
+
+
+def test_fit_result_reports_cp_only_when_cp_data_is_present():
+    from types import SimpleNamespace
+
+    from fit_pcsaft._types import PureData, Units
+    from fit_pcsaft.result import FitResult, _compute_pure_metrics
+    from tests.test_surface_tension import HEXANE, HEXANE_P, HEXANE_SPEC
+
+    eos = _build_eos(HEXANE_P, HEXANE, HEXANE_SPEC)
+    bulk = PureData(T_psat=np.array([300.0]), p_psat=np.array([21.7]),
+                    T_rho=np.array([300.0]), rho=np.array([655.0]))
+    with_cp = PureData(T_psat=bulk.T_psat, p_psat=bulk.p_psat, T_rho=bulk.T_rho, rho=bulk.rho,
+                       T_cp=np.array([300.0]), P_cp=np.array([np.nan]),
+                       cp=np.array([195.0]), cp_ig=np.array([143.0]))
+
+    def result(data):
+        metrics = _compute_pure_metrics(eos, HEXANE.mw, data, Units())
+        return FitResult(
+            params={"m": 3.0576, "sigma": 3.7983, "epsilon_k": 236.77}, eos=eos, data=data,
+            compound=HEXANE, spec=HEXANE_SPEC, units=Units(), metrics=metrics,
+            scipy_result=SimpleNamespace(cost=0.0, fun=np.zeros(1), success=True, nfev=1),
+            time_elapsed=0.0,
+        )
+
+    without = result(bulk)
+    assert "Heat capacity" not in str(without)
+    assert without.metrics["cp"].n_total == 0
+
+    with_ = result(with_cp)
+    assert "Heat capacity" in str(with_)
+    assert np.isfinite(with_.ard_cp)
+    table = with_.metrics_table()
+    assert table.filter(table["property"] == "cp")["n"].item() == 1
