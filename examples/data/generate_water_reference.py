@@ -9,6 +9,13 @@ vendored at ``examples/data/parameters/coolprop_multiparameter.json``. No extra
 dependency: feos is already required, and this is the same library that
 evaluates PC-SAFT, so reference and model are computed by one code path.
 
+Liquid heat capacity is IAPWS-95 too -- the *total* isobaric cp of the
+saturated liquid, on the same grid, with no pressure column: the data is at
+saturation, which is what a missing P means to fit_pcsaft's loader. The
+matching ideal-gas model for a PC-SAFT fit is DIPPR 107 (Aly-Lee) with
+A=33363, B=26790, C=2610.5, D=8896, E=1169 (J/(kmol K)); it reproduces the
+IAPWS-95 ideal-gas cp to 0.03% at 300 K.
+
 Surface tension is not a quantity IAPWS-95 provides — it is a separate
 correlation, IAPWS R1-76(2014), reproduced below. Its four constants and the
 values it produces were checked against the published release: the equation
@@ -68,8 +75,15 @@ def main() -> None:
               / (si.KILOGRAM / si.METER**3))
         for t in T
     ])
+    cp = np.array([
+        float(feos.PhaseEquilibrium.pure(eos, t * si.KELVIN).liquid
+              .molar_isobaric_heat_capacity(feos.Contributions.Total)
+              / (si.JOULE / (si.MOL * si.KELVIN)))
+        for t in T
+    ])
     _write(DATA / "psat" / "water.csv", "T,psat", T, psat, ".5f")
     _write(DATA / "density" / "water.csv", "T,rho", T, rho, ".3f")
+    _write(DATA / "heat_capacity" / "water.csv", "T,cp", T, cp, ".4f")
 
     Tg = np.linspace(*T_SFT, N_SFT)
     _write(DATA / "surface_tension" / "water.csv", "T,sft",
@@ -78,8 +92,12 @@ def main() -> None:
     # Anchors that are definitional or published, so a bad regeneration is loud.
     p_nbp = float(feos.PhaseEquilibrium.vapor_pressure(eos, 373.124 * si.KELVIN)[0]
                   / (si.KILO * si.PASCAL))
+    cp_300 = float(feos.PhaseEquilibrium.pure(eos, 300.0 * si.KELVIN).liquid
+                   .molar_isobaric_heat_capacity(feos.Contributions.Total)
+                   / (si.JOULE / (si.MOL * si.KELVIN)))
     print("\nchecks:")
     print(f"  psat(373.124 K) = {p_nbp:.5f} kPa   (normal boiling point: 101.325)")
+    print(f"  cp(300 K, sat. liquid) = {cp_300:.2f} J/(mol K)   (IAPWS-95: 75.32)")
     print(f"  sigma(300 degC) = {surface_tension_mN_m(573.15):.2f} mN/m "
           f"(R1-76 Table 1 col 4: 14.36)")
 

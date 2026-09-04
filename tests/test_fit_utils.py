@@ -116,7 +116,13 @@ def test_fetch_compound_does_not_retry_a_genuine_miss(monkeypatch, _instant_back
 import feos
 import numpy as np
 
-from fit_pcsaft._fit_utils import _build_eos, ad_model, ad_rows, param_names, params_dict
+from fit_pcsaft._fit_utils import (
+    _build_eos,
+    ad_model,
+    ad_rows,
+    param_names,
+    params_dict,
+)
 from fit_pcsaft._types import Compound, ModelSpec
 
 _ETHANOL = Compound(identifier=feos.Identifier(cas="64-17-5", name="ethanol"), mw=46.07)
@@ -186,7 +192,12 @@ def test_predict_bulk_matches_the_per_point_solve():
     from fit_pcsaft._fit_utils import predict_bulk
     from fit_pcsaft._types import PureData, Units
     from tests.test_surface_tension import (
-        HEXANE, HEXANE_P, HEXANE_SPEC, WATER, WATER_2B, WATER_2B_SPEC,
+        HEXANE,
+        HEXANE_P,
+        HEXANE_SPEC,
+        WATER,
+        WATER_2B,
+        WATER_2B_SPEC,
     )
 
     data = PureData(
@@ -309,7 +320,12 @@ def test_predict_bulk_cp_is_the_residual_plus_the_tabulated_ideal_gas():
     from fit_pcsaft._fit_utils import predict_bulk
     from fit_pcsaft._types import PureData, Units
     from tests.test_surface_tension import (
-        HEXANE, HEXANE_P, HEXANE_SPEC, WATER, WATER_2B, WATER_2B_SPEC,
+        HEXANE,
+        HEXANE_P,
+        HEXANE_SPEC,
+        WATER,
+        WATER_2B,
+        WATER_2B_SPEC,
     )
 
     units = Units()
@@ -370,3 +386,22 @@ def test_fit_result_reports_cp_only_when_cp_data_is_present():
     assert np.isfinite(with_.ard_cp)
     table = with_.metrics_table()
     assert table.filter(table["property"] == "cp")["n"].item() == 1
+
+
+def test_water_cp_quasi_data_is_saturated_liquid_total_cp():
+    """examples/data/heat_capacity/water.csv: IAPWS-95 total cp of the saturated
+    liquid on the same 23-point 280-620 K grid as psat/rho, no P column (the data
+    *is* at saturation, so the file exercises the NaN-P path). Regenerate with
+    examples/data/generate_water_reference.py."""
+    from pathlib import Path
+
+    from fit_pcsaft._csv import load_cp_csv
+
+    d = Path(__file__).parent.parent / "examples" / "data"
+    T, P, cp = load_cp_csv(d / "heat_capacity" / "water.csv")
+    T_psat, _ = np.loadtxt(d / "psat" / "water.csv", delimiter=",", skiprows=1, unpack=True)
+    np.testing.assert_allclose(T, T_psat)
+    assert np.isnan(P).all()
+    assert cp[0] == pytest.approx(75.69, abs=0.05)    # IAPWS-95, 280 K
+    assert cp.argmin() == 2                            # liquid water's cp minimum, ~310 K
+    assert 2.0 * cp[0] < cp[-1] < 200.0                # climbing toward the critical point

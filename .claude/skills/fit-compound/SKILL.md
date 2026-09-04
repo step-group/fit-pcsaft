@@ -78,6 +78,26 @@ uv run python -c "import inspect, fit_pcsaft; print(inspect.signature(fit_pcsaft
    `PureRecord`-compatible dicts, upserting by CAS or name, so it is safe to call
    repeatedly. Any path.
 
+## Liquid heat capacity (Pareto only)
+
+`fit_pure_pareto` — not `fit_pure` — can take liquid isobaric heat capacity as a
+**third objective**: `objectives=("psat", "rho", "cp")` with `cp_path=` and `cp_ig=`.
+
+- CSV columns `T`, `cp` (total liquid cp; default J/(mol·K); aliases `heat_capacity`,
+  `c_p`, `Cp`), optional `P` (default kPa). A missing `P` column or a blank cell means
+  saturation pressure.
+- `cp_ig` is **mandatory** whenever `cp_path` is given: the five DIPPR-107 (Aly-Lee)
+  coefficients in DIPPR units, J/(kmol·K) — water is
+  `[33363, 26790, 2610.5, 8896, 1169]`. feos evaluates them; PC-SAFT alone has no
+  ideal-gas cp, so a measured total is not comparable without them.
+- The axis is the AARD of the *total* cp. `refs` takes three entries (default
+  `(2, 2, 2)`, under which `.select()` is the lowest mean of the three AARDs).
+- `pop_size` is rounded up to the Das-Dennis fan (60 → 66). Every MOEA/D knob was
+  tuned with two objectives; the triple is unmeasured.
+- Under `("psat", "rho")` or `("vle", "sft")`, `cp_path` is loaded and reported by
+  `.select()` but never optimized — the `hvap_path` rule.
+- Worked example: `examples/pure/13_water_cp_pareto.py`.
+
 ## Gotchas
 
 - **`mu=0.0` is the default and means "non-polar, held at zero"** — correct for an alkane or

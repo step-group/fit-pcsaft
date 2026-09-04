@@ -48,8 +48,6 @@ result.plot(path="ethanol_fit.png", color="red")
 ### Example Output
 
 ```text
-Note: hvap data provided (no AD available for Hvap) — falling back to numerical Jacobian (jac='2-point').
-
 Fitted parameters:
   m (segments):            4.0049
   σ (diameter):            2.6296 Å
@@ -79,6 +77,7 @@ The **first column** must be temperature, and the **second column** must be the 
 * **Vapor Pressure**: Default units are **K** and **kPa**.
 * **Liquid Density**: Default units are **K** and **kg/m³**.
 * **Enthalpy of Vaporization**: Default units are **K** and **kJ/mol**.
+* **Liquid Heat Capacity** (`fit_pure_pareto` only, `objectives=("psat", "rho", "cp")`): columns `T`, `cp`, optional `P`; default units **K**, **J/(mol·K)** and **kPa**. `cp` is the total liquid cp; pass the DIPPR-107 ideal-gas coefficients as `cp_ig`.
 
 ## Handling Units
 

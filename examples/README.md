@@ -15,6 +15,8 @@ uv run python examples/pure/01_propane.py
 | Polar pure component (dipole) | `pure/02_acetone.py` |
 | Associating pure component (2B) | `pure/03_ethanol.py` |
 | Viscosity, pure | `pure/09_viscosity_hexane.py` |
+| Pareto front, bulk vs surface tension (`fit_pure_pareto`) | `pure/11_water_pareto.py` |
+| Three-objective front with liquid heat capacity | `pure/13_water_cp_pareto.py` |
 | Simple binary VLE | `binary/01_vle_ethanol_water.py` |
 | LLE screening over water models | `binary/02_lle_water_octanol.py` |
 | Solid–liquid equilibrium | `binary/03_sle_ccl4_2-undecanone.py` |
@@ -30,6 +32,8 @@ examples/data/
   psat/          — vapor pressure CSVs  (T [K], P [kPa])
   density/       — liquid density CSVs  (T [K], rho [kg/m³])
   hvap/          — enthalpy of vap. CSVs  (T [K], H [kJ/mol])
+  heat_capacity/ — liquid cp CSVs  (T [K], cp [J/(mol·K)], optional P [kPa])
+  surface_tension/ — surface tension CSVs  (T [K], sft [mN/m])
   vle/           — VLE bubble-point CSVs  (T, P, x1, y1)
   lle/           — LLE tie-line CSVs  (T, x1_I, x1_II)
   sle/           — SLE solubility CSVs  (T, x1)
