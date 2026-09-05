@@ -1039,6 +1039,40 @@ def test_evaluate_population_takes_a_2d_array_and_a_single_row():
     assert np.isfinite(one).all() and np.isfinite(two).all()
 
 
+def test_evaluate_with_grad_matches_evaluate_population_and_central_fd():
+    """polish_front's exact-gradient path: one feos AD call per property with
+    ``parameter_names`` set. The values must be _evaluate_population's row for
+    the same theta, and the Jacobian must agree with a central difference of
+    that row -- on both AD models, non-associating hexane (3 parameters) and 2B
+    water (5). AARD is a sum of absolute values, so a step that straddles a point
+    where model == experiment gives a wrong difference: widen rtol, never shrink h.
+    """
+    from fit_pcsaft._pure.pareto import _evaluate_population, _evaluate_with_grad
+    from fit_pcsaft._types import ModelSpec
+
+    water, water_c = _water_data()
+    cases = [
+        (HEXANE, HEXANE_SPEC, _hexane_data_with_sft(), HEXANE_P),
+        (water_c, ModelSpec(mu=0.0, na=1, nb=1, q=0.0), water, np.array(WATER_SCHEMES[0][1])),
+    ]
+    for comp, spec, data, x in cases:
+        x = np.asarray(x, dtype=float)
+        vals, jac = _evaluate_with_grad(x, comp, spec, data, Units(), FORTE)
+        row = _evaluate_population(x, comp, spec, data, Units(), FORTE)[0]
+        assert jac.shape == (2, len(x))
+        np.testing.assert_allclose(vals, row[:2], rtol=1e-12)
+        for j in range(len(x)):
+            h = 1e-5 * abs(x[j])
+            xp, xm = x.copy(), x.copy()
+            xp[j] += h
+            xm[j] -= h
+            fd = (
+                _evaluate_population(xp, comp, spec, data, Units(), FORTE)[0][:2]
+                - _evaluate_population(xm, comp, spec, data, Units(), FORTE)[0][:2]
+            ) / (2 * h)
+            np.testing.assert_allclose(jac[:, j], fd, rtol=1e-5)
+
+
 def test_map_evaluate_routes_the_bulk_pair_to_the_batched_path(monkeypatch):
     """With sft out of the objectives, _map_evaluate never calls _evaluate_point."""
     from fit_pcsaft._pure import pareto
@@ -1149,6 +1183,46 @@ def test_polished_front_is_densified_again_and_sorted(monkeypatch, refine):
     assert len(res.F) > 1, "the search must return a front for this test to mean anything"
     assert len(calls) == (0 if refine == 0 else 2), "densify runs before AND after polish"
     assert np.all(np.diff(res.F[:, 0]) >= 0), "rows must be sorted by F[:, 0] after polish"
+
+
+@pytest.mark.parametrize("batched", [True, False])
+def test_polish_gets_exact_gradients_only_on_the_batched_bulk_path(monkeypatch, batched):
+    """Under the batched bulk pair fit_pure_pareto hands polish_front an
+    ``evaluate_grad`` built on _evaluate_with_grad -- feos AD, one call per
+    theta. Anything that is not batched (the DFT-bearing pairs, q != 0) has no
+    AD model and must keep the finite-difference solve: ``evaluate_grad=None``.
+    """
+    from fit_pcsaft._pure import fit as fit_mod
+    from fit_pcsaft._pure import pareto, polish
+
+    data, water = _water_data()
+    seen = {}
+    real_polish = polish.polish_front
+
+    def spy(X, F, evaluate, bounds, **kwargs):
+        seen.update(kwargs)
+        return real_polish(X, F, evaluate, bounds, **kwargs)
+
+    monkeypatch.setattr(polish, "polish_front", spy)
+    monkeypatch.setattr(fit_mod, "_fetch_compound", lambda _id: (water.identifier, water.mw))
+    if not batched:
+        monkeypatch.setattr(pareto, "_batched", lambda spec, objectives: False)
+    d = Path(__file__).parent.parent / "examples" / "data"
+    res = pareto.fit_pure_pareto(
+        id="water", psat_path=d / "psat" / "water.csv", density_path=d / "density" / "water.csv",
+        na=1, nb=1, objectives=FORTE,
+        bounds=[(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
+        pop_size=20, n_gen=30, n_restarts=1, refine=0, polish=True, seed=7,
+        n_jobs=1, verbose=False,
+    )
+    assert len(res.F) > 1, "the search must return a front for this test to mean anything"
+    grad = seen["evaluate_grad"]
+    if batched:
+        vals, jac = grad(res.X[0])
+        assert vals.shape == (2,) and jac.shape == (2, 5)
+        assert np.isfinite(vals).all() and np.isfinite(jac).all()
+    else:
+        assert grad is None
 
 
 # ---------------------------------------------------------------------------

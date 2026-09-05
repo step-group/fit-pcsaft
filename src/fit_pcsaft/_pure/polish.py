@@ -21,8 +21,10 @@ Graham et al. get from following the front.
 
 For each point, in that order: minimize ``f_axis(theta)`` subject to
 ``f_{1-axis}(theta) <= F[i, 1-axis]`` (the epsilon-constraint), inside
-``bounds``, via ``scipy.optimize.minimize(method="SLSQP")`` with a
-finite-difference gradient. A solve that fails, diverges, or does not
+``bounds``, via ``scipy.optimize.minimize(method="SLSQP")`` in unit-box
+coordinates, on the exact gradient where the caller supplies one
+(``evaluate_grad``) and a finite-difference one otherwise. A solve that
+fails, diverges, or does not
 dominate-or-tie the point it started from leaves that row untouched --
 polishing 200 points must survive any single SLSQP failure, and must never
 make the front worse. The polished set is independently optimized point by
@@ -33,12 +35,23 @@ through ``non_dominated`` before it is returned.
 budget: it is not feos-specific here (the tests below pass a three-line
 analytic function and run in milliseconds), but when ``fit_pure_pareto``
 wires this in behind ``polish=True``, ``evaluate`` goes through the same
-``_map_evaluate`` MOEA/D used: the worker pool under ``objectives=("vle",
-"sft")``, where each call is a DFT solve, so a 5-parameter finite-difference
-gradient is ~6 evaluations (~0.6 s each, ~3.6 s/gradient) and a 200-point
-front polishes in tens of minutes; the batched in-process
-``_evaluate_population`` under ``("psat", "rho")``, where the same front
-polishes in seconds.
+``_map_evaluate`` MOEA/D used. Under ``objectives=("vle", "sft")`` each call
+is a DFT solve and there is no ``evaluate_grad``, so a 5-parameter
+finite-difference gradient is ~6 evaluations (~0.6 s each, ~3.6 s/gradient)
+and a 200-point front polishes in tens of minutes. Under ``("psat", "rho")``
+``evaluate_grad`` is one feos AD call per property (``_evaluate_with_grad``,
+0.28 ms against 0.25 ms for the plain row) and the cost is SLSQP's line
+search. Measured on thymol's production front (170 densified points,
+``max_iter=50``, 2026-09-05): the finite-difference solve in raw parameter
+units took 20.6 s at ~460 evaluations per point, 65 % of solves hitting
+``maxiter``, for a summed polished objective of 356 and an eq-32 tangent of
+0.3992; the unit box alone brought the sum to 139 (tangent 0.3956) at
+unchanged cost, and exact gradients on top to 103 (0.3955) in 11-12 s at
+~250 evaluations per point. Normalisation is the quality half and AD the
+speed half -- do not revert one to "simplify" the other. What remains is
+the line search (nfev ~5 per iteration even with ``jac``; AARD has a kink at
+every data point), so ``max_iter`` is a fidelity knob: 150 iterations cost
+what 50 finite-difference ones did and halved the sum again, to 59.
 """
 
 from __future__ import annotations
@@ -59,14 +72,31 @@ def _solve_one(
     others: list[int],
     evaluate: Callable[[np.ndarray], np.ndarray],
     max_iter: int,
+    evaluate_grad: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> np.ndarray:
     """One SLSQP solve; returns the true ``(*objectives, violation)`` row at the optimum.
+
+    SLSQP works in unit-box coordinates ``u = (theta - lo) / (hi - lo)``: it
+    starts from an identity Hessian, so in raw units a parameter of scale 1e3
+    (``epsilon_k_ab``) next to one of scale 1e-2 (``kappa_ab``) crawls, and the
+    iteration budget runs out first. ``evaluate`` and the cache only ever see
+    the physical theta.
 
     Objective and constraint share one cache keyed by parameter vector, so a
     theta scipy asks about for both the objective's gradient and the
     constraint's gradient costs one ``evaluate`` call, not two -- see the
-    module docstring's cost accounting.
+    module docstring's cost accounting. With ``evaluate_grad`` the objective,
+    its gradient, the constraint and its Jacobian all come out of one cached
+    ``evaluate_grad`` call per theta instead, and ``evaluate`` is called once,
+    at the optimum, for the true row -- it is where ``violation`` comes from.
     """
+    lo = np.array([b[0] for b in bounds], dtype=float)
+    hi = np.array([b[1] for b in bounds], dtype=float)
+    span = np.where(hi > lo, hi - lo, 1.0)  # a pinned bound must not divide by zero
+
+    def _theta(u: np.ndarray) -> np.ndarray:
+        return lo + np.asarray(u, dtype=float) * span
+
     cache: dict[tuple, np.ndarray] = {}
 
     def _row(theta: np.ndarray) -> np.ndarray:
@@ -79,19 +109,42 @@ def _solve_one(
             cache[key] = row
         return row
 
+    grads: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
+
+    def _grad(theta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        key = tuple(np.asarray(theta, dtype=float).tolist())
+        got = grads.get(key)
+        if got is None:
+            f, j = evaluate_grad(np.asarray(theta, dtype=float))
+            got = (np.asarray(f, dtype=float), np.asarray(j, dtype=float))
+            grads[key] = got
+        return got
+
+    def _values(theta: np.ndarray) -> np.ndarray:
+        return _grad(theta)[0] if evaluate_grad is not None else _row(theta)[:-1]
+
+    constraint = {"type": "ineq", "fun": lambda u: caps - _values(_theta(u))[others]}
+    kw = {}
+    if evaluate_grad is not None:  # chain rule for u = (theta - lo) / span
+        kw["jac"] = lambda u: _grad(_theta(u))[1][axis] * span
+        constraint["jac"] = lambda u: -_grad(_theta(u))[1][others] * span
+
     result = minimize(
-        lambda theta: _row(theta)[axis],
-        np.asarray(x0, dtype=float),
+        lambda u: _values(_theta(u))[axis],
+        np.clip((np.asarray(x0, dtype=float) - lo) / span, 0.0, 1.0),
         method="SLSQP",
-        bounds=bounds,
-        constraints=[{"type": "ineq", "fun": lambda theta: caps - _row(theta)[others]}],
+        bounds=[(0.0, 1.0)] * len(bounds),
+        constraints=[constraint],
         # ftol doubles as SLSQP's internal constraint-accuracy target (the
         # Fortran routine's single `acc` parameter serves both), so tightening
         # it is what keeps the capped objective from drifting past `cap` by
-        # more than solver noise.
+        # more than solver noise. Both are in objective units, so the unit
+        # box does not retune them.
         options={"maxiter": max_iter, "ftol": 1e-12},
+        **kw,
     )
-    return np.asarray(result.x, dtype=float), _row(result.x)
+    x_sol = _theta(result.x)
+    return x_sol, _row(x_sol)
 
 
 def polish_front(
@@ -100,6 +153,7 @@ def polish_front(
     evaluate: Callable[[np.ndarray], np.ndarray],
     bounds: list[tuple[float, float]],
     *,
+    evaluate_grad: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]] | None = None,
     axis: int = 0,
     n_starts: int = 1,
     max_iter: int = 50,
@@ -112,6 +166,11 @@ def polish_front(
     contract as ``pareto._map_evaluate`` -- the objectives, then ``violation`` -- so
     ``fit_pure_pareto`` can pass a closure over its worker pool and a test can
     pass a three-line analytic function. ``bounds`` matches ``X``'s columns.
+    ``evaluate_grad``, if given, maps ONE physical theta to ``(objectives
+    (n_obj,), jacobian (n_obj, n_params))`` and replaces the finite-difference
+    gradient of both the objective and the epsilon-constraint; the true
+    ``(*objectives, violation)`` row is still read from ``evaluate`` at the
+    optimum, so it never has to model the violation.
 
     ``axis`` picks which objective is minimized; every other objective is
     capped at its value on the input point. Points are processed in order of increasing
@@ -163,7 +222,9 @@ def polish_front(
         best_x, best_row = None, None
         for s in starts:
             try:
-                x_sol, row = _solve_one(s, caps, bounds, axis, others, evaluate, max_iter)
+                x_sol, row = _solve_one(
+                    s, caps, bounds, axis, others, evaluate, max_iter, evaluate_grad
+                )
             except Exception:
                 continue
             if not np.all(np.isfinite(row)):

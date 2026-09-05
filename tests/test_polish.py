@@ -24,6 +24,60 @@ def test_polish_moves_a_point_off_the_front_onto_it():
     assert Fp[:, 1] == pytest.approx(cap, rel=1e-6)
 
 
+def test_polish_with_an_analytic_gradient_reaches_the_same_closed_form():
+    """``evaluate_grad`` replaces the finite-difference gradient of both the
+    objective and the constraint. On the ``f2 = 1/f1`` front it must land on the
+    same closed form as the finite-difference solve, and ``evaluate`` must be
+    called exactly once per point -- for the true ``(*objectives, violation)``
+    row at the optimum -- because that count is what the speed-up rests on: a
+    constraint wired back to ``evaluate`` would silently double the cost."""
+    from fit_pcsaft._pure.polish import polish_front
+
+    calls = []
+
+    def evaluate(rows):
+        t = np.asarray(rows, dtype=float)[:, 0]
+        calls.append(len(t))
+        return np.column_stack([t, 1.0 / t, np.zeros_like(t)])
+
+    def evaluate_grad(theta):
+        t = float(theta[0])
+        return np.array([t, 1.0 / t]), np.array([[1.0], [-1.0 / t**2]])
+
+    X = np.array([[1.0], [2.0]])
+    F = evaluate(X)[:, :2] + 0.3
+    calls.clear()
+    _, Fp = polish_front(X, F, evaluate, [(0.5, 4.0)], evaluate_grad=evaluate_grad)
+    cap = F[:, 1]
+    assert Fp[:, 0] == pytest.approx(1.0 / cap, rel=1e-6)
+    assert Fp[:, 1] == pytest.approx(cap, rel=1e-6)
+    assert calls == [1, 1], calls
+
+
+def test_polish_converges_on_a_badly_scaled_parameter():
+    """The solve runs in unit-box coordinates. PC-SAFT's parameters span kappa_ab
+    ~1e-2 to epsilon_k_ab ~3e3, and SLSQP starts from an identity Hessian, so a
+    parameter of scale 1e6 in raw units moves by ~1e-6 per early step and the
+    50-iteration budget runs out before the closed form is reached -- in raw
+    units the first point below comes back untouched at f1 = 1.0. Measured on
+    thymol's 170-point front, normalising alone took the summed polished
+    objective from 356 to 139 at unchanged cost."""
+    from fit_pcsaft._pure.polish import polish_front
+
+    scale = 1e6  # theta = scale * f1 on the front f2 = 1/f1, f1 in [0.5, 4]
+
+    def evaluate(rows):
+        t = np.asarray(rows, dtype=float)[:, 0] / scale
+        return np.column_stack([t, 1.0 / t, np.zeros_like(t)])
+
+    X = np.array([[1.0 * scale], [2.0 * scale]])
+    F = evaluate(X)[:, :2] + 0.3
+    _, Fp = polish_front(X, F, evaluate, [(0.5 * scale, 4.0 * scale)])
+    cap = F[:, 1]
+    assert Fp[:, 0] == pytest.approx(1.0 / cap, rel=1e-6)
+    assert Fp[:, 1] == pytest.approx(cap, rel=1e-6)
+
+
 def test_polish_never_returns_a_worse_point_than_it_was_given():
     """The guard that makes polish safe to default-on later: a failed or diverging
     local solve must leave the input point untouched, not replace it."""

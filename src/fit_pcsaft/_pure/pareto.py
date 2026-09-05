@@ -486,6 +486,72 @@ def _evaluate_population(X, compound, spec, data, units, objectives) -> np.ndarr
     return np.column_stack([F, _MIN_VALID_FRACTION - frac])
 
 
+def _evaluate_with_grad(theta, compound, spec, data, units, objectives):
+    """``_evaluate_population``'s objectives for ONE parameter vector, with their exact Jacobian.
+
+    ``polish_front``'s gradient path: the same two feos AD calls, but with
+    ``parameter_names`` set -- ``param_names(spec)`` is exactly the optimiser
+    vector's order, so the returned columns need no permutation -- and the
+    AARD chain rule on top. With ``e`` the experimental value and ``m`` the
+    model's, ``dAARD/dtheta = 100/k * sum_valid sign(m - e) / |e| * dm/dtheta``;
+    ``k`` is the valid count ``stats`` uses, so the value is bit-identical to
+    ``_evaluate_population``'s, and a row whose derivative feos could not
+    produce is dropped from the sum only. The derivative is of the smooth
+    branch between validity flips.
+
+    Returns ``(vals (n_obj,), jac (n_obj, n_params))`` and no violation column
+    -- ``polish_front`` reads that from ``evaluate`` at the optimum. Where
+    nothing evaluated the value is ``_BIG`` with a zero gradient, the flat wall
+    ``_evaluate_population`` hands SLSQP. Costs 0.28 ms against 0.25 ms for the
+    plain row on thymol. feos panics above six names; the caller guards that.
+    """
+    theta = np.asarray(theta, dtype=float)
+    names = param_names(spec)
+    rows, model = ad_rows(theta, spec), ad_model(spec)
+    to_K = units.temperature / si.KELVIN
+    to_p = 1.0 / (units.pressure / si.PASCAL)
+    to_rho = compound.mw / (units.density / (si.KILOGRAM / si.METER**3))
+    nothing = (np.nan, np.full(len(names), np.nan))
+
+    def aard_grad(fn, T, exp, factor):
+        """AARD% and its gradient from one AD call over every temperature."""
+        nT = len(T)
+        if nT == 0:
+            return nothing
+        P = np.repeat(rows, nT, axis=0)
+        Tin = np.ascontiguousarray((np.asarray(T, dtype=float) * to_K)[:, None])
+        vals, grad, ok = fn(model, names, P, Tin)
+        m = np.where(ok, vals, np.nan) * factor
+        dm = np.asarray(grad, dtype=float) * factor
+        e = np.asarray(exp, dtype=float)
+        valid = np.isfinite(m) & np.isfinite(e) & (e != 0.0)
+        k = valid.sum()
+        if k == 0:
+            return nothing
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rd = np.where(valid, np.abs((m - e) / e) * 100.0, 0.0)
+            w = np.where(valid, np.sign(m - e) / np.abs(e) * 100.0, 0.0)
+        g = np.where(valid[:, None] & np.isfinite(dm), w[:, None] * dm, 0.0).sum(axis=0)
+        return rd.sum() / k, g / k
+
+    a_psat, g_psat = aard_grad(
+        feos.Property.vapor_pressure_derivatives, data.T_psat, data.p_psat, to_p
+    )
+    a_rho, g_rho = aard_grad(
+        feos.Property.equilibrium_liquid_density_derivatives, data.T_rho, data.rho, to_rho
+    )
+    aad = {
+        "psat": (a_psat, g_psat),
+        "rho": (a_rho, g_rho),
+        "vle": (0.5 * (a_psat + a_rho), 0.5 * (g_psat + g_rho)),
+    }
+    vals = np.array([aad[k][0] for k in objectives], dtype=float)
+    jac = np.array([aad[k][1] for k in objectives], dtype=float)
+    bad = ~np.isfinite(vals)
+    jac = np.where(np.isfinite(jac) & ~bad[:, None], jac, 0.0)
+    return np.where(bad, _BIG, vals), jac
+
+
 def aad_objectives(
     params_vec: np.ndarray,
     compound: Compound,
@@ -1508,9 +1574,14 @@ def fit_pure_pareto(
     given costs exactly what ``_evaluate_point`` costs under this call's
     ``objectives``: under ``("vle", "sft")`` each finite-difference gradient
     is about six DFT solves (~0.6 s each), so polishing a 200-point front
-    takes on the order of tens of minutes; under ``("psat", "rho")`` there is
-    no DFT solve at all and the same front polishes in seconds. That is on
-    top of the search and refine costs above, not instead of them.
+    takes on the order of tens of minutes. Under ``("psat", "rho")`` there
+    is no DFT solve and the solve runs on exact feos AD gradients
+    (``_evaluate_with_grad``, one call per theta) in unit-box coordinates:
+    thymol's 170-point production front polishes in 11-12 s against 20 s
+    finite-difference, with a 3.5x lower summed objective -- the numbers
+    are in ``polish.py``'s docstring. The cp triple and ``("psat", "rho",
+    "sft")`` have no AD for their third objective and stay finite-difference.
+    That is on top of the search and refine costs above, not instead of them.
 
     ``bounds`` is the second-biggest knob and the one most often left alone. The
     default box is deliberately wide -- m in [1, 20], sigma in [2, 6], eps/k in
@@ -1820,10 +1891,29 @@ def fit_pure_pareto(
                     dtype=float,
                 )
 
+            # Exact gradients need the AD model (batched) and properties feos
+            # differentiates -- not sft, not cp -- and feos panics above six
+            # names (param_names maxes at six today; the guard documents it).
+            grad_ok = (
+                batched
+                and set(objectives) <= {"psat", "rho", "vle"}
+                and len(param_names(spec)) <= 6
+            )
+
+            def _evaluate_grad(theta):
+                return _evaluate_with_grad(theta, compound, spec, data, units, objectives)
+
+            t_polish = time.perf_counter()
             with _silence_fd_stderr(quiet_solver):
-                X, F = polish_front(X, F, _evaluate, bounds)
+                X, F = polish_front(
+                    X, F, _evaluate, bounds,
+                    evaluate_grad=_evaluate_grad if grad_ok else None,
+                )
             if verbose:
-                print(f"polish: {n_before} -> {len(F)} front points")
+                print(
+                    f"polish: {n_before} -> {len(F)} front points "
+                    f"in {time.perf_counter() - t_polish:.1f} s"
+                )
 
             # Polish moves points onto the true front and drops what they now
             # dominate, which can leave a handful of anchors (2-phenylethanol,
