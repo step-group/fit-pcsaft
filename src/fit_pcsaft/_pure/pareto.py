@@ -130,15 +130,25 @@ _OBJECTIVES = {
     "cp":   ("AARD_cp",   "%",    "aad_cp_pct"),    # total liquid cp: residual + DIPPR-107 ideal gas
 }
 
-# The supported pairs, each mapped to the eq-32 references it defaults to.
-# Rehner & Gross 2020 (water: 2 %, 0.7 mN/m) and Forte et al. 2018, which puts
-# the two bulk AARDs on separate axes and weights them equally.
-# The keys ARE the valid pairs -- a second _VALID_PAIRS set would only be a
+# The supported objective sets, each mapped to the eq-32 references it defaults
+# to. Rehner & Gross 2020 (water: 2 %, 0.7 mN/m) and Forte et al. 2018, which
+# puts the two bulk AARDs on separate axes and weights them equally.
+# The keys ARE the valid sets -- a second _VALID_PAIRS set would only be a
 # thing to keep in sync.
+#
+# ("psat", "rho", "sft") composes the two: the bulk pair on separate axes plus
+# the interfacial axis, for callers who need to see what surface tension costs
+# psat and rho *individually*. Under ("vle", "sft") that is invisible -- the two
+# bulk AARDs are averaged before they reach the front, so the front cannot show
+# how far density accuracy was traded for vapour pressure, nor what the best
+# achievable AARD_rho along it is. Its refs follow the same convention as the
+# neighbouring keys and are meant to be overridden: a caller who knows the
+# precision each property is fittable to should pass its own.
 _DEFAULT_REFS = {
     ("vle", "sft"): (2.0, 0.7),
     ("psat", "rho"): (2.0, 2.0),
     ("psat", "rho", "cp"): (2.0, 2.0, 2.0),
+    ("psat", "rho", "sft"): (2.0, 2.0, 0.7),
 }
 _DEFAULT_OBJECTIVES = ("vle", "sft")
 
@@ -1617,12 +1627,13 @@ def fit_pure_pareto(
         raise ValueError(
             f"objectives={objectives!r} is not supported. Use "
             f"('vle', 'sft') for Rehner & Gross 2020, ('psat', 'rho') for "
-            f"Forte et al. 2018, or ('psat', 'rho', 'cp') for the bulk pair "
-            f"plus liquid heat capacity."
+            f"Forte et al. 2018, ('psat', 'rho', 'cp') for the bulk pair plus "
+            f"liquid heat capacity, or ('psat', 'rho', 'sft') for the bulk "
+            f"pair plus surface tension."
         )
     if "sft" in objectives and sft_path is None:
         raise ValueError(
-            "objectives=('vle', 'sft') needs surface-tension data: pass "
+            f"objectives={objectives!r} needs surface-tension data: pass "
             "sft_path, or use objectives=('psat', 'rho'), which does not."
         )
     if "cp" in objectives and cp_path is None:

@@ -199,6 +199,34 @@ def test_refs_default_per_mode():
     assert _argmin_scalarized(F, _DEFAULT_REFS[("psat", "rho")]) == 0
 
 
+def test_psat_rho_sft_is_a_supported_triple():
+    """The bulk pair on separate axes plus gamma.
+
+    ("vle", "sft") averages the two bulk AARDs before they reach the front, so a
+    front drawn on it cannot say what the interfacial objective cost density as
+    opposed to vapour pressure, nor what the best achievable AARD_rho along it
+    is. This key exposes both. It routes to the DFT evaluator, not the batched
+    one -- gamma is in it, whatever else is.
+    """
+    from fit_pcsaft._pure.pareto import _argmin_scalarized, _batched, _DEFAULT_REFS
+    from fit_pcsaft._types import ModelSpec
+
+    triple = ("psat", "rho", "sft")
+    assert triple in _DEFAULT_REFS
+    assert _DEFAULT_REFS[triple] == (2.0, 2.0, 0.7)
+    assert len(_DEFAULT_REFS[triple]) == len(triple)
+
+    # gamma present -> the DFT path, exactly as for ("vle", "sft").
+    spec = ModelSpec(mu=0.0, na=1, nb=1, q=0.0)
+    assert not _batched(spec, triple)
+    assert _batched(spec, ("psat", "rho", "cp"))
+
+    # the third axis actually moves the tangent: same front, two ref sets.
+    F = np.array([[3.0, 0.05, 1.0], [4.0, 0.05, 0.1]])
+    assert _argmin_scalarized(F, (2.0, 2.0, 0.7)) == 1
+    assert _argmin_scalarized(F, (2.0, 2.0, 50.0)) == 0
+
+
 def test_sft_objectives_without_sft_data_is_rejected():
     """The bug this guard replaces: with no gamma, the old code returned a
     constant 0.0 second objective and the whole front degenerated onto one axis.
@@ -1267,7 +1295,10 @@ def test_cp_objective_needs_cp_path_and_cp_ig():
 def test_objective_tuples_containing_cp_must_be_the_triple():
     from fit_pcsaft import fit_pure_pareto
 
-    for objectives in [("vle", "cp"), ("psat", "cp"), ("psat", "rho", "sft"), ("cp",)]:
+    # ("psat", "rho", "sft") used to sit in this list as a generic unsupported
+    # tuple; it is a supported key now, so ("psat", "sft") stands in for it --
+    # still rejected, and the pair CLAUDE.md names as never having been valid.
+    for objectives in [("vle", "cp"), ("psat", "cp"), ("psat", "sft"), ("cp",)]:
         with pytest.raises(ValueError, match="objectives"):
             fit_pure_pareto(
                 id="water", psat_path="nope.csv", density_path="nope.csv",
