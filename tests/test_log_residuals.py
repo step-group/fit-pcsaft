@@ -138,3 +138,62 @@ def test_lle_fit_runs_in_log_mode():
     assert math.isnan(result.ard)
     resid = result.residuals()
     assert resid.filter(resid["model"].is_finite()).height > 0
+
+
+def test_lle_exposes_minority_component_off_by_default():
+    """Opt-in: it moves any k_ij a caller has already committed."""
+    from fit_pcsaft import fit_kij_lle
+
+    assert inspect.signature(fit_kij_lle).parameters["minority_component"].default is False
+
+
+def test_both_residuals_at_T_callers_pass_minority_component():
+    """Same two-caller trap as log_residuals: stage 1 and the post-poly ARD pass."""
+    from pathlib import Path
+
+    import fit_pcsaft._binary.lle as lle
+
+    text = Path(lle.__file__).read_text(encoding="utf-8")
+    assert text.count("minority_component=minority_component") >= 2
+
+
+def test_minority_component_scores_phase_ii_on_the_solvent():
+    """The transform is `1 - x` on both prediction and experiment, then the usual
+    log ratio. x1 0.95 predicted against 0.90 measured is a 5 % miss on the solute
+    and a factor 2 on the solvent: the residual reads the factor 2."""
+    assert _comp_resid(1 - 0.95, 1 - 0.90, log_residuals=True) == pytest.approx(
+        np.log(0.05 / 0.10)
+    )
+    # and what the default mode makes of the same point
+    assert abs(_comp_resid(0.95, 0.90, log_residuals=True)) < 0.06
+
+
+def test_lle_fit_runs_in_minority_mode_and_moves_kij():
+    """On the 1-octanol example the octanol-rich phase is ~0.7 x1, so the two
+    objectives weight it differently and the fitted k_ij cannot coincide."""
+    import json
+    import math
+    from pathlib import Path
+
+    from fit_pcsaft import fit_kij_lle
+
+    DATA = Path(__file__).parent.parent / "examples" / "data"
+    water_models_path = DATA / "parameters" / "water_models.json"
+    water_name = json.loads(water_models_path.read_text())[0]["identifier"]["name"]
+    kw = dict(
+        id1="1-octanol",
+        id2=water_name,
+        lle_path=DATA / "lle" / "1-octanol_water.csv",
+        params_path=[DATA / "parameters" / "alkanols_lle.json", water_models_path],
+        kij_order=0,
+        require_both_phases=False,
+        log_residuals=True,
+    )
+    plain = fit_kij_lle(**kw)
+    minority = fit_kij_lle(**kw, minority_component=True)
+    assert math.isfinite(minority.kij_at(298.15))
+    assert minority.kij_at(298.15) != pytest.approx(plain.kij_at(298.15), abs=1e-6)
+    # residuals() is the same frame either way: x1 on both rows, transform is the caller's
+    assert set(minority.residuals()["property"].unique()) == set(
+        plain.residuals()["property"].unique()
+    )

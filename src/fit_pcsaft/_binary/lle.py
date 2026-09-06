@@ -54,6 +54,7 @@ def fit_kij_lle(
     relative_residuals: bool = True,
     log_residuals: bool = False,
     require_liquid_phases: bool = False,
+    minority_component: bool = False,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE tieline data.
 
@@ -96,6 +97,17 @@ def fit_kij_lle(
         committed to, which is why it is opt-in. See `_utils.LIQUID_Z_MAX`.
         Raising `pressure` past the solvent's saturation pressure is the other
         half of the fix; this guard is what catches the fault at any pressure.
+    minority_component : bool
+        Score phase II on the *other* component, ``1 - x1``, so that both
+        residuals are logs (or relative errors) of a solubility: the solute's
+        in phase I, the solvent's in phase II. Default False, which scores
+        phase II on x1 -- the majority component there -- where an error in
+        the minor one is damped by x2/(1 - x2): at 10 mol-% solvent a factor 2
+        in solvent content is 0.69 in ln x2 and 0.10 in ln x1, so a fit can be
+        a decade wrong on that branch and barely pay for it. Opt-in because it
+        moves any k_ij a caller has committed. ``residuals()`` is unaffected
+        and keeps reporting x1 on both rows; a caller scoring the fit has to
+        apply the same transform to its ``lle_x1_II`` rows.
     temperature_unit : si.SIObject
         Unit of T column in CSV (default: K).
     t_min : si.SIObject | None
@@ -203,6 +215,7 @@ def fit_kij_lle(
                 log_residuals=log_residuals,
                 errors=errors,
                 require_liquid_phases=require_liquid_phases,
+                minority_component=minority_component,
             )
 
         # Coarse scan to find best initial k_ij guess (avoids getting trapped in
@@ -273,6 +286,7 @@ def fit_kij_lle(
                 relative_residuals=relative_residuals,
                 log_residuals=log_residuals,
                 require_liquid_phases=require_liquid_phases,
+                minority_component=minority_component,
             )
             ard_poly.append(100.0 * float(np.mean(np.abs(r))))
         except Exception:
@@ -418,13 +432,16 @@ def _residuals_at_T(
     log_residuals: bool = False,
     errors: "list | None" = None,
     require_liquid_phases: bool = False,
+    minority_component: bool = False,
 ) -> np.ndarray:
     """Residual vector for least_squares at a single temperature.
 
     Returns composition errors on each available phase — ln(x_pred) - ln(x)
     when log_residuals=True (which overrides relative_residuals), else
     relative ((x_pred-x)/x) when relative_residuals=True, else absolute
-    (x_pred-x). A penalty vector is returned on tp_flash failure.
+    (x_pred-x). A penalty vector is returned on tp_flash failure. With
+    minority_component=True the phase-II error is taken on 1 - x1, the
+    solvent's mole fraction in the solute-rich phase (see fit_kij_lle).
 
     When T_anchor_K is provided and T_K > T_anchor_K, a warm-start PE is built
     at T_anchor_K using the *same* EOS (same k_ij) and passed as initial_state.
@@ -474,6 +491,8 @@ def _residuals_at_T(
                 resids.append(_comp_resid(pred_I, exp_I, log_residuals,
                                           relative=relative_residuals))
             if exp_II is not None:
+                if minority_component:
+                    pred_II, exp_II = 1.0 - pred_II, 1.0 - exp_II
                 resids.append(_comp_resid(pred_II, exp_II, log_residuals,
                                           relative=relative_residuals))
             return np.array(resids)
