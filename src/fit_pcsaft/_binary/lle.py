@@ -228,15 +228,30 @@ def fit_kij_lle(
         if not np.isfinite(best_scan_cost):
             # Coarse scan for the initial k_ij guess (avoids getting trapped in
             # the flat penalty region when the EOS only shows LLE at large k_ij).
+            # Walked from the upper bound down and stopped at the first point
+            # outside the gap once inside it. Measured on 744 temperatures: the
+            # gap is one interval reaching the upper bound in 94 % of them, and
+            # each point below it walks all ~54 feeds through a failing flash
+            # (~23 ms) against ~1.4 ms for a point inside. The in-gap candidates
+            # are the same 13-grid points as before, so the basin they pick is
+            # unchanged; only the two rows in 744 whose gap has holes can differ.
             kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
-            for kij_val in kij_scan:
+            fail = LOG_PENALTY if log_residuals else 1.0
+            in_gap = False
+            for kij_val in kij_scan[::-1]:
                 try:
-                    c = 0.5 * float(np.sum(residuals([kij_val]) ** 2))
-                    if c < best_scan_cost:
-                        best_scan_cost = c
-                        best_x0 = kij_val
+                    r = residuals([kij_val])
                 except Exception:
-                    pass
+                    continue
+                c = 0.5 * float(np.sum(r ** 2))
+                if c < best_scan_cost:
+                    best_scan_cost = c
+                    best_x0 = kij_val
+                if np.all(r == fail):
+                    if in_gap:
+                        break
+                else:
+                    in_gap = True
 
         try:
             res = least_squares(
