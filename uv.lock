@@ -254,7 +254,7 @@ dependencies = [
     { name = "si-units" },
 ]
 wheels = [
-    { filename = "feos-0.10.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:1a698c502b29b0097b4f790694b5ff50de6fdea353df17bfc4a1cc33fd49d0b6" },
+    { filename = "feos-0.10.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:8440d86412ed17af129479c32d1d04d76515e053034b29776f49f6e6cf2fe4b5" },
 ]
 
 [package.metadata]
