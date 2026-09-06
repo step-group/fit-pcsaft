@@ -15,6 +15,7 @@ from fit_pcsaft._binary._utils import (
     _build_binary_eos,
     _comp_resid,
     _fit_kij_polynomial,
+    _is_liquid,
     _kij_at_T,
     _lle_split,
     _load_pure_records,
@@ -190,6 +191,9 @@ def fit_kij_lle(
     fitted_point_meta = []  # (exp_I, exp_II, feeds) for post-poly ARD re-evaluation
     total_nfev = 0
     errors: list = []
+    # [hint every flash at the current T starts from, that T, last converged
+    # equilibrium]. The hint is frozen per temperature -- see _residuals_at_T.
+    warm: list = [None, None, None]
 
     for T_K, exp_I, exp_II in aggregated:
         feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS
@@ -216,6 +220,7 @@ def fit_kij_lle(
                 errors=errors,
                 require_liquid_phases=require_liquid_phases,
                 minority_component=minority_component,
+                warm=warm,
             )
 
         # Warm start from the previous temperature's k_ij: it sits inside the
@@ -321,6 +326,7 @@ def fit_kij_lle(
                 log_residuals=log_residuals,
                 require_liquid_phases=require_liquid_phases,
                 minority_component=minority_component,
+                warm=warm,
             )
             ard_poly.append(100.0 * float(np.mean(np.abs(r))))
         except Exception:
@@ -467,6 +473,7 @@ def _residuals_at_T(
     errors: "list | None" = None,
     require_liquid_phases: bool = False,
     minority_component: bool = False,
+    warm: "list | None" = None,
 ) -> np.ndarray:
     """Residual vector for least_squares at a single temperature.
 
@@ -477,10 +484,34 @@ def _residuals_at_T(
     minority_component=True the phase-II error is taken on 1 - x1, the
     solvent's mole fraction in the solute-rich phase (see fit_kij_lle).
 
-    When T_anchor_K is provided and T_K > T_anchor_K, a warm-start PE is built
-    at T_anchor_K using the *same* EOS (same k_ij) and passed as initial_state.
-    This steers the flash toward LLE at higher temperatures without EOS-
-    incompatibility issues or Jacobian flattening.
+    Every feed flash starts from ``warm[0]``, a converged equilibrium from an
+    earlier call of this fit. feos takes only the mole fractions and phase
+    fraction from ``initial_state`` and rebuilds both phases on the feed's
+    own EOS at the feed's T and p (feos-core ``tp_flash.rs``,
+    ``update_states``), so an equilibrium from another k_ij or temperature
+    is a plain composition guess, and if it fails feos falls back to its
+    stability-analysis start. It steers the flash toward the LLE branch
+    above the solvent's boiling point, which is what the anchor did. The
+    anchor -- a flash at T_anchor_K on the current EOS -- is now only built
+    while no equilibrium exists yet. It was solved on every residual call
+    before: ~1 ms typical, 9 ms and often at its iteration cap on
+    water_3B_pcsaft_rehner2020, 48 % of that fit's wall time.
+
+    Two-phase rows only, like the k_ij warm start in fit_kij_lle: a row with
+    one residual has several exact roots and the scan's lowest sample picks
+    one, so any change of flash start moves some of them -- measured, 22 of
+    575 single-phase rows against none of 169 two-phase rows. Single-phase
+    rows keep the anchor on every call, as before.
+
+    The hint is frozen for the duration of one temperature (``warm[1]``) and
+    refreshed from the last converged equilibrium (``warm[2]``) when the
+    temperature changes. least_squares differentiates by a ~1e-9 step in
+    k_ij, and a flash that starts from the unperturbed call's own solution
+    stops within tolerance almost at once, biased toward it, so the
+    difference underestimates the derivative. Measured with the hint updated
+    on every call: k_ij moved by up to 3.7e-4 and ARD in its second decimal;
+    with the same start for every call at a temperature, as the anchor gave,
+    the fit lands where it did before.
     """
     kij = float(kij_arr[0])
     n_resid = (1 if exp_I is not None else 0) + (1 if exp_II is not None else 0)
@@ -488,9 +519,13 @@ def _residuals_at_T(
 
     eos = _build_binary_eos(record1, record2, kij)
 
-    # Build anchor PE at T_anchor using the same EOS — EOS-compatible warm start
-    anchor_pe = None
-    if T_anchor_K is not None and T_K > T_anchor_K + 0.5 and len(feeds) > 0:
+    initial = None
+    if warm is not None and n_resid == 2:
+        if warm[1] != T_K:
+            warm[0], warm[1] = warm[2], T_K
+        initial = warm[0]
+    if (initial is None and T_anchor_K is not None
+            and T_K > T_anchor_K + 0.5 and len(feeds) > 0):
         try:
             feed_a = np.array([feeds[0], 1.0 - feeds[0]]) * si.MOL
             s_a = feos.State(
@@ -500,7 +535,9 @@ def _residuals_at_T(
                 composition=feed_a,
                 density_initialization="liquid",
             )
-            anchor_pe = s_a.tp_flash(max_iter=500)
+            initial = s_a.tp_flash(max_iter=500)
+            if warm is not None and n_resid == 2:
+                warm[0] = initial
         except Exception as exc:
             if errors is not None:
                 errors.append(exc)
@@ -515,10 +552,19 @@ def _residuals_at_T(
                 composition=feed,
                 density_initialization="liquid",
             )
-            pe = feed_state.tp_flash(initial_state=anchor_pe, max_iter=1000)
+            pe = feed_state.tp_flash(initial_state=initial, max_iter=1000)
             split = _lle_split(pe, require_liquid_phases)
             if split is None:
                 continue
+            # Only a liquid-liquid split may become the hint. Above the
+            # solvent's boiling point with require_liquid_phases=False the
+            # accepted split can be vapour-liquid, and carried forward it
+            # steers every later flash onto the vapour branch (octanol +
+            # water_esper2023 at 428.2 K: residual ~500 at every k_ij, the
+            # temperature dropped). The anchor was always liquid-liquid.
+            if (warm is not None and n_resid == 2
+                    and _is_liquid(pe.liquid) and _is_liquid(pe.vapor)):
+                warm[2] = pe
             pred_I, pred_II = split
             resids = []
             if exp_I is not None:
@@ -531,6 +577,11 @@ def _residuals_at_T(
                                           relative=relative_residuals))
             return np.array(resids)
         except Exception as exc:
+            # The hint stays for the remaining feeds, as the anchor always
+            # did. Dropping it after a failure saves ~0.6 ms per feed on an
+            # out-of-gap walk but moved 1-hexanol + water_sadowski2008 at
+            # 433.2 K, where it is what steers later feeds onto the liquid
+            # branch above the solvent's boiling point.
             if errors is not None:
                 errors.append(exc)
             continue
