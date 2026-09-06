@@ -17,7 +17,12 @@ and the arbitrariness of a weight choice becomes visible.
         1, 2       as above
         3          AARD(cp)    [%]   total cp = feos residual at (T, P) + DIPPR-107 ideal gas
 
-n_obj is ``len(objectives)``: two for the pairs, three for the triple. Every measured knob
+    objective quadruple ("psat", "rho", "cp", "sft")  -- every property on its own axis
+        1, 2, 3    as above
+        4          AAD(sft)    [mN/m]  eq 31; DFT-solved, so it is priced like the sft triple
+
+n_obj is ``len(objectives)``: two for the pairs, three for the triples, four for the
+quadruple (the Das-Dennis fan generalises; nothing else dispatches on the count). Every measured knob
 below -- the nr=2 replacement cap, n_restarts, _densify, the Das-Dennis weight
 fan -- was measured with two objectives and has not been re-measured with
 more. The second pair never touches the DFT during the search, which
@@ -149,6 +154,9 @@ _DEFAULT_REFS = {
     ("psat", "rho"): (2.0, 2.0),
     ("psat", "rho", "cp"): (2.0, 2.0, 2.0),
     ("psat", "rho", "sft"): (2.0, 2.0, 0.7),
+    # Four axes: the bulk pair, liquid cp and surface tension each on their own. Not
+    # batched (sft needs the DFT), so it costs what ("psat","rho","sft") costs.
+    ("psat", "rho", "cp", "sft"): (2.0, 2.0, 2.0, 0.7),
 }
 _DEFAULT_OBJECTIVES = ("vle", "sft")
 
@@ -920,23 +928,26 @@ def _ref_dirs(pop_size: int, n_obj: int = 2) -> np.ndarray:
     On three objectives the fan has ``(p + 1)(p + 2) / 2`` vectors, which hits
     ``pop_size`` only at 3, 6, 10, 15, ... -- so the smallest fan of at least
     ``pop_size`` is taken and the population becomes that many (60 -> 66;
-    ``pop_size == len(ref_dirs)`` is MOEA/D's own invariant). Not pymoo's
-    ``"energy"`` directions, which hit any count exactly: that is a stochastic
-    optimizer whose fan can drift between pymoo versions, and reproducibility
-    here rests on the fan being fixed.
+    ``pop_size == len(ref_dirs)`` is MOEA/D's own invariant). On ``n_obj``
+    objectives generally the fan has ``C(p + n_obj - 1, n_obj - 1)`` vectors
+    (four objectives, 80 -> 84). Not pymoo's ``"energy"`` directions, which hit
+    any count exactly: that is a stochastic optimizer whose fan can drift
+    between pymoo versions, and reproducibility here rests on the fan being fixed.
     """
+    from math import comb
+
     from pymoo.util.ref_dirs import get_reference_directions
 
     if pop_size < 2:
         raise ValueError(f"MOEA/D needs at least 2 weight vectors, got {pop_size}")
     if n_obj == 2:
         return get_reference_directions("uniform", 2, n_partitions=pop_size - 1)
-    if n_obj != 3:
-        raise ValueError(f"MOEA/D here supports 2 or 3 objectives, got {n_obj}")
+    if n_obj < 2:
+        raise ValueError(f"MOEA/D needs at least 2 objectives, got {n_obj}")
     p = 1
-    while (p + 1) * (p + 2) // 2 < pop_size:
+    while comb(p + n_obj - 1, n_obj - 1) < pop_size:
         p += 1
-    return get_reference_directions("das-dennis", 3, n_partitions=p)
+    return get_reference_directions("das-dennis", n_obj, n_partitions=p)
 
 
 def _capped_replacement(better, n_replace, random_state):
@@ -1699,8 +1710,9 @@ def fit_pure_pareto(
             f"objectives={objectives!r} is not supported. Use "
             f"('vle', 'sft') for Rehner & Gross 2020, ('psat', 'rho') for "
             f"Forte et al. 2018, ('psat', 'rho', 'cp') for the bulk pair plus "
-            f"liquid heat capacity, or ('psat', 'rho', 'sft') for the bulk "
-            f"pair plus surface tension."
+            f"liquid heat capacity, ('psat', 'rho', 'sft') for the bulk "
+            f"pair plus surface tension, or ('psat', 'rho', 'cp', 'sft') for "
+            f"all four on their own axes."
         )
     if "sft" in objectives and sft_path is None:
         raise ValueError(

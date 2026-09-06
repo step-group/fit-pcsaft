@@ -471,6 +471,18 @@ def test_ref_dirs_give_one_weight_vector_per_population_slot():
     assert W.sum(axis=1) == pytest.approx(np.ones(60))
 
 
+def test_ref_dirs_generalise_to_four_objectives():
+    """Das-Dennis on n_obj axes has C(p + n_obj - 1, n_obj - 1) vectors; the smallest
+    fan of at least pop_size is taken, as on three. 80 -> 84 on four axes."""
+    from fit_pcsaft._pure.pareto import _DEFAULT_REFS, _ref_dirs
+
+    W = _ref_dirs(80, 4)
+    assert W.shape == (84, 4)
+    assert W.sum(axis=1) == pytest.approx(np.ones(84))
+    quad = ("psat", "rho", "cp", "sft")
+    assert quad in _DEFAULT_REFS and len(_DEFAULT_REFS[quad]) == 4
+
+
 def test_ref_dirs_rejects_a_degenerate_population():
     from fit_pcsaft._pure.pareto import _ref_dirs
 
@@ -1242,8 +1254,9 @@ def test_ref_dirs_three_objectives_round_pop_size_up_to_the_das_dennis_fan():
     assert _ref_dirs(55, 3).shape == (55, 3)
     assert _ref_dirs(60, 2).shape == (60, 2)
     assert _ref_dirs(60).shape == (60, 2)
+    assert _ref_dirs(4, 4).shape == (4, 4)  # C(1 + 3, 3) = 4: the fan generalises
     with pytest.raises(ValueError, match="objectives"):
-        _ref_dirs(4, 4)
+        _ref_dirs(4, 1)
 
 
 def test_scalarization_penalty_scale_and_front_take_three_objectives():
