@@ -205,19 +205,38 @@ def fit_kij_lle(
                 require_liquid_phases=require_liquid_phases,
             )
 
-        # Coarse scan to find best initial k_ij guess (avoids getting trapped in
-        # the flat penalty region when the EOS only shows LLE at large k_ij values).
-        kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
+        # Warm start from the previous temperature's k_ij: it sits inside the
+        # miscibility gap there and, k_ij(T) being smooth, almost always here
+        # too. The coarse scan is the fallback, not the default: 13 residual
+        # calls, and every one outside the gap walks all ~54 feeds through a
+        # failing tp_flash. Measured before this change on 26 water + alkanol /
+        # toluene fits: 98 s of 115 s wall in that scan, 16 s in least_squares.
+        # Two-phase rows only. With one residual against one parameter there
+        # are several k_ij with zero residual and the start point picks one:
+        # measured, 25 single-phase rows of 743 moved (some onto a bound at a
+        # poor fit) while no two-phase row moved past 2e-6. Those rows keep
+        # the scan, so require_both_phases=False reproduces every old number.
         best_x0 = 0.0
         best_scan_cost = np.inf
-        for kij_val in kij_scan:
+        if kij_fitted and n_phases == 2:
             try:
-                c = 0.5 * float(np.sum(residuals([kij_val]) ** 2))
-                if c < best_scan_cost:
-                    best_scan_cost = c
-                    best_x0 = kij_val
+                c = 0.5 * float(np.sum(residuals([kij_fitted[-1]]) ** 2))
+                if c < penalty_cost:
+                    best_x0, best_scan_cost = kij_fitted[-1], c
             except Exception:
                 pass
+        if not np.isfinite(best_scan_cost):
+            # Coarse scan for the initial k_ij guess (avoids getting trapped in
+            # the flat penalty region when the EOS only shows LLE at large k_ij).
+            kij_scan = np.linspace(kij_bounds[0], kij_bounds[1], _N_KIJ_SCAN)
+            for kij_val in kij_scan:
+                try:
+                    c = 0.5 * float(np.sum(residuals([kij_val]) ** 2))
+                    if c < best_scan_cost:
+                        best_scan_cost = c
+                        best_x0 = kij_val
+                except Exception:
+                    pass
 
         try:
             res = least_squares(
