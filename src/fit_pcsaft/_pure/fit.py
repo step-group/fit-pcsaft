@@ -645,6 +645,8 @@ def eval_pure(
     params: dict,
     hvap_path: Optional["Path | str"] = None,
     sft_path: Optional["Path | str"] = None,
+    cp_path: Optional["Path | str"] = None,
+    cp_ig: Optional[list] = None,
     q: float = 0.0,
     na: Optional[int] = None,
     nb: Optional[int] = None,
@@ -653,6 +655,7 @@ def eval_pure(
     density_unit: "si.SIObject" = si.KILOGRAM / (si.METER**3),
     enthalpy_unit: "si.SIObject" = si.KILO * si.JOULE / si.MOL,
     surface_tension_unit: "si.SIObject" = si.MILLI * si.NEWTON / si.METER,
+    heat_capacity_unit: "si.SIObject" = si.JOULE / (si.MOL * si.KELVIN),
     sft_options=None,
 ) -> EvalResult:
     """Evaluate PC-SAFT parameters against experimental data and return ARD%.
@@ -672,6 +675,13 @@ def eval_pure(
             Optional: ``mu`` (Debye), ``kappa_ab``, ``epsilon_k_ab``.
         hvap_path : Path | str or None
             Path to enthalpy of vaporization CSV (T, Hvap). Optional.
+        cp_path : Path | str or None
+            Liquid heat-capacity CSV (T, cp[, P]); *total* cp in ``heat_capacity_unit``.
+            A blank or absent P means saturation. Optional; needs ``cp_ig``.
+        cp_ig : list[float] or None
+            The five DIPPR-107 ideal-gas cp coefficients, DIPPR units J/(kmol K).
+            The metrics are on total cp (feos residual + this ideal gas), the same
+            quantity ``fit_pure_pareto`` optimises under ``("psat", "rho", "cp")``.
         q : float
             Quadrupole moment (default: 0.0).
         na : int or None
@@ -719,6 +729,22 @@ def eval_pure(
     else:
         _t_sft, _d_sft = np.array([]), np.array([])
 
+    # Built here rather than below: ideal_gas_cp needs the compound.
+    compound = Compound(identifier=identifier, mw=float(mw))
+
+    if cp_path is not None:
+        if cp_ig is None:
+            raise ValueError(
+                "cp_path needs cp_ig: the five DIPPR-107 ideal-gas cp coefficients in "
+                "DIPPR units, J/(kmol K). The cp metrics are on total cp."
+            )
+        _t_cp, _p_cp, _d_cp = load_cp_csv(cp_path)
+        _cp_ig = ideal_gas_cp(compound, cp_ig, _t_cp * (temperature_unit / si.KELVIN)) / (
+            heat_capacity_unit / (si.JOULE / (si.MOL * si.KELVIN))
+        )
+    else:
+        _t_cp = _p_cp = _d_cp = _cp_ig = np.array([])
+
     data = PureData(
         T_psat=_t_psat,
         p_psat=_p_psat,
@@ -728,6 +754,10 @@ def eval_pure(
         hvap=_d_hvap,
         T_sft=_t_sft,
         sft=_d_sft,
+        T_cp=_t_cp,
+        P_cp=_p_cp,
+        cp=_d_cp,
+        cp_ig=_cp_ig,
     )
 
     # Infer association from params dict if na/nb not given
@@ -738,7 +768,6 @@ def eval_pure(
         nb = 1
 
     mu_val = params.get("mu", 0.0)
-    compound = Compound(identifier=identifier, mw=float(mw))
     spec = ModelSpec(mu=float(mu_val), na=na, nb=nb, q=q)
     units = Units(
         temperature=temperature_unit,
@@ -746,6 +775,7 @@ def eval_pure(
         density=density_unit,
         enthalpy=enthalpy_unit,
         surface_tension=surface_tension_unit,
+        heat_capacity=heat_capacity_unit,
     )
 
     # mu is fixed via spec.mu, so it is not in the vector; param_names says what is.
