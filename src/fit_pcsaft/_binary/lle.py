@@ -53,6 +53,7 @@ def fit_kij_lle(
     induced_assoc: bool = False,
     induced_sites: str = "2B",
     induced_epsilon_k_ab: float = 0.0,
+    binary_assoc: "list[dict] | None" = None,
     ucst_target: bool = False,
     relative_residuals: bool = True,
     log_residuals: bool = False,
@@ -140,6 +141,13 @@ def fit_kij_lle(
         Site energy written on the non-associating component, in K. Through the
         arithmetic-mean combining rule it is the fitted cross-association
         parameter of Rehner, Bardow & Gross (2023). Default 0.0.
+    binary_assoc : list[dict] | None
+        Cross-association record written on feos's BinaryRecord,
+        `[{"kappa_ab": ..., "epsilon_k_ab": ...}]`: the cross pair itself, no
+        combining rule, applied even when one pure record's site carries no
+        parameters -- feos's native induced association (Rehner, Bardow & Gross
+        2023; the shape of feos's rehner2023_binary.json). Alternative to the
+        `induced_*` rewrite of the pure record. Default None.
     ucst_target : bool
         If True, fit k_ij using only the highest temperature data point (closest
         to the UCST). Useful when the primary goal is to reproduce the critical
@@ -230,6 +238,7 @@ def fit_kij_lle(
                 relative_residuals=relative_residuals,
                 log_residuals=log_residuals,
                 errors=errors,
+                binary_assoc=binary_assoc,
                 require_liquid_phases=require_liquid_phases,
                 minority_component=minority_component,
                 warm=warm,
@@ -336,6 +345,7 @@ def fit_kij_lle(
                 T_anchor_K=T_anchor_K,
                 relative_residuals=relative_residuals,
                 log_residuals=log_residuals,
+                binary_assoc=binary_assoc,
                 require_liquid_phases=require_liquid_phases,
                 minority_component=minority_component,
                 warm=warm,
@@ -376,7 +386,7 @@ def fit_kij_lle(
         message="Point-wise LLE fitting completed",
     )
 
-    eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
+    eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]), binary_assoc)
 
     return BinaryFitResult(
         kij_coeffs=kij_coeffs,
@@ -394,6 +404,7 @@ def fit_kij_lle(
         t_filter_max_K=float(t_max / si.KELVIN) if t_max is not None else float("nan"),
         _record1=record1,
         _record2=record2,
+        _binary_assoc=binary_assoc,
         lle_pressure_bar=float(pressure / si.BAR),
         lle_require_liquid_phases=require_liquid_phases,
     )
@@ -486,6 +497,7 @@ def _residuals_at_T(
     require_liquid_phases: bool = False,
     minority_component: bool = False,
     warm: "list | None" = None,
+    binary_assoc: "list[dict] | None" = None,
 ) -> np.ndarray:
     """Residual vector for least_squares at a single temperature.
 
@@ -529,7 +541,7 @@ def _residuals_at_T(
     n_resid = (1 if exp_I is not None else 0) + (1 if exp_II is not None else 0)
     penalty = np.full(n_resid, LOG_PENALTY if log_residuals else 1.0)
 
-    eos = _build_binary_eos(record1, record2, kij)
+    eos = _build_binary_eos(record1, record2, kij, binary_assoc)
 
     initial = None
     if warm is not None and n_resid == 2:

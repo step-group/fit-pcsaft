@@ -146,3 +146,56 @@ def test_lle_source_forwards_both_to_the_helper():
 
     text = inspect.getsource(lle)
     assert "sites=induced_sites, epsilon_k_ab=induced_epsilon_k_ab" in text
+
+
+# --- the native route: the cross pair on feos's BinaryRecord ------------------
+
+
+def _ln_phi(eos, x):
+    state = feos.State(
+        eos,
+        temperature=298.15 * si.KELVIN,
+        pressure=1.01325 * si.BAR,
+        composition=[x, 1.0 - x],
+        density_initialization="liquid",
+    )
+    return state.ln_phi()
+
+
+def test_binary_record_equals_the_rewritten_pure_record():
+    """The record-level rule (ketone site takes water's kappa and a site energy,
+    feos averages) and the binary record carrying the cross pair directly are
+    the same model: ln phi agrees to 1e-10 at two compositions."""
+    eps_site = 859.1
+    water = _site(_rec(WATER_2B))
+    rewritten = _apply_induced_association(
+        _rec(KETONE), _rec(WATER_2B), sites="own", epsilon_k_ab=eps_site
+    )
+    eos_rule = _build_binary_eos(*rewritten, -0.02)
+    cross = [
+        {
+            "kappa_ab": water["kappa_ab"],
+            "epsilon_k_ab": 0.5 * (eps_site + water["epsilon_k_ab"]),
+        }
+    ]
+    eos_native = _build_binary_eos(_rec(KETONE), _rec(WATER_2B), -0.02, cross)
+    eos_plain = _build_binary_eos(_rec(KETONE), _rec(WATER_2B), -0.02)
+    for x in (0.01, 0.5):
+        assert _ln_phi(eos_native, x) == pytest.approx(_ln_phi(eos_rule, x), abs=1e-10)
+        assert abs(_ln_phi(eos_native, x)[0] - _ln_phi(eos_plain, x)[0]) > 0.02
+
+
+def test_fit_kij_lle_carries_the_binary_record_into_its_re_prediction(tmp_path):
+    params = tmp_path / "pure.json"
+    params.write_text(json.dumps([KETONE, WATER_2B]))
+    csv = tmp_path / "lle.csv"
+    csv.write_text("temperature_K,x1_I,x1_II\n298.15,0.02,0.75\n313.15,0.025,0.72\n")
+    water = _site(_rec(WATER_2B))
+    cross = [{"kappa_ab": water["kappa_ab"], "epsilon_k_ab": 1500.0}]
+    common = dict(kij_order=0, log_residuals=True, require_both_phases=False)
+    with_site = fit_kij_lle("ketone", "water", csv, params, binary_assoc=cross, **common)
+    without = fit_kij_lle("ketone", "water", csv, params, **common)
+    assert with_site._binary_assoc == cross and without._binary_assoc is None
+    assert _site(with_site._record1) == {"nb": 1.0}  # the pure record is untouched
+    r_with, r_without = with_site.residuals(), without.residuals()
+    assert len(r_with) and not r_with.equals(r_without)

@@ -55,6 +55,9 @@ class BinaryFitResult:
     # LLE-specific: pure records needed to rebuild EOS at each T with k_ij(T)
     _record1: object = None
     _record2: object = None
+    # Cross-association record on feos's BinaryRecord ([{kappa_ab, epsilon_k_ab}]
+    # or None), rebuilt with the records: see _utils._binary_parameters.
+    _binary_assoc: object = None
     # LLE-specific: the conditions the fit ran at, so re-prediction matches it.
     # Both default to what this class did before they existed, so a result built
     # without them scores exactly as it used to. fit_kij_lle sets them from its
@@ -132,7 +135,7 @@ class BinaryFitResult:
                 y1_pred = nan
                 if self._record1 is not None and self._record2 is not None:
                     try:
-                        eos_i = _build_binary_eos(self._record1, self._record2, kij)
+                        eos_i = _build_binary_eos(self._record1, self._record2, kij, self._binary_assoc)
                         bp = _bubble_point(eos_i, T, x1, P, tu, pu)
                         P_pred = float(bp.liquid.pressure() / pu)
                         y1_pred = float(bp.vapor.molefracs[0])
@@ -158,7 +161,7 @@ class BinaryFitResult:
                 x1_II_pred = nan
                 if self._record1 is not None and self._record2 is not None:
                     try:
-                        eos_i = _build_binary_eos(self._record1, self._record2, kij)
+                        eos_i = _build_binary_eos(self._record1, self._record2, kij, self._binary_assoc)
                         # Same feed list and pressure as the fit path. With the
                         # grid alone at 1 bar this reported NaN at temperatures
                         # where the fit converged fine, which reads as a model
@@ -204,7 +207,7 @@ class BinaryFitResult:
                 x1_pred = nan
                 if self._record1 is not None and self._record2 is not None:
                     try:
-                        eos_i = _build_binary_eos(self._record1, self._record2, kij)
+                        eos_i = _build_binary_eos(self._record1, self._record2, kij, self._binary_assoc)
                         x1_p1 = _predict_x1_for(
                             eos_i, T, x1_exp, self.solid_index, self.tm_K, self.delta_hfus_J
                         )
@@ -242,7 +245,7 @@ class BinaryFitResult:
                 H_pred = nan
                 if self._record1 is not None and self._record2 is not None:
                     try:
-                        eos_i = _build_binary_eos(self._record1, self._record2, kij)
+                        eos_i = _build_binary_eos(self._record1, self._record2, kij, self._binary_assoc)
                         H_pa = feos.State.henrys_law_constant_binary(
                             eos_i, T * si.KELVIN
                         ) / si.PASCAL
@@ -282,6 +285,7 @@ class BinaryFitResult:
                         self._record1, self._record2, kij,
                         T, P * 1e3,  # T in K, P kPa → Pa
                         x_I_init, x_II_init,
+                        binary_assoc=self._binary_assoc,
                     )
                 _row("vlle_T", T, P, nan, T, T_pred)
                 if has_xI:
@@ -382,8 +386,8 @@ class BinaryFitResult:
             if self._record1 is None or self._record2 is None:
                 return None
             try:
-                params = feos.Parameters.new_binary([self._record1, self._record2], k_ij=0.0)
-                return feos.EquationOfState.pcsaft(params, max_iter_cross_assoc=100)
+                from fit_pcsaft._binary._utils import _build_binary_eos as _beos
+                return _beos(self._record1, self._record2, 0.0, self._binary_assoc)
             except Exception:
                 return None
 
@@ -561,7 +565,7 @@ class BinaryFitResult:
                 try:
                     kij = _kij_at_T(self.kij_coeffs, float(T_i), self.kij_t_ref)
                     from fit_pcsaft._binary._utils import _build_binary_eos as _beos
-                    eos_i = _beos(self._record1, self._record2, kij)
+                    eos_i = _beos(self._record1, self._record2, kij, self._binary_assoc)
                     H_pa = feos.State.henrys_law_constant_binary(
                         eos_i, T_i * si.KELVIN
                     ) / si.PASCAL

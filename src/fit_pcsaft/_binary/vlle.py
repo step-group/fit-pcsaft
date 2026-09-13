@@ -37,12 +37,13 @@ def _predict_vlle_point(
     record1, record2, kij_val: float, T_K: float, P_Pa: float,
     x1_I_init: float = 0.01, x1_II_init: float = 0.90,
     errors: "list | None" = None,
+    binary_assoc: "list[dict] | None" = None,
 ) -> "tuple[float, float, float, float]":
     """Predict heteroazeotrope at (T_K, P_Pa). Returns (T_pred, x1_I, x1_II, y1) or (nan*4) on failure."""
     import feos
 
     try:
-        eos = _build_binary_eos(record1, record2, kij_val)
+        eos = _build_binary_eos(record1, record2, kij_val, binary_assoc)
         ha = feos.PhaseEquilibrium.heteroazeotrope(
             eos,
             P_Pa * si.PASCAL,

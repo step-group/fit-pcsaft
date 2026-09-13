@@ -190,11 +190,12 @@ def _build_eos_kij0(result):
 
     if result._record1 is None or result._record2 is None:
         return None
+    from fit_pcsaft._binary._utils import _build_binary_eos
+
     try:
-        params = feos.Parameters.new_binary(
-            [result._record1, result._record2], k_ij=0.0
+        return _build_binary_eos(
+            result._record1, result._record2, 0.0, getattr(result, "_binary_assoc", None)
         )
-        return feos.EquationOfState.pcsaft(params, max_iter_cross_assoc=100)
     except Exception:
         return None
 
@@ -425,7 +426,9 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
     T_K = T_min
     while T_K <= T_max + 500.0:  # extend up to 500 K past data range
         kij_T = _kij_at_T(result.kij_coeffs, T_K, result.kij_t_ref)
-        eos_T = _build_binary_eos(result._record1, result._record2, kij_T)
+        eos_T = _build_binary_eos(
+            result._record1, result._record2, kij_T, getattr(result, "_binary_assoc", None)
+        )
 
         # Prepend a targeted feed at the midpoint of the converging phases so
         # the flash stays on the LLE branch near the UCST.
@@ -587,6 +590,7 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
         mock = SimpleNamespace(
             _record1=result._record1,
             _record2=result._record2,
+            _binary_assoc=getattr(result, "_binary_assoc", None),
             kij_coeffs=np.array([0.0]),
             kij_t_ref=result.kij_t_ref,
         )
@@ -1066,7 +1070,9 @@ def _find_heteroazeotrope(result, pressure_si, x_I_init: float, x_II_init: float
         return None
 
     kij = _kij_at_T(result.kij_coeffs, T_init_K, result.kij_t_ref)
-    eos = _build_binary_eos(result._record1, result._record2, kij)
+    eos = _build_binary_eos(
+            result._record1, result._record2, kij, getattr(result, "_binary_assoc", None)
+        )
     try:
         ha = feos.PhaseEquilibrium.heteroazeotrope(
             eos, pressure_si,
@@ -1111,7 +1117,9 @@ def _vle_branch_isobaric(
     for x1 in x1_arr:
         x1 = float(np.clip(x1, 1e-6, 1.0 - 1e-6))
         kij = _kij_at_T(result.kij_coeffs, T_K, result.kij_t_ref)
-        eos = _build_binary_eos(result._record1, result._record2, kij)
+        eos = _build_binary_eos(
+            result._record1, result._record2, kij, getattr(result, "_binary_assoc", None)
+        )
         try:
             bp = feos.PhaseEquilibrium.bubble_point(
                 eos, pressure_si,
@@ -1269,6 +1277,7 @@ def _plot_vle_lle(
             from types import SimpleNamespace as _NS
             mock = _NS(
                 _record1=result._record1, _record2=result._record2,
+                _binary_assoc=getattr(result, "_binary_assoc", None),
                 kij_coeffs=np.array([0.0]), kij_t_ref=result.kij_t_ref,
             )
             T_u, x_I_u, x_II_u = _lle_curve_kij_T(mock, z1, curve_T_min, curve_T_max, npoints=301)
@@ -1395,7 +1404,9 @@ def _vlle_locus(
         for T_try in T_candidates:
             try:
                 kij = _kij_at_T(result.kij_coeffs, T_try, result.kij_t_ref)
-                eos = _build_binary_eos(result._record1, result._record2, kij)
+                eos = _build_binary_eos(
+            result._record1, result._record2, kij, getattr(result, "_binary_assoc", None)
+        )
                 ha = feos.PhaseEquilibrium.heteroazeotrope(
                     eos, float(P_si) * si.PASCAL,
                     x_init=(float(np.clip(x_I_g, 1e-4, 1.0 - 1e-4)),

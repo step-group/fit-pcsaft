@@ -40,11 +40,33 @@ def _load_pure_records(
     return records[0], records[1]
 
 
+def _binary_parameters(
+    record1: "feos.PureRecord",
+    record2: "feos.PureRecord",
+    kij: float,
+    binary_assoc: "list[dict] | None" = None,
+) -> "feos.Parameters":
+    """feos Parameters for the pair: k_ij plus, when given, the cross-association
+    record `binary_assoc = [{"kappa_ab": ..., "epsilon_k_ab": ...}]` written on
+    feos's BinaryRecord.association_sites. feos takes those values as the cross
+    pair as they are (no combining rule) and looks them up before it checks
+    whether the pure sites carry parameters, so a bare acceptor site ({"nb": 1})
+    cross-associates with the partner once the record supplies the pair -- the
+    induced-association route of Rehner, Bardow & Gross (2023), and the shape of
+    feos's own rehner2023_binary.json."""
+    extra = {"association_sites": list(binary_assoc)} if binary_assoc else {}
+    return feos.Parameters.new_binary([record1, record2], k_ij=kij, **extra)
+
+
 def _build_binary_eos(
-    record1: "feos.PureRecord", record2: "feos.PureRecord", kij: float
+    record1: "feos.PureRecord",
+    record2: "feos.PureRecord",
+    kij: float,
+    binary_assoc: "list[dict] | None" = None,
 ) -> "feos.EquationOfState":
-    """Build a binary PC-SAFT EOS with the given k_ij."""
-    params = feos.Parameters.new_binary([record1, record2], k_ij=kij)
+    """Build a binary PC-SAFT EOS with the given k_ij (and cross-association
+    record, see `_binary_parameters`)."""
+    params = _binary_parameters(record1, record2, kij, binary_assoc)
     return feos.EquationOfState.pcsaft(params, max_iter_cross_assoc=100)
 
 
