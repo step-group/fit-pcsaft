@@ -57,21 +57,40 @@ def _is_self_associating(record: "feos.PureRecord") -> bool:
 
 
 def _apply_induced_association(
-    record1: "feos.PureRecord", record2: "feos.PureRecord"
+    record1: "feos.PureRecord",
+    record2: "feos.PureRecord",
+    *,
+    sites: str = "2B",
+    epsilon_k_ab: float = 0.0,
 ) -> "tuple[feos.PureRecord, feos.PureRecord]":
-    """Apply the induced-association mixing rule to a self-associating / non-associating pair.
+    """Apply the induced-association rule to a self-associating / non-associating pair.
 
-    The non-associating component receives:
-      - epsilon_k_ab = 0.0
+    The non-associating (solvating) component receives
       - kappa_ab     = kappa_ab of the self-associating component (first full site)
-      - na = 1.0, nb = 1.0  (2B scheme)
+      - epsilon_k_ab = `epsilon_k_ab` (default 0.0)
+    and its site counts according to `sites`:
+      - "2B"  (default): na = 1, nb = 1, whatever the record declared. The
+              historical rule; kept so existing fits reproduce.
+      - "own": the record's own `association_sites` na/nb are kept -- a ketone
+              declared as na = 0, nb = 1 stays an acceptor-only site. A record
+              that declares no sites falls back to "2B" with a warning.
 
-    If both components are already self-associating, induced association is not applicable
-    and the records are returned unchanged (a note is printed).
-    Raises ValueError if neither component is self-associating.
+    With feos's arithmetic-mean combining rule the cross energy is
+    (epsilon_k_ab + epsilon_k_ab_partner)/2, so `epsilon_k_ab` is the fitted
+    cross-association parameter of Rehner, Bardow & Gross, Int. J. Thermophys.
+    44, 179 (2023), Sect. 3-4: one acceptor site for ketones, kappa copied from
+    the partner, epsilon adjusted instead of k_ij.
+
+    If both components are already self-associating, induced association is not
+    applicable and the records are returned unchanged (a warning is issued).
+    Raises ValueError if neither component is self-associating or `sites` is
+    not "2B" or "own".
     """
     import json
     import warnings
+
+    if sites not in ("2B", "own"):
+        raise ValueError(f"sites must be '2B' or 'own', got {sites!r}")
 
     assoc1 = _is_self_associating(record1)
     assoc2 = _is_self_associating(record2)
@@ -94,9 +113,21 @@ def _apply_induced_association(
     # Pick kappa_ab from the first full site of the self-associating component
     kappa_ab = float(assoc_record.association_sites[0]["kappa_ab"])
 
-    # Rebuild the solvating record with induced-association site
     d = solvating_record.to_dict()
-    d["association_sites"] = [{"na": 1.0, "nb": 1.0, "kappa_ab": kappa_ab, "epsilon_k_ab": 0.0}]
+    declared = d.get("association_sites") or []
+    if sites == "own" and declared:
+        site = dict(declared[0])
+    else:
+        if sites == "own":
+            warnings.warn(
+                f"{d['identifier'].get('name', '?')} declares no association sites; "
+                "falling back to the 2B induced site.",
+                stacklevel=3,
+            )
+        site = {"na": 1.0, "nb": 1.0}
+    site["kappa_ab"] = kappa_ab
+    site["epsilon_k_ab"] = float(epsilon_k_ab)
+    d["association_sites"] = [site]
     solvating_mod = feos.PureRecord.from_json_str(json.dumps(d))
 
     return (record1, solvating_mod) if assoc1 else (solvating_mod, record2)

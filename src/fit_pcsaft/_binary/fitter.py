@@ -51,7 +51,18 @@ class BinaryKijFitter:
     kij_bounds : tuple
         (lower, upper) bounds for k_ij at each data point.
     induced_assoc : bool
-        Apply the induced-association mixing rule.
+        If True, apply the induced-association rule. Requires exactly one
+        self-associating component (with epsilon_k_ab > 0). The non-associating
+        component receives kappa_ab copied from the self-associating component
+        and epsilon_k_ab = `induced_epsilon_k_ab`.
+    induced_sites : str
+        "2B" (default): the non-associating component is rewritten as na = nb = 1.
+        "own": its declared na/nb are kept (a ketone's acceptor-only site stays
+        so). See `_apply_induced_association`.
+    induced_epsilon_k_ab : float
+        Site energy written on the non-associating component, in K. Through the
+        arithmetic-mean combining rule it is the fitted cross-association
+        parameter of Rehner, Bardow & Gross (2023). Default 0.0.
     """
 
     def __init__(
@@ -64,6 +75,8 @@ class BinaryKijFitter:
         kij_t_ref: float = 298.15,
         kij_bounds: tuple = (-0.3, 0.3),
         induced_assoc: bool = False,
+        induced_sites: str = "2B",
+        induced_epsilon_k_ab: float = 0.0,
     ):
         self.id1 = id1
         self.id2 = id2
@@ -72,6 +85,8 @@ class BinaryKijFitter:
         self.kij_t_ref = kij_t_ref
         self.kij_bounds = kij_bounds
         self.induced_assoc = induced_assoc
+        self.induced_sites = induced_sites
+        self.induced_epsilon_k_ab = induced_epsilon_k_ab
         self._sources: list[dict] = []
 
     # ------------------------------------------------------------------
@@ -242,6 +257,8 @@ class BinaryKijFitter:
                     t_max=src["t_max"],
                     kij_per_point=True,
                     induced_assoc=self.induced_assoc,
+                    induced_sites=self.induced_sites,
+                    induced_epsilon_k_ab=self.induced_epsilon_k_ab,
                     relative_residuals=src["relative_residuals"],
                 )
                 for k in ("T", "P", "x1", "y1"):
@@ -264,6 +281,8 @@ class BinaryKijFitter:
                     require_both_phases=src["require_both_phases"],
                     kij_per_point=True,
                     induced_assoc=self.induced_assoc,
+                    induced_sites=self.induced_sites,
+                    induced_epsilon_k_ab=self.induced_epsilon_k_ab,
                     ucst_target=src["ucst_target"],
                     relative_residuals=src["relative_residuals"],
                 )
@@ -285,6 +304,8 @@ class BinaryKijFitter:
                     t_min=src["t_min"],
                     t_max=src["t_max"],
                     induced_assoc=self.induced_assoc,
+                    induced_sites=self.induced_sites,
+                    induced_epsilon_k_ab=self.induced_epsilon_k_ab,
                     relative_residuals=src["relative_residuals"],
                 )
                 for k in ("T", "P", "x1_I", "x1_II", "y1"):
@@ -354,7 +375,12 @@ class BinaryKijFitter:
         # build EOS and records with induced assoc applied
         record1, record2 = _load_pure_records(self.params_path, self.id1, self.id2)
         if self.induced_assoc:
-            record1, record2 = _apply_induced_association(record1, record2)
+            record1, record2 = _apply_induced_association(
+                record1,
+                record2,
+                sites=self.induced_sites,
+                epsilon_k_ab=self.induced_epsilon_k_ab,
+            )
         eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
 
         eq_type = "+".join(types_seen)

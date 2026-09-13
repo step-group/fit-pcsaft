@@ -51,6 +51,8 @@ def fit_kij_lle(
     require_both_phases: bool = True,
     kij_per_point: bool = False,
     induced_assoc: bool = False,
+    induced_sites: str = "2B",
+    induced_epsilon_k_ab: float = 0.0,
     ucst_target: bool = False,
     relative_residuals: bool = True,
     log_residuals: bool = False,
@@ -126,10 +128,18 @@ def fit_kij_lle(
         k_ij per unique temperature (per tie line). If True, fit one k_ij per
         individual CSV row without any averaging across rows at the same T.
     induced_assoc : bool
-        If True, apply the induced-association mixing rule. Requires exactly one
+        If True, apply the induced-association rule. Requires exactly one
         self-associating component (with epsilon_k_ab > 0). The non-associating
-        component is assigned epsilon_k_ab = 0 and kappa_ab copied from the
-        self-associating component, with na = nb = 1 (2B scheme).
+        component receives kappa_ab copied from the self-associating component
+        and epsilon_k_ab = `induced_epsilon_k_ab`.
+    induced_sites : str
+        "2B" (default): the non-associating component is rewritten as na = nb = 1.
+        "own": its declared na/nb are kept (a ketone's acceptor-only site stays
+        so). See `_apply_induced_association`.
+    induced_epsilon_k_ab : float
+        Site energy written on the non-associating component, in K. Through the
+        arithmetic-mean combining rule it is the fitted cross-association
+        parameter of Rehner, Bardow & Gross (2023). Default 0.0.
     ucst_target : bool
         If True, fit k_ij using only the highest temperature data point (closest
         to the UCST). Useful when the primary goal is to reproduce the critical
@@ -142,7 +152,9 @@ def fit_kij_lle(
     """
     record1, record2 = _load_pure_records(params_path, id1, id2)
     if induced_assoc:
-        record1, record2 = _apply_induced_association(record1, record2)
+        record1, record2 = _apply_induced_association(
+            record1, record2, sites=induced_sites, epsilon_k_ab=induced_epsilon_k_ab
+        )
     _lle_raw = load_csv(lle_path, SCHEMA_LLE)
     data: dict[str, np.ndarray] = {"T": _lle_raw["T"]}
     if "x1_I" in _lle_raw:

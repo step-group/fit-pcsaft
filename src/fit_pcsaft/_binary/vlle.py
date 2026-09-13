@@ -78,6 +78,8 @@ def fit_kij_vlle(
     t_max: "si.SIObject | None" = None,
     scipy_kwargs: "dict | None" = None,
     induced_assoc: bool = False,
+    induced_sites: str = "2B",
+    induced_epsilon_k_ab: float = 0.0,
     relative_residuals: bool = True,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from VLLE heteroazeotrope data.
@@ -113,7 +115,18 @@ def fit_kij_vlle(
     scipy_kwargs : dict | None
         Overrides for ``scipy.optimize.least_squares``.
     induced_assoc : bool
-        Apply the induced-association mixing rule (see ``fit_kij_vle``).
+        If True, apply the induced-association rule. Requires exactly one
+        self-associating component (with epsilon_k_ab > 0). The non-associating
+        component receives kappa_ab copied from the self-associating component
+        and epsilon_k_ab = `induced_epsilon_k_ab`.
+    induced_sites : str
+        "2B" (default): the non-associating component is rewritten as na = nb = 1.
+        "own": its declared na/nb are kept (a ketone's acceptor-only site stays
+        so). See `_apply_induced_association`.
+    induced_epsilon_k_ab : float
+        Site energy written on the non-associating component, in K. Through the
+        arithmetic-mean combining rule it is the fitted cross-association
+        parameter of Rehner, Bardow & Gross (2023). Default 0.0.
 
     Returns
     -------
@@ -122,7 +135,9 @@ def fit_kij_vlle(
     """
     record1, record2 = _load_pure_records(params_path, id1, id2)
     if induced_assoc:
-        record1, record2 = _apply_induced_association(record1, record2)
+        record1, record2 = _apply_induced_association(
+            record1, record2, sites=induced_sites, epsilon_k_ab=induced_epsilon_k_ab
+        )
 
     data = load_csv(vlle_path, SCHEMA_VLLE)
 
