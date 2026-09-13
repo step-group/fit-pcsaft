@@ -3,7 +3,9 @@
 Rehner, Bardow & Gross, Int. J. Thermophys. 44, 179 (2023): a ketone carries one
 acceptor site (na = 0, nb = 1), kappa is copied from the self-associating partner,
 and the site energy is the fitted cross parameter through feos's arithmetic-mean
-combining rule. The 2B override predates that and stays the default.
+combining rule. The 2B override is Kleiner & Sadowski (2007)'s "one acceptor and
+one donor site for the polar component", chosen there for simplicity; it stays the
+default.
 """
 
 import inspect

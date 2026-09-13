@@ -69,8 +69,12 @@ def _apply_induced_association(
       - kappa_ab     = kappa_ab of the self-associating component (first full site)
       - epsilon_k_ab = `epsilon_k_ab` (default 0.0)
     and its site counts according to `sites`:
-      - "2B"  (default): na = 1, nb = 1, whatever the record declared. The
-              historical rule; kept so existing fits reproduce.
+      - "2B"  (default): na = 1, nb = 1, whatever the record declared -- Kleiner
+              & Sadowski, J. Phys. Chem. C 111, 15544 (2007): epsilon set to zero,
+              kappa taken from the associating partner, and "one acceptor and one
+              donor site for the polar component ... for all polar components
+              ... to keep the proposed approach as simple as possible". Kept as
+              the default so existing fits reproduce.
       - "own": the record's own `association_sites` na/nb are kept -- a ketone
               declared as na = 0, nb = 1 stays an acceptor-only site. A record
               that declares no sites falls back to "2B" with a warning.
