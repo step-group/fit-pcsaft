@@ -63,9 +63,22 @@ def _build_binary_eos(
     record2: "feos.PureRecord",
     kij: float,
     binary_assoc: "list[dict] | None" = None,
+    *,
+    T_K: "float | None" = None,
+    record_at_T=None,
 ) -> "feos.EquationOfState":
     """Build a binary PC-SAFT EOS with the given k_ij (and cross-association
-    record, see `_binary_parameters`)."""
+    record, see `_binary_parameters`).
+
+    `record_at_T(record, T_K) -> record` rebuilds a pure record at the
+    temperature the EOS will be used at (a T-dependent segment diameter, e.g.
+    Cameretti & Sadowski 2008's water); it is applied to both records and must
+    return a record it does not target unchanged. With it, `T_K` is required:
+    falling back to the constant record would hide the temperature dependence."""
+    if record_at_T is not None:
+        if T_K is None:
+            raise ValueError("record_at_T needs T_K: the EOS is only valid at one temperature")
+        record1, record2 = record_at_T(record1, T_K), record_at_T(record2, T_K)
     params = _binary_parameters(record1, record2, kij, binary_assoc)
     return feos.EquationOfState.pcsaft(params, max_iter_cross_assoc=100)
 

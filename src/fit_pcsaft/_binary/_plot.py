@@ -120,6 +120,9 @@ def _plot_binary(
     # Supports both legacy "vle_lle" (from fit_kij_vle_lle) and
     # new "vle+lle", "vle+lle+vlle", etc. (from BinaryKijFitter).
     _tokens = frozenset(eq.replace("_", "+").split("+"))
+    if getattr(result, "_record_at_T", None) is not None and not _tokens <= {"lle", "sle"}:
+        # The VLE/VLLE/Henry curves sweep T (or solve for it) on one EOS.
+        raise NotImplementedError(f"record_at_T is not supported for {eq!r} plots")
 
     if _tokens == {"vle"}:
         return _plot_vle(_normalize_result_for_type(result, "vle"),
@@ -426,8 +429,10 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
     T_K = T_min
     while T_K <= T_max + 500.0:  # extend up to 500 K past data range
         kij_T = _kij_at_T(result.kij_coeffs, T_K, result.kij_t_ref)
+        record_at_T = getattr(result, "_record_at_T", None)
         eos_T = _build_binary_eos(
-            result._record1, result._record2, kij_T, getattr(result, "_binary_assoc", None)
+            result._record1, result._record2, kij_T, getattr(result, "_binary_assoc", None),
+            T_K=T_K, record_at_T=record_at_T,
         )
 
         # Prepend a targeted feed at the midpoint of the converging phases so
@@ -451,8 +456,14 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
         if T_K > T_anchor_K + 0.5:
             try:
                 moles_a = np.array([feeds[0], 1.0 - feeds[0]]) * si.MOL
+                # With record_at_T the anchor needs the records at T_anchor_K.
+                eos_a = eos_T if record_at_T is None else _build_binary_eos(
+                    result._record1, result._record2, kij_T,
+                    getattr(result, "_binary_assoc", None),
+                    T_K=T_anchor_K, record_at_T=record_at_T,
+                )
                 s_a = feos.State(
-                    eos_T,
+                    eos_a,
                     T_anchor_K * si.KELVIN,
                     pressure=pressure,
                     composition=moles_a,
@@ -591,6 +602,7 @@ def _plot_lle(result, path, temperature_unit, plot_unfitted: bool = False):
             _record1=result._record1,
             _record2=result._record2,
             _binary_assoc=getattr(result, "_binary_assoc", None),
+            _record_at_T=getattr(result, "_record_at_T", None),
             kij_coeffs=np.array([0.0]),
             kij_t_ref=result.kij_t_ref,
         )
@@ -737,7 +749,21 @@ def _plot_kij_vs_T(
 # ---------------------------------------------------------------------------
 
 
-def _find_eutectic(eos, Tm1, dHfus1, si_idx1, Tm2, dHfus2, si_idx2):
+def _eos_at(result, T_K: float):
+    """The SLE curve's EOS at T_K: `result.eos` (k_ij0, constant records), or
+    with `record_at_T` the same k_ij0 on the records rebuilt at T_K."""
+    record_at_T = getattr(result, "_record_at_T", None)
+    if record_at_T is None:
+        return result.eos
+    from fit_pcsaft._binary._utils import _build_binary_eos
+
+    return _build_binary_eos(
+        result._record1, result._record2, float(result.kij_coeffs[0]),
+        getattr(result, "_binary_assoc", None), T_K=T_K, record_at_T=record_at_T,
+    )
+
+
+def _find_eutectic(result, Tm1, dHfus1, si_idx1, Tm2, dHfus2, si_idx2):
     """Find eutectic (T, x1) where both SvL branches cross.
 
     Searches from 80% of the lower melting point up to just below it.
@@ -748,6 +774,7 @@ def _find_eutectic(eos, Tm1, dHfus1, si_idx1, Tm2, dHfus2, si_idx2):
     T_lo = min(Tm1, Tm2) * 0.80
 
     def diff(T):
+        eos = _eos_at(result, T)
         x1a = _sle_fixed_point(eos, T, Tm1, dHfus1, si_idx1, 0.5)
         x1b = _sle_fixed_point(eos, T, Tm2, dHfus2, si_idx2, 0.5)
         return x1a - x1b
@@ -767,7 +794,7 @@ def _find_eutectic(eos, Tm1, dHfus1, si_idx1, Tm2, dHfus2, si_idx2):
         if bracket is None:
             return float("nan"), float("nan")
         T_eut = brentq(diff, *bracket, xtol=1e-4)
-        x1_eut = _sle_fixed_point(eos, T_eut, Tm1, dHfus1, si_idx1, 0.5)
+        x1_eut = _sle_fixed_point(_eos_at(result, T_eut), T_eut, Tm1, dHfus1, si_idx1, 0.5)
         return T_eut, x1_eut
     except Exception:
         return float("nan"), float("nan")
@@ -806,7 +833,7 @@ def _plot_sle(result, path, temperature_unit):
     if eutectic:
         # Find eutectic point to properly clip each branch
         T_eut, x1_eut = _find_eutectic(
-            result.eos,
+            result,
             Tm_K,
             dHfus_J,
             solid_index,
@@ -822,7 +849,7 @@ def _plot_sle(result, path, temperature_unit):
             x0 = x0_start
             for T_i in T_range:
                 try:
-                    x1 = _sle_fixed_point(result.eos, T_i, Tm, dHfus, si_idx, x0)
+                    x1 = _sle_fixed_point(_eos_at(result, T_i), T_i, Tm, dHfus, si_idx, x0)
                     if not np.isnan(x1) and 0.0 <= x1 <= 1.0:
                         x1_curve.append(x1)
                         T_curve.append(T_i)
@@ -867,7 +894,7 @@ def _plot_sle(result, path, temperature_unit):
         x0 = float(x1_data[np.argmin(T_data)])
         for T_i in T_range:
             try:
-                x1 = _sle_fixed_point(result.eos, T_i, Tm_K, dHfus_J, solid_index, x0)
+                x1 = _sle_fixed_point(_eos_at(result, T_i), T_i, Tm_K, dHfus_J, solid_index, x0)
                 if not np.isnan(x1) and 0.0 <= x1 <= 1.0:
                     x1_curve.append(x1)
                     T_curve.append(T_i)
@@ -1278,6 +1305,7 @@ def _plot_vle_lle(
             mock = _NS(
                 _record1=result._record1, _record2=result._record2,
                 _binary_assoc=getattr(result, "_binary_assoc", None),
+                _record_at_T=getattr(result, "_record_at_T", None),
                 kij_coeffs=np.array([0.0]), kij_t_ref=result.kij_t_ref,
             )
             T_u, x_I_u, x_II_u = _lle_curve_kij_T(mock, z1, curve_T_min, curve_T_max, npoints=301)

@@ -58,6 +58,9 @@ class BinaryFitResult:
     # Cross-association record on feos's BinaryRecord ([{kappa_ab, epsilon_k_ab}]
     # or None), rebuilt with the records: see _utils._binary_parameters.
     _binary_assoc: object = None
+    # record_at_T(record, T_K) -> record, or None: rebuilds a pure record per
+    # temperature (see _utils._build_binary_eos); every re-prediction passes it.
+    _record_at_T: object = None
     # LLE-specific: the conditions the fit ran at, so re-prediction matches it.
     # Both default to what this class did before they existed, so a result built
     # without them scores exactly as it used to. fit_kij_lle sets them from its
@@ -135,7 +138,10 @@ class BinaryFitResult:
                 y1_pred = nan
                 if self._record1 is not None and self._record2 is not None:
                     try:
-                        eos_i = _build_binary_eos(self._record1, self._record2, kij, self._binary_assoc)
+                        eos_i = _build_binary_eos(
+                            self._record1, self._record2, kij, self._binary_assoc,
+                            T_K=T, record_at_T=self._record_at_T,
+                        )
                         bp = _bubble_point(eos_i, T, x1, P, tu, pu)
                         P_pred = float(bp.liquid.pressure() / pu)
                         y1_pred = float(bp.vapor.molefracs[0])
@@ -161,7 +167,10 @@ class BinaryFitResult:
                 x1_II_pred = nan
                 if self._record1 is not None and self._record2 is not None:
                     try:
-                        eos_i = _build_binary_eos(self._record1, self._record2, kij, self._binary_assoc)
+                        eos_i = _build_binary_eos(
+                            self._record1, self._record2, kij, self._binary_assoc,
+                            T_K=T, record_at_T=self._record_at_T,
+                        )
                         # Same feed list and pressure as the fit path. With the
                         # grid alone at 1 bar this reported NaN at temperatures
                         # where the fit converged fine, which reads as a model
@@ -207,7 +216,10 @@ class BinaryFitResult:
                 x1_pred = nan
                 if self._record1 is not None and self._record2 is not None:
                     try:
-                        eos_i = _build_binary_eos(self._record1, self._record2, kij, self._binary_assoc)
+                        eos_i = _build_binary_eos(
+                            self._record1, self._record2, kij, self._binary_assoc,
+                            T_K=T, record_at_T=self._record_at_T,
+                        )
                         x1_p1 = _predict_x1_for(
                             eos_i, T, x1_exp, self.solid_index, self.tm_K, self.delta_hfus_J
                         )
@@ -245,7 +257,10 @@ class BinaryFitResult:
                 H_pred = nan
                 if self._record1 is not None and self._record2 is not None:
                     try:
-                        eos_i = _build_binary_eos(self._record1, self._record2, kij, self._binary_assoc)
+                        eos_i = _build_binary_eos(
+                            self._record1, self._record2, kij, self._binary_assoc,
+                            T_K=T, record_at_T=self._record_at_T,
+                        )
                         H_pa = feos.State.henrys_law_constant_binary(
                             eos_i, T * si.KELVIN
                         ) / si.PASCAL
@@ -264,6 +279,10 @@ class BinaryFitResult:
         if "vlle" in _tokens:
             from fit_pcsaft._binary.vlle import _predict_vlle_point
             from fit_pcsaft._binary._plot import _normalize_result_for_type
+            if self._record_at_T is not None:
+                # T is the unknown of a heteroazeotrope, so there is no
+                # temperature to build the records at.
+                raise NotImplementedError("record_at_T is not supported for VLLE")
             vlle_data = _normalize_result_for_type(self, "vlle").data
             T_arr = vlle_data["T"].astype(float)
             P_arr = vlle_data["P"].astype(float)
@@ -372,6 +391,7 @@ class BinaryFitResult:
         import feos
 
         from fit_pcsaft._binary._plot import (
+            _eos_at,
             _find_eutectic,
             _find_heteroazeotrope,
             _lle_curve_kij_T,
@@ -387,7 +407,8 @@ class BinaryFitResult:
                 return None
             try:
                 from fit_pcsaft._binary._utils import _build_binary_eos as _beos
-                return _beos(self._record1, self._record2, 0.0, self._binary_assoc)
+                return _beos(self._record1, self._record2, 0.0, self._binary_assoc,
+                             T_K=self.kij_t_ref, record_at_T=self._record_at_T)
             except Exception:
                 return None
 
@@ -397,6 +418,9 @@ class BinaryFitResult:
 
         eq = self.equilibrium_type
         _tokens = frozenset(eq.replace("_", "+").split("+"))
+        if self._record_at_T is not None and not _tokens <= {"lle", "sle"}:
+            # The VLE/VLLE/Henry curves sweep T (or solve for it) on one EOS.
+            raise NotImplementedError(f"record_at_T is not supported for {eq!r} curves")
 
         # --- experimental CSV (tidy: one row per data point) ---
         self.residuals().write_csv(path / f"{stem}_exp.csv")
@@ -464,7 +488,7 @@ class BinaryFitResult:
                 dHfus2_J = result_obj.delta_hfus2_J
                 si_idx2  = 1 - solid_idx
                 T_eut, x1_eut = _find_eutectic(
-                    result_obj.eos, Tm_K, dHfus_J, solid_idx,
+                    result_obj, Tm_K, dHfus_J, solid_idx,
                     Tm2_K, dHfus2_J, si_idx2,
                 )
                 T_start = T_eut if not np.isnan(T_eut) else curve_T_min
@@ -474,14 +498,14 @@ class BinaryFitResult:
                 T2_out, x1_out_2 = [], []
                 for T_i in np.linspace(T_start, Tm_K, 120):
                     try:
-                        x1 = _sle_fixed_point(result_obj.eos, T_i, Tm_K, dHfus_J, solid_idx, x0_eut)
+                        x1 = _sle_fixed_point(_eos_at(result_obj, T_i), T_i, Tm_K, dHfus_J, solid_idx, x0_eut)
                         if not np.isnan(x1) and 0.0 <= x1 <= 1.0:
                             T1_out.append(float(T_i)); x1_out_1.append(x1)
                     except Exception:
                         pass
                 for T_i in np.linspace(T_start, Tm2_K, 120):
                     try:
-                        x1 = _sle_fixed_point(result_obj.eos, T_i, Tm2_K, dHfus2_J, si_idx2, x0_eut)
+                        x1 = _sle_fixed_point(_eos_at(result_obj, T_i), T_i, Tm2_K, dHfus2_J, si_idx2, x0_eut)
                         if not np.isnan(x1) and 0.0 <= x1 <= 1.0:
                             T2_out.append(float(T_i)); x1_out_2.append(x1)
                     except Exception:
@@ -494,7 +518,7 @@ class BinaryFitResult:
                 T_out, x1_out = [], []
                 for T_i in np.linspace(curve_T_min, Tm_K, 120):
                     try:
-                        x1 = _sle_fixed_point(result_obj.eos, T_i, Tm_K, dHfus_J, solid_idx, x0)
+                        x1 = _sle_fixed_point(_eos_at(result_obj, T_i), T_i, Tm_K, dHfus_J, solid_idx, x0)
                         if not np.isnan(x1) and 0.0 <= x1 <= 1.0:
                             T_out.append(float(T_i)); x1_out.append(x1); x0 = x1
                     except Exception:
@@ -565,7 +589,8 @@ class BinaryFitResult:
                 try:
                     kij = _kij_at_T(self.kij_coeffs, float(T_i), self.kij_t_ref)
                     from fit_pcsaft._binary._utils import _build_binary_eos as _beos
-                    eos_i = _beos(self._record1, self._record2, kij, self._binary_assoc)
+                    eos_i = _beos(self._record1, self._record2, kij, self._binary_assoc,
+                                  T_K=float(T_i), record_at_T=self._record_at_T)
                     H_pa = feos.State.henrys_law_constant_binary(
                         eos_i, T_i * si.KELVIN
                     ) / si.PASCAL

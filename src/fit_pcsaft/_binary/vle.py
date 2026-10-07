@@ -40,6 +40,7 @@ def fit_kij_vle(
     induced_sites: str = "2B",
     induced_epsilon_k_ab: float = 0.0,
     relative_residuals: bool = True,
+    record_at_T=None,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from VLE bubble-point data.
 
@@ -92,6 +93,8 @@ def fit_kij_vle(
     -------
     BinaryFitResult
     """
+    if record_at_T is not None:
+        raise NotImplementedError("record_at_T is only threaded through fit_kij_lle and fit_kij_sle")
     record1, record2 = _load_pure_records(params_path, id1, id2)
     if induced_assoc:
         record1, record2 = _apply_induced_association(

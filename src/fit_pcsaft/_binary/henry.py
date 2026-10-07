@@ -32,6 +32,7 @@ def fit_kij_henry(
     induced_assoc: bool = False,
     induced_sites: str = "2B",
     induced_epsilon_k_ab: float = 0.0,
+    record_at_T=None,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from Henry's law constant data.
 
@@ -81,6 +82,8 @@ def fit_kij_henry(
     -------
     BinaryFitResult
     """
+    if record_at_T is not None:
+        raise NotImplementedError("record_at_T is only threaded through fit_kij_lle and fit_kij_sle")
     import feos
 
     record1, record2 = _load_pure_records(params_path, id1, id2)

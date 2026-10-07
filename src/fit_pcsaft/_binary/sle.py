@@ -1,8 +1,10 @@
 """SLE k_ij fitting from solid-liquid equilibrium (solubility) data."""
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
+import feos
 import numpy as np
 import si_units as si
 from scipy.optimize import least_squares
@@ -86,6 +88,7 @@ def fit_kij_sle(
     scipy_kwargs: "dict | None" = None,
     kij_per_point: bool = False,
     log_residuals: bool = False,
+    record_at_T: "Callable[[feos.PureRecord, float], feos.PureRecord] | None" = None,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from SLE solubility data.
 
@@ -141,6 +144,12 @@ def fit_kij_sle(
         Upper temperature bound. Rows with T > t_max are excluded.
     scipy_kwargs : dict | None
         Overrides for scipy.optimize.least_squares keyword arguments.
+    record_at_T : Callable[[feos.PureRecord, float], feos.PureRecord] | None
+        Rebuilds a pure record at a temperature in K (a T-dependent segment
+        diameter, e.g. Cameretti & Sadowski 2008's water); applied to both
+        records at every EOS build and stored on the result for re-prediction.
+        The result's `eos` is built at `kij_t_ref`. See `fit_kij_lle`.
+        Default None: constant records.
 
     Returns
     -------
@@ -187,17 +196,21 @@ def fit_kij_sle(
         kij_per_row = np.array(
             [_kij_at_T(coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)]
         )
-        eos_map: dict[float, object] = {}
-        for kij_val in np.unique(kij_per_row):
-            try:
-                eos_map[kij_val] = _build_binary_eos(record1, record2, float(kij_val))
-            except Exception:
-                eos_map[kij_val] = None
-
+        # Keyed on k_ij alone unless record_at_T makes the EOS T-dependent too.
+        eos_map: dict = {}
         for i in range(n_rows):
             T_i = float(T_arr[i]) * t_scale
             x1_i = float(x1_arr[i])
-            eos = eos_map[kij_per_row[i]]
+            key = kij_per_row[i] if record_at_T is None else (kij_per_row[i], T_i)
+            if key not in eos_map:
+                try:
+                    eos_map[key] = _build_binary_eos(
+                        record1, record2, float(kij_per_row[i]),
+                        T_K=T_i, record_at_T=record_at_T,
+                    )
+                except Exception:
+                    eos_map[key] = None
+            eos = eos_map[key]
             if eos is None:
                 resids[i] = LOG_PENALTY if log_residuals else 1.0
                 continue
@@ -230,7 +243,8 @@ def fit_kij_sle(
 
             def resid_fn(kij_arr, T_K=T_K_i, x1=x1_i):
                 try:
-                    eos = _build_binary_eos(record1, record2, float(kij_arr[0]))
+                    eos = _build_binary_eos(record1, record2, float(kij_arr[0]),
+                                            T_K=T_K, record_at_T=record_at_T)
                     x1_pred = _predict_x1(eos, T_K, x1)
                     resid = _comp_resid(x1_pred, x1, log_residuals)
                     if eutectic:
@@ -281,7 +295,8 @@ def fit_kij_sle(
         kij_coeffs, poly_resid = _fit_kij_polynomial(
             T_fitted_arr, kij_fitted_arr, np.array(ard_fitted), kij_order, kij_t_ref
         )
-        eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
+        eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]),
+                                T_K=kij_t_ref, record_at_T=record_at_T)
         ard = float(np.mean(ard_fitted))
 
         data["T_kij"]         = T_fitted_arr
@@ -311,6 +326,7 @@ def fit_kij_sle(
             data_full=data_full,
             _record1=record1,
             _record2=record2,
+            _record_at_T=record_at_T,
         )
 
     # --- Global polynomial fit (default) -------------------------------------
@@ -336,7 +352,8 @@ def fit_kij_sle(
     time_elapsed = time.perf_counter() - t0
 
     kij_coeffs = result.x
-    eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
+    eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]),
+                                T_K=kij_t_ref, record_at_T=record_at_T)
 
     # ARD — reuse residuals from final evaluation
     final_resids = fun(kij_coeffs)
@@ -376,4 +393,5 @@ def fit_kij_sle(
         data_full=data_full,
         _record1=record1,
         _record2=record2,
+        _record_at_T=record_at_T,
     )

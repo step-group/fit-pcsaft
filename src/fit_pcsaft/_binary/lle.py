@@ -1,6 +1,7 @@
 """LLE k_ij fitting from liquid-liquid equilibrium data."""
 
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,6 +60,7 @@ def fit_kij_lle(
     log_residuals: bool = False,
     require_liquid_phases: bool = False,
     minority_component: bool = False,
+    record_at_T: "Callable[[feos.PureRecord, float], feos.PureRecord] | None" = None,
 ) -> BinaryFitResult:
     """Fit binary interaction parameter k_ij from LLE tieline data.
 
@@ -148,6 +150,13 @@ def fit_kij_lle(
         parameters -- feos's native induced association (Rehner, Bardow & Gross
         2023; the shape of feos's rehner2023_binary.json). Alternative to the
         `induced_*` rewrite of the pure record. Default None.
+    record_at_T : Callable[[feos.PureRecord, float], feos.PureRecord] | None
+        Rebuilds a pure record at a temperature in K, for a parameter feos
+        holds constant -- a T-dependent segment diameter such as Cameretti &
+        Sadowski (2008)'s water. Applied to both records at every EOS build
+        (a record it does not target must come back unchanged) and stored on
+        the result, so `residuals()` and the plots re-predict with it. The
+        result's `eos` is built at `kij_t_ref`. Default None: constant records.
     ucst_target : bool
         If True, fit k_ij using only the highest temperature data point (closest
         to the UCST). Useful when the primary goal is to reproduce the critical
@@ -239,6 +248,7 @@ def fit_kij_lle(
                 log_residuals=log_residuals,
                 errors=errors,
                 binary_assoc=binary_assoc,
+                record_at_T=record_at_T,
                 require_liquid_phases=require_liquid_phases,
                 minority_component=minority_component,
                 warm=warm,
@@ -346,6 +356,7 @@ def fit_kij_lle(
                 relative_residuals=relative_residuals,
                 log_residuals=log_residuals,
                 binary_assoc=binary_assoc,
+                record_at_T=record_at_T,
                 require_liquid_phases=require_liquid_phases,
                 minority_component=minority_component,
                 warm=warm,
@@ -386,7 +397,10 @@ def fit_kij_lle(
         message="Point-wise LLE fitting completed",
     )
 
-    eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]), binary_assoc)
+    eos_ref = _build_binary_eos(
+        record1, record2, float(kij_coeffs[0]), binary_assoc,
+        T_K=kij_t_ref, record_at_T=record_at_T,
+    )
 
     return BinaryFitResult(
         kij_coeffs=kij_coeffs,
@@ -405,6 +419,7 @@ def fit_kij_lle(
         _record1=record1,
         _record2=record2,
         _binary_assoc=binary_assoc,
+        _record_at_T=record_at_T,
         lle_pressure_bar=float(pressure / si.BAR),
         lle_require_liquid_phases=require_liquid_phases,
     )
@@ -498,6 +513,7 @@ def _residuals_at_T(
     minority_component: bool = False,
     warm: "list | None" = None,
     binary_assoc: "list[dict] | None" = None,
+    record_at_T=None,
 ) -> np.ndarray:
     """Residual vector for least_squares at a single temperature.
 
@@ -541,7 +557,8 @@ def _residuals_at_T(
     n_resid = (1 if exp_I is not None else 0) + (1 if exp_II is not None else 0)
     penalty = np.full(n_resid, LOG_PENALTY if log_residuals else 1.0)
 
-    eos = _build_binary_eos(record1, record2, kij, binary_assoc)
+    eos = _build_binary_eos(record1, record2, kij, binary_assoc,
+                            T_K=T_K, record_at_T=record_at_T)
 
     initial = None
     if warm is not None and n_resid == 2:
@@ -552,8 +569,14 @@ def _residuals_at_T(
             and T_K > T_anchor_K + 0.5 and len(feeds) > 0):
         try:
             feed_a = np.array([feeds[0], 1.0 - feeds[0]]) * si.MOL
+            # The anchor runs at T_anchor_K, so with record_at_T it needs the
+            # records at that temperature, not at T_K.
+            eos_a = eos if record_at_T is None else _build_binary_eos(
+                record1, record2, kij, binary_assoc,
+                T_K=T_anchor_K, record_at_T=record_at_T,
+            )
             s_a = feos.State(
-                eos,
+                eos_a,
                 T_anchor_K * si.KELVIN,
                 pressure=pressure,
                 composition=feed_a,
