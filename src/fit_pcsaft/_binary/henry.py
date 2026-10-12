@@ -120,7 +120,7 @@ def fit_kij_henry(
         for kij_val in unique_kijs:
             try:
                 eos_map[kij_val] = _build_binary_eos(record1, record2, float(kij_val))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
                 eos_map[kij_val] = None
 
@@ -140,7 +140,7 @@ def fit_kij_henry(
                     else:
                         H_pred = H_feos / henry_unit
                     resids[i] = (H_pred - H_i) / H_i
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     errors.append(exc)
                     resids[i] = 1.0
         return resids

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -32,7 +31,7 @@ class Metrics:
     r2: float          # coefficient of determination; NaN when SS_tot == 0
 
     @classmethod
-    def empty(cls, n_total: int = 0) -> "Metrics":
+    def empty(cls, n_total: int = 0) -> Metrics:
         nan = float("nan")
         return cls(
             n=0, n_total=int(n_total),
@@ -55,7 +54,7 @@ def compute_metrics_from_arrays(
     model,
     exp,
     *,
-    n_total: Optional[int] = None,
+    n_total: int | None = None,
 ) -> Metrics:
     """Compute all metrics from aligned model and experimental arrays.
 
@@ -111,7 +110,7 @@ def compute_metrics_from_arrays(
 def aggregate_metrics_from_rd(
     rd_pct,
     *,
-    n_total: Optional[int] = None,
+    n_total: int | None = None,
 ) -> Metrics:
     """Compute percent-based metrics from a precomputed RD% array (NaN-aware).
 

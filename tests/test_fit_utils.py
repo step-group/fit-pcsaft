@@ -214,11 +214,11 @@ def test_predict_bulk_matches_the_per_point_solve():
             for i, t in enumerate(T):
                 try:
                     out[i] = float(f(float(t) * si.KELVIN))
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 -- non-converged point stays NaN
                     pass
             return out
 
-        def hvap(T):
+        def hvap(T, eos=eos):
             vle = feos.PhaseEquilibrium.pure(eos, T)
             return (
                 vle.vapor.molar_enthalpy(feos.Contributions.Residual)
@@ -226,13 +226,13 @@ def test_predict_bulk_matches_the_per_point_solve():
             ) / units.enthalpy
 
         want = {
-            "psat": ref(data.T_psat, lambda T: feos.PhaseEquilibrium.vapor_pressure(eos, T)[0] / units.pressure),
-            "rho": ref(data.T_rho, lambda T: feos.PhaseEquilibrium.pure(eos, T).liquid.mass_density() / units.density),
+            "psat": ref(data.T_psat, lambda T, eos=eos: feos.PhaseEquilibrium.vapor_pressure(eos, T)[0] / units.pressure),
+            "rho": ref(data.T_rho, lambda T, eos=eos: feos.PhaseEquilibrium.pure(eos, T).liquid.mass_density() / units.density),
             "hvap": ref(data.T_hvap, hvap),
         }
         got = predict_bulk(eos, comp.mw, data, units)
-        for k in want:
-            np.testing.assert_allclose(got[k], want[k], rtol=1e-12, equal_nan=True)
+        for k, w in want.items():
+            np.testing.assert_allclose(got[k], w, rtol=1e-12, equal_nan=True)
         assert np.isnan(got["psat"][-1]) and np.isnan(got["rho"][-1]) and np.isnan(got["hvap"][-1])
         assert np.isfinite(got["psat"][:2]).all() and np.isfinite(got["rho"][:2]).all()
 

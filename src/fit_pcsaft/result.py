@@ -1,7 +1,6 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import feos
 import numpy as np
@@ -234,7 +233,7 @@ class FitResult:
         ```
         """
         identifier = self.compound.identifier
-        mu = self.spec.mu if "mu" not in self.params else self.params["mu"]
+        mu = self.params.get("mu", self.spec.mu)
         q = self.spec.q
         na = self.spec.na
         nb = self.spec.nb
@@ -419,9 +418,6 @@ class FitResult:
         q = self.spec.q
         na = self.spec.na
         nb = self.spec.nb
-        n_psat = len(self.data.T_psat)
-        n_rho = len(self.data.T_rho)
-        n_hvap = len(self.data.T_hvap)
 
         lines = [
             "Fitted parameters:",
@@ -604,8 +600,8 @@ class EvalResult:
         color: str = "red",
         line_color: str = "black",
         linestyle: str = "-",
-        scatter_kw: Optional[dict] = None,
-        line_kw: Optional[dict] = None,
+        scatter_kw: dict | None = None,
+        line_kw: dict | None = None,
     ):
         """Two-panel phase diagram with experimental data overlay."""
         from fit_pcsaft._plot import _plot_pure
@@ -665,9 +661,6 @@ class EvalResult:
         q = self.spec.q
         na = self.spec.na
         nb = self.spec.nb
-        n_psat = len(self.data.T_psat)
-        n_rho = len(self.data.T_rho)
-        n_hvap = len(self.data.T_hvap)
 
         lines = [
             "Parameters:",
@@ -711,8 +704,8 @@ def _model_curve_df(eos, data, units, T_min, T_max, n_points):
     versa.  Each column is nulled outside its own dataset's [T_min, T_max].
     The overall phase diagram spans the union of all per-dataset ranges.
     """
-    import polars as pl
     import feos
+    import polars as pl
 
     tu = units.temperature
     pu = units.pressure
@@ -754,7 +747,7 @@ def _model_curve_df(eos, data, units, T_min, T_max, n_points):
             - phase_diagram.liquid.molar_enthalpy(feos.Contributions.Residual)
         ) / eu
         hvap_vals = hvap_arr.tolist()
-    except Exception:
+    except Exception:  # noqa: BLE001
         hvap_vals = [None] * len(T_col)
 
     masked_ln_psat = _mask(

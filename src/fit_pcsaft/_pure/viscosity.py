@@ -23,7 +23,7 @@ Fitting procedure (faithful to LL 2018):
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
 
 import feos
 import numpy as np
@@ -31,10 +31,13 @@ import polars as pl
 import scipy.optimize
 import si_units as si
 
-from fit_pcsaft._csv import SCHEMA_VISCOSITY, load_csv
 from fit_pcsaft._binary._utils import _apply_induced_association
+from fit_pcsaft._csv import SCHEMA_VISCOSITY, load_csv
 from fit_pcsaft._fit_utils import _first_error, _first_error_hint, _is_assoc
 from fit_pcsaft._pure.viscosity_gc import compute_a_gc
+
+if TYPE_CHECKING:
+    from fit_pcsaft.result import FitResult
 
 
 @dataclass(frozen=True)
@@ -56,14 +59,14 @@ class ViscosityFitResult:
     """
 
     viscosity_params: list
-    eos: Optional[object]
+    eos: object | None
     ard: float
     n_points: int
     input_name: str = ""
     a_fixed: bool = False
     d_fixed: bool = True
-    groups: Optional[dict] = None
-    a_gc_used: Optional[float] = None
+    groups: dict | None = None
+    a_gc_used: float | None = None
     # Internal data stored for plotting / export (not shown in __str__)
     _T_K: list = field(default_factory=list, repr=False, compare=False)
     _P_MPa: list = field(default_factory=list, repr=False, compare=False)
@@ -178,7 +181,7 @@ class ViscosityFitResult:
                             kw["density_initialization"] = phase
                     state = feos.State(self.eos, **kw)
                     eta_p = float(state.viscosity() / (si.PASCAL * si.SECOND))
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
             rd = (eta_p - eta_e) / eta_e * 100 if np.isfinite(eta_p) else float("nan")
             ard = abs(rd) if np.isfinite(rd) else float("nan")
@@ -279,7 +282,7 @@ def _D_from_molar_mass(mw_g_mol: float) -> float:
     return 1.0 / (-1.25594 - 888.1232 / mw_g_mol)
 
 
-def _rebuild_eos_with_viscosity(source, viscosity_list: list) -> Optional[object]:
+def _rebuild_eos_with_viscosity(source, viscosity_list: list) -> object | None:
     """Rebuild feos.EquationOfState with viscosity params added.
 
     *source* is a FitResult or a feos.Parameters object.  Returns None on failure.
@@ -331,7 +334,7 @@ def _rebuild_eos_with_viscosity(source, viscosity_list: list) -> Optional[object
 
         new_rec = feos.PureRecord(**kw)
         return feos.EquationOfState.pcsaft(feos.Parameters.new_pure(new_rec))
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -432,12 +435,12 @@ def fit_viscosity_entropy_scaling(
 
     # --- Fix D from molar-mass correlation; resolve A from GC if available --
     D_fixed = _D_from_molar_mass(mw)
-    a_gc_val: "float | None" = None
+    a_gc_val: float | None = None
     if a_gc is not None:
         a_gc_val = float(a_gc)
     elif groups is not None:
         a_gc_val = compute_a_gc(groups)
-    A_fixed: "float | None" = (a_gc_val + 0.5 * np.log(1.0 / m)) if a_gc_val is not None else None
+    A_fixed: float | None = (a_gc_val + 0.5 * np.log(1.0 / m)) if a_gc_val is not None else None
 
     # --- Load experimental data -------------------------------------------
     T_data, P_data, eta_data, phase_data = _load_viscosity_csv(viscosity_path)
@@ -490,7 +493,7 @@ def fit_viscosity_entropy_scaling(
                 s_vals.append(s)
                 eta_CE_vals.append(eta_CE)
                 eta_exp_Pa_s_vals.append(eta_exp_Pa_s)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             errors.append(exc)
             continue
 
@@ -626,7 +629,7 @@ def fit_viscosity_entropy_scaling(
                 eta_exp_Pas = float(eta_exp) * float(viscosity_unit / (si.PASCAL * si.SECOND))
                 if np.isfinite(eta_pred) and eta_exp_Pas > 0:
                     ard_vals.append(abs(eta_pred - eta_exp_Pas) / eta_exp_Pas)
-            except Exception:
+            except Exception:  # noqa: BLE001, S112
                 continue
         ard = 100.0 * float(np.mean(ard_vals)) if ard_vals else float("nan")
     else:
@@ -679,7 +682,7 @@ def _smooth_viscosity_curve(eos, T_min: float, T_max: float, n: int = 80, P_MPa:
                 density_initialization="liquid",
             )
             eta_vals.append(float(state.viscosity() / (si.PASCAL * si.SECOND)))
-        except Exception:
+        except Exception:  # noqa: BLE001
             eta_vals.append(float("nan"))
     return T_grid.tolist(), [float(P_MPa)] * n, eta_vals
 
@@ -693,8 +696,8 @@ _LINE_COLOR = "#000000"
 
 
 def _scatter_kw(color: str, marker: str = "o") -> dict:
-    return dict(s=40, marker=marker, facecolors="white", edgecolors=color,
-                linewidths=1.2, zorder=5)
+    return {"s": 40, "marker": marker, "facecolors": "white", "edgecolors": color,
+            "linewidths": 1.2, "zorder": 5}
 
 
 def _plot_viscosity_pure(result: ViscosityFitResult, path=None):
@@ -729,7 +732,7 @@ def _plot_viscosity_pure(result: ViscosityFitResult, path=None):
                                    composition=si.MOL,
                                    density_initialization="liquid")
                 eta_curve.append(float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 eta_curve.append(float("nan"))
         eta_curve = np.array(eta_curve)
         valid = np.isfinite(eta_curve)
@@ -858,7 +861,7 @@ def plot_viscosity_binary(
                                    pressure=P_iso * pressure_unit,
                                    composition=np.array([x1, 1.0 - x1]) * si.MOL)
                 eta_model.append(float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 eta_model.append(float("nan"))
         eta_model = np.array(eta_model)
         valid = np.isfinite(eta_model)
@@ -893,7 +896,7 @@ def plot_viscosity_binary(
                                    pressure=float(P_iso_csv) * pressure_unit,
                                    composition=np.array([x1, 1.0 - x1]) * si.MOL)
                 eta_p = float(state.viscosity() / (si.PASCAL * si.SECOND))
-            except Exception:
+            except Exception:  # noqa: BLE001
                 eta_p = float("nan")
             eta_e = eta_e_mPas * 1e-3
             rd = (eta_p - eta_e) / eta_e * 100 if np.isfinite(eta_p) else float("nan")
@@ -917,7 +920,7 @@ def plot_viscosity_binary(
                                        pressure=P_iso * pressure_unit,
                                        composition=np.array([x1, 1.0 - x1]) * si.MOL)
                     eta_m = float(state.viscosity() / (si.PASCAL * si.SECOND))
-                except Exception:
+                except Exception:  # noqa: BLE001
                     eta_m = float("nan")
                 model_rows.append({"T": float(T_iso), "P": float(P_iso), "x1": float(x1), "eta_model": eta_m})
         pl.DataFrame(model_rows).write_csv(csv_out / f"{stem}_binary_viscosity_model.csv")

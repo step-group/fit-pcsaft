@@ -15,6 +15,7 @@ import warnings
 import feos
 import pytest
 import si_units as si
+
 from fit_pcsaft import (
     fit_kij_henry,
     fit_kij_lle,
@@ -121,7 +122,7 @@ def test_unknown_sites_value_is_refused():
 def test_both_associating_is_still_a_no_op_with_a_warning():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        a, b = _apply_induced_association(_rec(WATER_2B), _rec(WATER_2B), sites="own")
+        a, _b = _apply_induced_association(_rec(WATER_2B), _rec(WATER_2B), sites="own")
     assert w and "no effect" in str(w[0].message)
     assert _site(a) == _site(_rec(WATER_2B))
 
@@ -142,7 +143,7 @@ def test_the_fluent_fitter_forwards_them_too():
 
 
 def test_lle_source_forwards_both_to_the_helper():
-    import fit_pcsaft._binary.lle as lle
+    from fit_pcsaft._binary import lle
 
     text = inspect.getsource(lle)
     assert "sites=induced_sites, epsilon_k_ab=induced_epsilon_k_ab" in text
@@ -192,7 +193,7 @@ def test_fit_kij_lle_carries_the_binary_record_into_its_re_prediction(tmp_path):
     csv.write_text("temperature_K,x1_I,x1_II\n298.15,0.02,0.75\n313.15,0.025,0.72\n")
     water = _site(_rec(WATER_2B))
     cross = [{"kappa_ab": water["kappa_ab"], "epsilon_k_ab": 1500.0}]
-    common = dict(kij_order=0, log_residuals=True, require_both_phases=False)
+    common = {"kij_order": 0, "log_residuals": True, "require_both_phases": False}
     with_site = fit_kij_lle("ketone", "water", csv, params, binary_assoc=cross, **common)
     without = fit_kij_lle("ketone", "water", csv, params, **common)
     assert with_site._binary_assoc == cross and without._binary_assoc is None

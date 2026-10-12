@@ -22,11 +22,10 @@ def _load_pure_records(
         combined = []
         for p in params_path:
             combined.extend(json.loads(Path(p).read_text(encoding="utf-8")))
-        tmp = tempfile.NamedTemporaryFile(
+        with tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8"
-        )
-        json.dump(combined, tmp)
-        tmp.close()
+        ) as tmp:
+            json.dump(combined, tmp)
         pure_path = tmp.name
     else:
         pure_path = str(params_path)
@@ -223,7 +222,7 @@ def _is_liquid(state, z_max: float = LIQUID_Z_MAX) -> bool:
     try:
         z = state.pressure() / (state.density * si.RGAS * state.temperature)
         return float(np.asarray(z)) < z_max
-    except Exception:
+    except Exception:  # noqa: BLE001
         # A phase whose Z will not evaluate is not evidence of a liquid.
         return False
 

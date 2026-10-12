@@ -13,7 +13,7 @@ def test_polish_moves_a_point_off_the_front_onto_it():
 
     X = np.array([[1.0], [2.0]])
     F = evaluate(X)[:, :2] + np.array([[0.3, 0.3], [0.3, 0.3]])   # pushed off
-    Xp, Fp = polish_front(X, F, evaluate, [(0.5, 4.0)])
+    _Xp, Fp = polish_front(X, F, evaluate, [(0.5, 4.0)])
     assert np.all(Fp[:, 1] <= F[:, 1] + 1e-9)
     assert np.all(Fp[:, 0] <= F[:, 0] + 1e-9)
     # Closed form: minimising f1 s.t. f2 <= cap on f2 = 1/f1 lands exactly at

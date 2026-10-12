@@ -89,7 +89,7 @@ def _make_core(
         """Return (residuals, jacobian, predictions) or None on failure."""
         try:
             vals, grad, mask = ad_fn(eos_ad, fit_params, row, inp)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             if errors is not None:
                 errors.append(exc)
             return None
@@ -110,7 +110,7 @@ def _make_core(
             vals, grad, mask = feos.Property.vapor_pressure_derivatives(
                 eos_ad, fit_params, row, in_psat
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             if errors is not None:
                 errors.append(exc)
             return _FAIL

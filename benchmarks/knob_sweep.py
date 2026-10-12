@@ -1,7 +1,7 @@
 """Knob sweep for MOEA/D on the water Forte front. Writes CSV + figures +
 fronts.json (every cell's raw front, for rescore.py); draws no conclusions --
-a human reads the figures and gives the verdict (Task 4 is blocked on that
-reading, see .superpowers/sdd/.../task-3-brief.md).
+a human reads the figures and gives the verdict (script added in f219506;
+the committed sweep and its figures are 55fd2f3, benchmarks/knob-sweep/).
 
 One-factor-at-a-time around a fixed baseline (pop_size=80, n_gen=80,
 n_restarts=8, refine=4, objectives=("psat", "rho")) -- not a full factorial:
@@ -62,21 +62,21 @@ CHECKPOINT = OUT / "_checkpoint.csv"
 # simplest thing that round-trips with one json.load().
 FRONTS = OUT / "fronts.json"
 
-BASE = dict(
-    id="water",
-    psat_path=DATA / "psat" / "water.csv",
-    density_path=DATA / "density" / "water.csv",
-    na=1, nb=1, objectives=("psat", "rho"),
-    bounds=[(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
-    pop_size=80, n_gen=80, n_restarts=8, refine=4, verbose=False,
+BASE = {
+    "id": "water",
+    "psat_path": DATA / "psat" / "water.csv",
+    "density_path": DATA / "density" / "water.csv",
+    "na": 1, "nb": 1, "objectives": ("psat", "rho"),
+    "bounds": [(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
+    "pop_size": 80, "n_gen": 80, "n_restarts": 8, "refine": 4, "verbose": False,
     # Pinned, not inherited. Every level in LEVELS passes only its own knob, so
     # they all take the library default for the crossover -- which moved to "de"
     # after this sweep was measured. Without this line the committed
     # water_forte_knobs.csv would not reproduce, and the four one-factor knobs
     # would silently be measured against a different baseline than the one their
     # "*" labels claim. The "variant" block in EXTRA overrides it per level.
-    variant="sbx",
-)
+    "variant": "sbx",
+}
 SEEDS = (101, 202, 303)
 REGION = [(0.0, 3.0), None]  # AARD_psat <= 3%, the region of interest
 
@@ -151,8 +151,8 @@ def _checkpoint_roundtrip_selfcheck() -> None:
 
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "cp.csv"
-        _append_checkpoint(path, dict(knob="k", level="l", seed=1, seconds=1.5, F=[[1.0, 2.0]]))
-        _append_checkpoint(path, dict(knob="k2", level="l2", seed=2, seconds=2.5, F=[[3.0, 4.0]]))
+        _append_checkpoint(path, {"knob": "k", "level": "l", "seed": 1, "seconds": 1.5, "F": [[1.0, 2.0]]})
+        _append_checkpoint(path, {"knob": "k2", "level": "l2", "seed": 2, "seconds": 2.5, "F": [[3.0, 4.0]]})
         loaded = _load_checkpoint(path)
         assert len(loaded) == 2
         assert loaded[("k", "l", 1)] == {"seconds": 1.5, "F": [[1.0, 2.0]]}
@@ -347,13 +347,13 @@ def main() -> None:
             if key in done:
                 cached = done[key]
                 F = np.asarray(cached["F"], dtype=float)
-                runs.append(dict(knob=knob, level=label, seed=seed, F=F, seconds=cached["seconds"]))
+                runs.append({"knob": knob, "level": label, "seed": seed, "F": F, "seconds": cached["seconds"]})
                 print(f"{knob}={label} seed={seed}: {len(F)} pts, {cached['seconds']:.1f}s [checkpoint]")
                 continue
             t0 = time.perf_counter()
             front = fit_pure_pareto(**{**base, **over}, seed=seed)
             dt = time.perf_counter() - t0
-            run = dict(knob=knob, level=label, seed=seed, F=front.F, seconds=dt)
+            run = {"knob": knob, "level": label, "seed": seed, "F": front.F, "seconds": dt}
             runs.append(run)
             _append_checkpoint(CHECKPOINT, {**run, "F": front.F.tolist()})
             print(f"{knob}={label} seed={seed}: {len(front.F)} pts, {dt:.1f}s")
@@ -391,20 +391,20 @@ def main() -> None:
         )
         f.write(
             f"# n_restarts={base['n_restarts']} held constant across every cell "
-            f"(brief baseline is 8; see task-3-report.md for why this run used "
+            f"(baseline is 8, as in the committed sweep 55fd2f3; this run used "
             f"{base['n_restarts']})\n"
         )
         f.write(
             "# every metric column is region-clipped to AARD_psat in [0, 3]% "
             "(AARD_rho unclipped) against one reference front and one ref_point "
-            "shared across the whole sweep -- see task-3-report.md\n"
+            "shared across the whole sweep -- see commit 55fd2f3\n"
         )
         f.write(
             "# objective scale (from one verbose baseline run, not per-cell -- "
-            "see task-3-report.md) is not a column here: it is constant across "
+            "recorded in commit 55fd2f3) is not a column here: it is constant across "
             "restarts of one run to within the reported precision, and per-cell "
-            "values are not reachable without parsing stdout, which the brief "
-            "asked not to build\n"
+            "values are not reachable without parsing stdout, which this script "
+            "deliberately does not build\n"
         )
         f.write("# read with pl.read_csv(path, comment_prefix='#')\n")
         df.write_csv(f)

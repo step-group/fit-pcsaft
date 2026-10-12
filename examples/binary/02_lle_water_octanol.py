@@ -76,7 +76,7 @@ def main() -> None:
                 best_ard = avg_ard
                 best_result = result
                 best_model_name = model_name
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"{model_name:<35} {'FAILED':>37}  ({e})")
 
     print("-" * 75)

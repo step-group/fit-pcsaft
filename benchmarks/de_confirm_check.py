@@ -75,17 +75,17 @@ EXISTING_RUNG_EVALS = 30 * 30 * 3  # pop_size x n_gen x n_restarts of that earli
 # comparison and is left out on purpose.
 EXISTING_LEVEL_MAP = {"sbx*": "sbx", "de-cr1.0": "de-cr1.0"}
 
-BASE = dict(
-    id="water",
-    psat_path=DATA / "psat" / "water.csv",
-    density_path=DATA / "density" / "water.csv",
-    sft_path=DATA / "surface_tension" / "water.csv",  # required: "sft" is an objective
-    na=1, nb=1,
-    objectives=("vle", "sft"),
-    bounds=[(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
-    refine=4,
-    verbose=False,
-)
+BASE = {
+    "id": "water",
+    "psat_path": DATA / "psat" / "water.csv",
+    "density_path": DATA / "density" / "water.csv",
+    "sft_path": DATA / "surface_tension" / "water.csv",  # required: "sft" is an objective
+    "na": 1, "nb": 1,
+    "objectives": ("vle", "sft"),
+    "bounds": [(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
+    "refine": 4,
+    "verbose": False,
+}
 REGION = [(0.0, 5.0), None]  # AAD_vle [%] axis, as in variant_sft_check.py
 
 # --- Part A: budget ladder --------------------------------------------------
@@ -170,8 +170,8 @@ def _checkpoint_roundtrip_selfcheck() -> None:
 
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "cp.csv"
-        _append_checkpoint(path, dict(part="ladder", label="l", seed=1, seconds=1.5, F=[[1.0, 2.0]]))
-        _append_checkpoint(path, dict(part="grid", label="l2", seed=2, seconds=2.5, F=[[3.0, 4.0]]))
+        _append_checkpoint(path, {"part": "ladder", "label": "l", "seed": 1, "seconds": 1.5, "F": [[1.0, 2.0]]})
+        _append_checkpoint(path, {"part": "grid", "label": "l2", "seed": 2, "seconds": 2.5, "F": [[3.0, 4.0]]})
         loaded = _load_checkpoint(path)
         assert len(loaded) == 2
         assert loaded[("ladder", "l", 1)] == {"seconds": 1.5, "F": [[1.0, 2.0]]}

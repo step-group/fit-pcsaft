@@ -30,8 +30,10 @@ def test_camphor_and_carvone_configs_survive_the_refactor_unchanged():
         assert PROBLEMS[name].rescore_cap == (10.0, 10.0)
 
 
-def test_thymol_matches_the_production_fit_in_tesis():
-    """Copied from TESIS analysis/scripts/pure/s04_fit_thymol.py. The point of the
+def test_thymol_matches_the_tesis_fit_as_of_6ca7b6d():
+    """Copied from TESIS analysis/scripts/pure/s04_fit_thymol.py (deleted in TESIS
+    6ca7b6d; same values as pure_fits.SPECS' thymol entry as of that commit, since
+    moved to ("psat","rho","cp") -- so "production" here means then). The point of the
     benchmark is that it measures TESIS's problem and not a convenient neighbour of
     it, so every one of these is checked rather than eyeballed."""
     from benchmarks._problems import PROBLEMS

@@ -99,7 +99,6 @@ def test_kij_polynomial_recovers_trend_despite_outlier():
 def test_make_core_caches_compute_between_fun_and_jac(monkeypatch):
     """scipy calls fun(x) then jac(x) at the same x; that must cost one AD call."""
     import feos
-
     import si_units as si
 
     from fit_pcsaft._pure.jacobian import _make_core
@@ -156,8 +155,8 @@ def test_make_core_caches_compute_between_fun_and_jac(monkeypatch):
 # corrupting a Jacobian.
 # --------------------------------------------------------------------------
 
-_ETHANOL = dict(m=2.3827, sigma=3.1771, epsilon_k=198.24,
-                kappa_ab=0.032384, epsilon_k_ab=2653.4)
+_ETHANOL = {"m": 2.3827, "sigma": 3.1771, "epsilon_k": 198.24,
+                "kappa_ab": 0.032384, "epsilon_k_ab": 2653.4}
 _ETHANOL_ROW = [_ETHANOL["m"], _ETHANOL["sigma"], _ETHANOL["epsilon_k"], 0.0,
                 _ETHANOL["kappa_ab"], _ETHANOL["epsilon_k_ab"], 1.0, 1.0]
 _ASSOC_NAMES = ["m", "sigma", "epsilon_k", "kappa_ab", "epsilon_k_ab"]

@@ -23,3 +23,5 @@ benchmarks/camphor-transfer/_checkpoint.csv
 
 # Git worktrees
 .worktrees/
+
+.DS_Store

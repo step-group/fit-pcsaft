@@ -22,9 +22,7 @@ from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
     _fit_kij_polynomial,
-    _kij_at_T,
     _load_pure_records,
-    _make_binary_jac_fn,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
 from fit_pcsaft._csv import SCHEMA_VLLE, load_csv
@@ -58,7 +56,7 @@ def _predict_vlle_point(
         if x1_I_pred > x1_II_pred:
             x1_I_pred, x1_II_pred = x1_II_pred, x1_I_pred
         return T_pred, x1_I_pred, x1_II_pred, y1_pred
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         if errors is not None:
             errors.append(exc)
         nan = float("nan")
@@ -209,7 +207,7 @@ def fit_kij_vlle(
                 c = 0.5 * float(np.sum(resid_fn([kv]) ** 2))
                 if c < best_cost:
                     best_cost, best_x0 = c, kv
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         try:
@@ -225,7 +223,7 @@ def fit_kij_vlle(
                 T_fitted.append(T_K_i)
                 kij_fitted.append(float(res.x[0]))
                 ard_fitted.append(100.0 * float(np.mean(np.abs(res.fun[:1]))))  # T ARD
-        except Exception:
+        except Exception:  # noqa: BLE001, S112
             continue
 
     if len(T_fitted) == 0:

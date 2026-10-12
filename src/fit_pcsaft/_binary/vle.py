@@ -15,8 +15,8 @@ from fit_pcsaft._binary._utils import (
     _load_pure_records,
     _make_binary_jac_fn,
 )
-from fit_pcsaft._csv import SCHEMA_VLE, load_csv
 from fit_pcsaft._binary.result import BinaryFitResult
+from fit_pcsaft._csv import SCHEMA_VLE, load_csv
 from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 _N_KIJ_SCAN = 13
@@ -157,7 +157,7 @@ def fit_kij_vle(
                     c = 0.5 * float(np.sum(resid_fn([kij_val]) ** 2))
                     if c < best_scan_cost:
                         best_scan_cost, best_x0 = c, kij_val
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
             n_r = 2 if has_y1 else 1
@@ -176,7 +176,7 @@ def fit_kij_vle(
                     kij_fitted.append(float(res.x[0]))
                     cost_fitted.append(100.0 * float(np.mean(np.abs(res.fun))))
                     fitted_point_meta.append((T_csv_i, P_i, x1_i, y1_i))
-            except Exception:
+            except Exception:  # noqa: BLE001, S112
                 continue
 
         if len(T_fitted) == 0:
@@ -201,7 +201,7 @@ def fit_kij_vle(
                     record1, record2, temperature_unit, pressure_unit,
                 )
                 ard_poly.append(100.0 * float(np.mean(np.abs(r))))
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         ard_poly_arr = np.array(ard_poly)
 
@@ -257,7 +257,7 @@ def fit_kij_vle(
         for kij_val in unique_kijs:
             try:
                 eos_map[kij_val] = _build_binary_eos(record1, record2, float(kij_val))
-            except Exception:
+            except Exception:  # noqa: BLE001
                 eos_map[kij_val] = None
 
         r = 0
@@ -276,7 +276,7 @@ def fit_kij_vle(
                     resids[r] = (P_pred - P_i) / P_i
                     if has_y1:
                         resids[r + 1] = float(bp.vapor.molefracs[0]) - float(y1_arr[i])
-                except Exception:
+                except Exception:  # noqa: BLE001
                     resids[r:r + n_r] = 1.0
             r += n_r
         return resids
@@ -310,7 +310,6 @@ def fit_kij_vle(
     P_resids = final_resids[::2] if has_y1 else final_resids
     valid = np.abs(P_resids) < 0.99  # sentinel 1.0 → failed
     P_pred_all = P_arr[valid] * (1.0 + P_resids[valid])
-    P_data_all = P_arr[valid]
 
     if len(P_pred_all) > 0:
         ard = 100.0 * float(np.mean(np.abs(P_resids[valid])))
@@ -371,7 +370,7 @@ def _residuals_vle_point(
         if y1_i is not None:
             resids.append(float(bp.vapor.molefracs[0]) - y1_i)
         return np.array(resids)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         if errors is not None:
             errors.append(exc)
         return penalty

@@ -79,8 +79,8 @@ def _plot(results, path):
                             gridspec_kw={"height_ratios": [1.35, 1.0]})
     top, bot = axes[0], axes[1]
 
-    exp_kw = dict(s=42, marker="o", facecolors="white", edgecolors="#E32F2F",
-                  linewidths=1.2, zorder=5, label="IAPWS")
+    exp_kw = {"s": 42, "marker": "o", "facecolors": "white", "edgecolors": "#E32F2F",
+                  "linewidths": 1.2, "zorder": 5, "label": "IAPWS"}
     top[0].scatter(1000.0 / d.T_psat, np.log(d.p_psat), **exp_kw)
     top[1].scatter(d.rho, d.T_rho, **exp_kw)
     top[2].scatter(d.T_sft, d.sft, **exp_kw)
@@ -90,7 +90,7 @@ def _plot(results, path):
 
     for (label, res, color, ls) in results:
         pd_ = feos.PhaseDiagram.pure(res.eos, float(d.T_psat.min()) * u.temperature, 401)
-        line = dict(color=color, ls=ls, lw=2.0, zorder=4)
+        line = {"color": color, "ls": ls, "lw": 2.0, "zorder": 4}
         top[0].plot(1000.0 / (pd_.vapor.temperature / si.KELVIN),
                     np.log(pd_.vapor.pressure / u.pressure), label=label, **line)
         top[1].plot(pd_.vapor.mass_density / u.density,
@@ -101,8 +101,8 @@ def _plot(results, path):
                     label=label, **line)
 
         preds = _predict_per_property(res.eos, res.compound.mw, d, u, functional=res.functional)
-        pt = dict(color=color, marker="o" if ls == "-" else "s", ms=6, lw=1.4,
-                  ls=ls, label=label, zorder=4)
+        pt = {"color": color, "marker": "o" if ls == "-" else "s", "ms": 6, "lw": 1.4,
+                  "ls": ls, "label": label, "zorder": 4}
         for k, (prop, T) in enumerate((("psat", d.T_psat), ("rho", d.T_rho))):
             model, exp = preds[prop]
             bot[k].plot(T, 100.0 * (model - exp) / exp, **pt)

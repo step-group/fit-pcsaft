@@ -30,14 +30,14 @@ for line in LOG.read_text().splitlines():
     lle_s = p[5].split("=")[1].rstrip("%")
     vle_s = p[6].split("=")[1].rstrip("%")
     rows.append(
-        dict(
-            sys=p[1],
-            water=p[2],
-            scen=p[3],
-            order=int(p[4].split("=")[1]),
-            lle=float(lle_s) if lle_s != "nan" else float("nan"),
-            vle=float(vle_s) if vle_s != "nan" else float("nan"),
-        )
+        {
+            "sys": p[1],
+            "water": p[2],
+            "scen": p[3],
+            "order": int(p[4].split("=")[1]),
+            "lle": float(lle_s) if lle_s != "nan" else float("nan"),
+            "vle": float(vle_s) if vle_s != "nan" else float("nan"),
+        }
     )
 
 df = pd.DataFrame(rows)
@@ -73,13 +73,13 @@ for col, sys in enumerate(SYSTEMS, start=1):
                     x=chunk["lle"],
                     y=chunk["vle"],
                     mode="markers",
-                    marker=dict(
-                        color=SCEN_COLORS[scen],
-                        symbol=ORDER_SYMBOLS[order],
-                        size=9,
-                        opacity=0.85,
-                        line=dict(width=1, color="white"),
-                    ),
+                    marker={
+                        "color": SCEN_COLORS[scen],
+                        "symbol": ORDER_SYMBOLS[order],
+                        "size": 9,
+                        "opacity": 0.85,
+                        "line": {"width": 1, "color": "white"},
+                    },
                     name=f"{scen} ord={order}",
                     legendgroup=f"{scen}_ord{order}",
                     showlegend=show,
@@ -99,7 +99,7 @@ for col, sys in enumerate(SYSTEMS, start=1):
         go.Scatter(
             x=[0.5, ax_max], y=[0.5, ax_max],
             mode="lines",
-            line=dict(color="lightgray", dash="dash", width=1),
+            line={"color": "lightgray", "dash": "dash", "width": 1},
             showlegend=False, hoverinfo="skip",
         ),
         row=1, col=col,
@@ -119,13 +119,13 @@ fig1.update_layout(
     title="LLE vs VLE ARD — all water models, scenarios & orders<br>"
           "<sup>Closer to origin = better overall. Diagonal = equal LLE/VLE quality.</sup>",
     height=520,
-    legend=dict(
-        title="Scenario / Order",
-        orientation="v",
-        x=1.01, y=1,
-    ),
+    legend={
+        "title": "Scenario / Order",
+        "orientation": "v",
+        "x": 1.01, "y": 1,
+    },
     template="plotly_white",
-    font=dict(size=12),
+    font={"size": 12},
 )
 
 # --------------------------------------------------------------------------- #
@@ -189,20 +189,20 @@ for row_idx, sys in enumerate(SYSTEMS, start=1):
                 y=waters,
                 text=text_z,
                 texttemplate="%{text}",
-                textfont=dict(size=9),
+                textfont={"size": 9},
                 colorscale="RdYlGn_r",
                 zmin=np.log10(0.5),
                 zmax=np.log10(CAP),
-                colorbar=dict(
-                    title="ARD %<br>(log)",
-                    tickvals=[np.log10(v) for v in [1, 5, 10, 50, 100, 500]],
-                    ticktext=["1", "5", "10", "50", "100", "500"],
-                    len=0.25,
-                    y=1.0 - (row_idx - 1) * 0.37,
-                    x=1.0 if side == 2 else None,
-                    xanchor="left" if side == 2 else "right",
-                    thickness=12,
-                ) if side == 2 else dict(showticklabels=False, thickness=0),
+                colorbar={
+                    "title": "ARD %<br>(log)",
+                    "tickvals": [np.log10(v) for v in [1, 5, 10, 50, 100, 500]],
+                    "ticktext": ["1", "5", "10", "50", "100", "500"],
+                    "len": 0.25,
+                    "y": 1.0 - (row_idx - 1) * 0.37,
+                    "x": 1.0 if side == 2 else None,
+                    "xanchor": "left" if side == 2 else "right",
+                    "thickness": 12,
+                } if side == 2 else {"showticklabels": False, "thickness": 0},
                 showscale=(side == 2),
                 hovertemplate=(
                     f"<b>%{{y}}</b><br>"
@@ -221,12 +221,12 @@ fig2.update_layout(
           "<sup>Green = low ARD (good), Red = high ARD (bad). Water models sorted best→worst by mean combined score.</sup>",
     height=180 + 270 * len(SYSTEMS),
     template="plotly_white",
-    font=dict(size=10),
+    font={"size": 10},
 )
 for row_idx in range(1, len(SYSTEMS) + 1):
     for col_idx in range(1, 3):
         fig2.update_xaxes(tickangle=-30, row=row_idx, col=col_idx)
-        fig2.update_yaxes(tickfont=dict(size=9), row=row_idx, col=col_idx)
+        fig2.update_yaxes(tickfont={"size": 9}, row=row_idx, col=col_idx)
 
 # --------------------------------------------------------------------------- #
 # Figure 3 — Best-per-system comparison bar chart (top 8 water models)
@@ -254,11 +254,11 @@ for col, sys in enumerate(SYSTEMS, start=1):
                     name=f"ARD {'LLE' if metric=='lle' else 'VLE'} ({scen})",
                     x=chunk["water"],
                     y=chunk[metric].clip(upper=CAP),
-                    marker=dict(
-                        color=SCEN_COLORS[scen],
-                        opacity=opacity,
-                        pattern_shape=pattern,
-                    ),
+                    marker={
+                        "color": SCEN_COLORS[scen],
+                        "opacity": opacity,
+                        "pattern_shape": pattern,
+                    },
                     legendgroup=f"{metric}_{scen}",
                     showlegend=show,
                     hovertemplate=(
@@ -267,7 +267,7 @@ for col, sys in enumerate(SYSTEMS, start=1):
                 ),
                 row=1, col=col,
             )
-    fig3.update_xaxes(tickangle=-45, tickfont=dict(size=9), row=1, col=col)
+    fig3.update_xaxes(tickangle=-45, tickfont={"size": 9}, row=1, col=col)
     fig3.update_yaxes(title_text="ARD (%)", range=[0, CAP], row=1, col=col)
 
 fig3.update_layout(
@@ -275,9 +275,9 @@ fig3.update_layout(
           "<sup>Solid bar = ARD LLE, hatched = ARD VLE. Sorted by best vle+lle combined score.</sup>",
     height=480,
     barmode="group",
-    legend=dict(orientation="h", y=-0.28, x=0),
+    legend={"orientation": "h", "y": -0.28, "x": 0},
     template="plotly_white",
-    font=dict(size=11),
+    font={"size": 11},
 )
 
 # --------------------------------------------------------------------------- #
@@ -286,14 +286,18 @@ fig3.update_layout(
 html_parts = [
     "<html><head><meta charset='utf-8'>",
     "<title>Binary k_ij Fitting Dashboard</title>",
-    "<style>body{font-family:sans-serif;margin:20px;background:#f9f9f9}"
-    "h1{color:#2c3e50}h2{color:#7f8c8d;margin-top:40px}.fig{background:white;"
-    "padding:10px;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.1);margin-bottom:30px}"
-    "</style></head><body>",
+    (
+        "<style>body{font-family:sans-serif;margin:20px;background:#f9f9f9}"
+        "h1{color:#2c3e50}h2{color:#7f8c8d;margin-top:40px}.fig{background:white;"
+        "padding:10px;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.1);margin-bottom:30px}"
+        "</style></head><body>"
+    ),
     "<h1>Binary k_ij Fitting — Water Model Benchmark</h1>",
-    "<p>3 systems &times; 27 water models &times; 3 scenarios (LLE-only, VLE-only, VLE+LLE) "
-    "&times; order 0 &amp; 1. ARD% is evaluated at the fitted polynomial for <em>both</em> "
-    "data types (cross-evaluation for single-type scenarios).</p>",
+    (
+        "<p>3 systems &times; 27 water models &times; 3 scenarios (LLE-only, VLE-only, VLE+LLE) "
+        "&times; order 0 &amp; 1. ARD% is evaluated at the fitted polynomial for <em>both</em> "
+        "data types (cross-evaluation for single-type scenarios).</p>"
+    ),
     "<h2>1 — ARD LLE vs ARD VLE  (log–log scatter)</h2><div class='fig'>",
     fig1.to_html(full_html=False, include_plotlyjs="cdn"),
     "</div><h2>2 — Heatmap: all water models &times; scenarios</h2><div class='fig'>",

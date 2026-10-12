@@ -49,11 +49,11 @@ def test_viscosity_robust_loss_matches_linear_on_clean_data():
     Exercises the real fit path, not a synthetic scipy call. A wrong or noisy
     Jacobian moves the robust optimum away from the OLS solution.
     """
-    kwargs = dict(
-        viscosity_path=DATA / "viscosity" / "hexane_viscosity.csv",
-        name="hexane",
-        groups={"CH3": 2, "CH2": 4},
-    )
+    kwargs = {
+        "viscosity_path": DATA / "viscosity" / "hexane_viscosity.csv",
+        "name": "hexane",
+        "groups": {"CH3": 2, "CH2": 4},
+    }
     ols = fit_viscosity_entropy_scaling(_hexane_params(), loss="linear", **kwargs)
     rob = fit_viscosity_entropy_scaling(
         _hexane_params(), loss="huber", f_scale=10.0, **kwargs

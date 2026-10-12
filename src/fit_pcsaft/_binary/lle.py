@@ -21,8 +21,8 @@ from fit_pcsaft._binary._utils import (
     _lle_split,
     _load_pure_records,
 )
-from fit_pcsaft._csv import SCHEMA_LLE, load_csv
 from fit_pcsaft._binary.result import BinaryFitResult
+from fit_pcsaft._csv import SCHEMA_LLE, load_csv
 from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 # 51 feed compositions, sigmoid-spaced to sample densely near x1=0 and x1=1.
@@ -272,7 +272,7 @@ def fit_kij_lle(
                 c = 0.5 * float(np.sum(residuals([kij_fitted[-1]]) ** 2))
                 if c < penalty_cost:
                     best_x0, best_scan_cost = kij_fitted[-1], c
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         if not np.isfinite(best_scan_cost):
             # Coarse scan for the initial k_ij guess (avoids getting trapped in
@@ -290,7 +290,7 @@ def fit_kij_lle(
             for kij_val in kij_scan[::-1]:
                 try:
                     r = residuals([kij_val])
-                except Exception:
+                except Exception:  # noqa: BLE001, S112
                     continue
                 c = 0.5 * float(np.sum(r ** 2))
                 if c < best_scan_cost:
@@ -321,7 +321,7 @@ def fit_kij_lle(
                 # ARD% = 100 * mean(|relative residuals|)
                 cost_fitted.append(100.0 * float(np.mean(np.abs(res.fun))))
                 fitted_point_meta.append((exp_I, exp_II, feeds))
-        except Exception:
+        except Exception:  # noqa: BLE001, S112
             continue
 
     if len(T_fitted) == 0:
@@ -329,7 +329,6 @@ def fit_kij_lle(
             "No temperatures converged. Try relaxing kij_bounds."
             + _first_error_hint(errors)
         ) from _first_error(errors)
-    effective_order = min(kij_order, len(T_fitted) - 1)
 
     # Stage 2: ARD-weighted polynomial fit to k_ij(T) trend
     T_fitted_arr = np.array(T_fitted)
@@ -362,7 +361,7 @@ def fit_kij_lle(
                 warm=warm,
             )
             ard_poly.append(100.0 * float(np.mean(np.abs(r))))
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
     ard_poly_arr = np.array(ard_poly)
 
@@ -585,7 +584,7 @@ def _residuals_at_T(
             initial = s_a.tp_flash(max_iter=500)
             if warm is not None and n_resid == 2:
                 warm[0] = initial
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             if errors is not None:
                 errors.append(exc)
 
@@ -623,7 +622,7 @@ def _residuals_at_T(
                 resids.append(_comp_resid(pred_II, exp_II, log_residuals,
                                           relative=relative_residuals))
             return np.array(resids)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # The hint stays for the remaining feeds, as the anchor always
             # did. Dropping it after a failure saves ~0.6 ms per feed on an
             # out-of-gap walk but moved 1-hexanol + water_sadowski2008 at

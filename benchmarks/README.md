@@ -1,6 +1,6 @@
 # fit-pcsaft benchmarks
 
-Research sweep: 3 systems × ~27 water models × 3 fitting scenarios (LLE, VLE, VLE+LLE) × 2 k_ij polynomial orders.
+Research sweep: 3 systems × 21 water models × 3 fitting scenarios (LLE, VLE, VLE+LLE) × 2 k_ij polynomial orders.
 
 For each combination, `run_test.py` fits k_ij, then cross-evaluates the fitted polynomial against the *unfitted* data type (e.g. an LLE-fitted k_ij is evaluated against VLE data). Results are written to `run_test.log`.
 
@@ -10,7 +10,7 @@ For each combination, `run_test.py` fits k_ij, then cross-evaluates the fitted p
 
 ```bash
 uv run python benchmarks/run_test.py
-uv run python benchmarks/dashboard.py
+uv run --with plotly python benchmarks/dashboard.py   # plotly is not a project dependency
 ```
 
 ## Notes

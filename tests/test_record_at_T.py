@@ -1,3 +1,4 @@
+# ruff: noqa: N999
 """record_at_T: an opt-in hook that rebuilds a pure record per temperature.
 
 feos holds sigma constant; a water model such as Cameretti & Sadowski (2008)
@@ -11,7 +12,14 @@ from pathlib import Path
 import feos
 import pytest
 import si_units as si
-from fit_pcsaft import fit_kij_henry, fit_kij_lle, fit_kij_sle, fit_kij_vle, fit_kij_vlle
+
+from fit_pcsaft import (
+    fit_kij_henry,
+    fit_kij_lle,
+    fit_kij_sle,
+    fit_kij_vle,
+    fit_kij_vlle,
+)
 from fit_pcsaft._binary._utils import _build_binary_eos
 
 DATA = Path(__file__).parent.parent / "examples" / "data"

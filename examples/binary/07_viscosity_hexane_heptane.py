@@ -127,7 +127,7 @@ def main() -> None:
             ard = abs(eta_p - eta_e) / eta_e * 100
             ard_vals.append(ard)
             print(f"{T:>7.2f}  {x1:>6.2f}  {eta_e*1e3:>12.4f}  {eta_p*1e3:>13.4f}  {ard:>7.2f}")
-        except Exception:
+        except Exception:  # noqa: BLE001
             print(f"{T:>7.2f}  {x1:>6.2f}  {'(failed)':>12}")
 
     if ard_vals:

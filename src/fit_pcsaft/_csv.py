@@ -14,7 +14,6 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-
 # ---------------------------------------------------------------------------
 # Canonical column names and their accepted aliases
 # ---------------------------------------------------------------------------
@@ -152,7 +151,7 @@ SCHEMA_HENRY      = CsvSchema(required=("T", "H"),              name="Henry")
 # Core loader
 # ---------------------------------------------------------------------------
 
-def load_csv(path: "Path | str", schema: CsvSchema) -> dict[str, np.ndarray]:
+def load_csv(path: Path | str, schema: CsvSchema) -> dict[str, np.ndarray]:
     """Load a CSV file, normalise column names, and validate against *schema*.
 
     Parameters
@@ -202,7 +201,7 @@ def load_csv(path: "Path | str", schema: CsvSchema) -> dict[str, np.ndarray]:
             )
         try:
             arr = df[col].cast(pl.Float64).to_numpy()
-        except Exception:
+        except Exception:  # noqa: BLE001
             raise ValueError(
                 f"Column '{col}' in {path} could not be converted to float. "
                 f"Check for non-numeric values."
@@ -240,31 +239,31 @@ def load_csv(path: "Path | str", schema: CsvSchema) -> dict[str, np.ndarray]:
 # Convenience wrappers for pure-component data
 # ---------------------------------------------------------------------------
 
-def load_psat_csv(path: "Path | str") -> tuple[np.ndarray, np.ndarray]:
+def load_psat_csv(path: Path | str) -> tuple[np.ndarray, np.ndarray]:
     """Load a vapor-pressure CSV. Returns ``(T, psat)`` arrays."""
     data = load_csv(path, SCHEMA_PSAT)
     return data["T"], data["psat"]
 
 
-def load_density_csv(path: "Path | str") -> tuple[np.ndarray, np.ndarray]:
+def load_density_csv(path: Path | str) -> tuple[np.ndarray, np.ndarray]:
     """Load a saturated-liquid-density CSV. Returns ``(T, rho)`` arrays."""
     data = load_csv(path, SCHEMA_DENSITY)
     return data["T"], data["rho"]
 
 
-def load_hvap_csv(path: "Path | str") -> tuple[np.ndarray, np.ndarray]:
+def load_hvap_csv(path: Path | str) -> tuple[np.ndarray, np.ndarray]:
     """Load an enthalpy-of-vaporization CSV. Returns ``(T, hvap)`` arrays."""
     data = load_csv(path, SCHEMA_HVAP)
     return data["T"], data["hvap"]
 
 
-def load_sft_csv(path: "Path | str") -> tuple[np.ndarray, np.ndarray]:
+def load_sft_csv(path: Path | str) -> tuple[np.ndarray, np.ndarray]:
     """Load a surface-tension CSV. Returns ``(T, sft)`` arrays."""
     data = load_csv(path, SCHEMA_SFT)
     return data["T"], data["sft"]
 
 
-def load_cp_csv(path: "Path | str") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def load_cp_csv(path: Path | str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load a liquid heat-capacity CSV. Returns ``(T, P, cp)`` arrays.
 
     ``cp`` is the total (not residual) liquid cp. ``P`` is all-NaN when the

@@ -20,7 +20,7 @@ from tqdm import tqdm
 from fit_pcsaft import BinaryKijFitter
 from fit_pcsaft._binary._utils import (
     _apply_induced_association,
-    _build_binary_eos,
+    _kij_at_T,
     _load_pure_records,
 )
 from fit_pcsaft._binary.lle import (
@@ -30,7 +30,6 @@ from fit_pcsaft._binary.lle import (
     _residuals_at_T,
 )
 from fit_pcsaft._binary.vle import _residuals_vle_point
-from fit_pcsaft._binary._utils import _kij_at_T
 from fit_pcsaft._csv import SCHEMA_LLE, SCHEMA_VLE, load_csv
 
 TEST_DIR = Path(__file__).parent
@@ -49,33 +48,33 @@ WATER_MODELS = [r["identifier"]["name"] for r in water_records]
 # System definitions
 # --------------------------------------------------------------------------- #
 SYSTEMS = [
-    dict(
-        name="mibk_water",
-        id1="mibk",
-        vle_path=TEST_DIR / "vle" / "mibk_water.csv",
-        lle_path=TEST_DIR / "lle" / "mibk_water.csv",
-        induced_assoc=True,
-        require_both_phases=False,
-        kij_t_ref=298.15,
-    ),
-    dict(
-        name="2m2boh_water",
-        id1="2-methyl-2-butanol",
-        vle_path=TEST_DIR / "vle" / "2m2boh_water.csv",
-        lle_path=TEST_DIR / "lle" / "2m2boh_water.csv",
-        induced_assoc=False,
-        require_both_phases=False,
-        kij_t_ref=298.15,
-    ),
-    dict(
-        name="2m3b2oh_water",
-        id1="2-methyl-3-buten-2-ol",
-        vle_path=TEST_DIR / "vle" / "2m3b2oh_water.csv",
-        lle_path=TEST_DIR / "lle" / "2m3b2oh_water.csv",
-        induced_assoc=False,
-        require_both_phases=False,
-        kij_t_ref=298.15,
-    ),
+    {
+        "name": "mibk_water",
+        "id1": "mibk",
+        "vle_path": TEST_DIR / "vle" / "mibk_water.csv",
+        "lle_path": TEST_DIR / "lle" / "mibk_water.csv",
+        "induced_assoc": True,
+        "require_both_phases": False,
+        "kij_t_ref": 298.15,
+    },
+    {
+        "name": "2m2boh_water",
+        "id1": "2-methyl-2-butanol",
+        "vle_path": TEST_DIR / "vle" / "2m2boh_water.csv",
+        "lle_path": TEST_DIR / "lle" / "2m2boh_water.csv",
+        "induced_assoc": False,
+        "require_both_phases": False,
+        "kij_t_ref": 298.15,
+    },
+    {
+        "name": "2m3b2oh_water",
+        "id1": "2-methyl-3-buten-2-ol",
+        "vle_path": TEST_DIR / "vle" / "2m3b2oh_water.csv",
+        "lle_path": TEST_DIR / "lle" / "2m3b2oh_water.csv",
+        "induced_assoc": False,
+        "require_both_phases": False,
+        "kij_t_ref": 298.15,
+    },
 ]
 
 SCENARIOS = ["lle", "vle", "vle+lle"]
@@ -127,7 +126,7 @@ def _eval_vle(
             )
             if resid is not None and len(resid) > 0:
                 ards.append(100.0 * float(np.mean(np.abs(resid))))
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 -- solver failure: point skipped
             pass
 
     return float(np.mean(ards)) if ards else float("nan")
@@ -172,7 +171,7 @@ def _eval_lle(
             )
             if resid is not None and len(resid) > 0:
                 ards.append(100.0 * float(np.mean(np.abs(resid))))
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 -- solver failure: point skipped
             pass
 
     return float(np.mean(ards)) if ards else float("nan")
@@ -254,31 +253,31 @@ with tqdm(combos, desc="Fitting", unit="fit", dynamic_ncols=True) as pbar:
                 _log_write(f"  xeval done {tag}  ARD_LLE={ard_lle_fit:.2f}%")
             # for "vle+lle" both are already filled from the fitter
 
-            results.append(dict(
-                system=sys["name"],
-                water=water_name,
-                scenario=scenario,
-                order=order,
-                ard=res.ard,
-                ard_lle=ard_lle_fit,
-                ard_vle=ard_vle_fit,
-                kij0=float(kij_coeffs[0]),
-                kij1=float(kij_coeffs[1]) if len(kij_coeffs) > 1 else float("nan"),
-            ))
+            results.append({
+                "system": sys["name"],
+                "water": water_name,
+                "scenario": scenario,
+                "order": order,
+                "ard": res.ard,
+                "ard_lle": ard_lle_fit,
+                "ard_vle": ard_vle_fit,
+                "kij0": float(kij_coeffs[0]),
+                "kij1": float(kij_coeffs[1]) if len(kij_coeffs) > 1 else float("nan"),
+            })
             _log_write(f"  OK        {tag}  LLE={ard_lle_fit:.2f}%  VLE={ard_vle_fit:.2f}%")
 
-        except Exception as exc:
-            results.append(dict(
-                system=sys["name"],
-                water=water_name,
-                scenario=scenario,
-                order=order,
-                ard=float("nan"),
-                ard_lle=float("nan"),
-                ard_vle=float("nan"),
-                kij0=float("nan"),
-                kij1=float("nan"),
-            ))
+        except Exception as exc:  # noqa: BLE001 -- solver failure recorded as a NaN row
+            results.append({
+                "system": sys["name"],
+                "water": water_name,
+                "scenario": scenario,
+                "order": order,
+                "ard": float("nan"),
+                "ard_lle": float("nan"),
+                "ard_vle": float("nan"),
+                "kij0": float("nan"),
+                "kij1": float("nan"),
+            })
             _log_write(f"  FAIL      {tag}  {exc}")
 
 _log.close()

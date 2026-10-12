@@ -80,7 +80,6 @@ def test_known_values():
     assert m.mae == pytest.approx(20.0)
     # r2: exp varies, residuals are proportional -> r2 = 1 - SS_res/SS_tot
     ss_res = (10.0**2 + 20.0**2 + 30.0**2)
-    e_mean = 200.0
     ss_tot = (100.0 - 200.0)**2 + (200.0 - 200.0)**2 + (300.0 - 200.0)**2
     assert m.r2 == pytest.approx(1.0 - ss_res / ss_tot)
 

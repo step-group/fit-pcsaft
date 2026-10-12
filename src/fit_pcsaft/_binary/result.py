@@ -2,11 +2,15 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import feos
 import numpy as np
 
 from fit_pcsaft._binary._utils import _kij_at_T, _lle_split
+
+if TYPE_CHECKING:
+    import polars as pl
 
 
 @dataclass(frozen=True)
@@ -92,9 +96,9 @@ class BinaryFitResult:
         Assumes CSV data in default units (T in K, P in kPa, H in MPa).
         Rebuild EOS at ``k_ij(T)`` per row for T-dependent polynomials.
         """
+        import feos
         import polars as pl
         import si_units as si
-        import feos
 
         from fit_pcsaft._binary._utils import _build_binary_eos
 
@@ -123,8 +127,8 @@ class BinaryFitResult:
 
         # --- VLE ----------------------------------------------------------
         if "vle" in _tokens:
-            from fit_pcsaft._binary.vle import _bubble_point
             from fit_pcsaft._binary._plot import _normalize_result_for_type
+            from fit_pcsaft._binary.vle import _bubble_point
             vle_data = _normalize_result_for_type(self, "vle").data
             T_arr  = vle_data["T"].astype(float)
             P_arr  = vle_data["P"].astype(float)
@@ -145,7 +149,7 @@ class BinaryFitResult:
                         bp = _bubble_point(eos_i, T, x1, P, tu, pu)
                         P_pred = float(bp.liquid.pressure() / pu)
                         y1_pred = float(bp.vapor.molefracs[0])
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
                 _row("vle_P", T, P, x1, P, P_pred)
                 if y1_arr is not None:
@@ -153,8 +157,8 @@ class BinaryFitResult:
 
         # --- LLE ----------------------------------------------------------
         if "lle" in _tokens:
-            from fit_pcsaft._binary.lle import _LLE_FEEDS, _exp_feeds
             from fit_pcsaft._binary._plot import _normalize_result_for_type
+            from fit_pcsaft._binary.lle import _LLE_FEEDS, _exp_feeds
             lle_data = _normalize_result_for_type(self, "lle").data
             T_arr    = lle_data["T"].astype(float)
             has_xI   = "x1_I"  in lle_data
@@ -195,9 +199,9 @@ class BinaryFitResult:
                                 if split is not None:
                                     x1_I_pred, x1_II_pred = split
                                     break
-                            except Exception:
+                            except Exception:  # noqa: BLE001, S112
                                 continue
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
                 if has_xI:
                     _row("lle_x1_I", T, nan, nan, x1_I_exp, x1_I_pred)
@@ -235,7 +239,7 @@ class BinaryFitResult:
                                 x1_pred = x1_p1
                         else:
                             x1_pred = x1_p1
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
                 _row("sle_x1", T, nan, nan, x1_exp, x1_pred)
 
@@ -250,7 +254,7 @@ class BinaryFitResult:
                     eos_solvent = feos.EquationOfState.pcsaft(
                         feos.Parameters.new_pure(self._solvent_record)
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
             for T, H_exp in zip(T_arr, H_arr):
                 kij = _kij_at_T(self.kij_coeffs, T, self.kij_t_ref)
@@ -271,14 +275,14 @@ class BinaryFitResult:
                             H_pred = H_pa / (vp[0] / si.PASCAL)
                         else:
                             H_pred = H_pa / (si.MEGA * si.PASCAL / si.PASCAL)
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
                 _row("henry_H", T, nan, nan, H_exp, H_pred)
 
         # --- VLLE ---------------------------------------------------------
         if "vlle" in _tokens:
-            from fit_pcsaft._binary.vlle import _predict_vlle_point
             from fit_pcsaft._binary._plot import _normalize_result_for_type
+            from fit_pcsaft._binary.vlle import _predict_vlle_point
             if self._record_at_T is not None:
                 # T is the unknown of a heteroazeotrope, so there is no
                 # temperature to build the records at.
@@ -385,20 +389,17 @@ class BinaryFitResult:
         include_unfitted : bool
             If True, also write the k_ij=0 predictive model curve.
         """
+        import feos
         import polars as pl
         import si_units as si
-
-        import feos
 
         from fit_pcsaft._binary._plot import (
             _eos_at,
             _find_eutectic,
-            _find_heteroazeotrope,
             _lle_curve_kij_T,
             _lle_feed_z1,
             _normalize_result_for_type,
             _sle_fixed_point,
-            _vle_branch_isobaric,
             _vlle_locus,
         )
 
@@ -409,7 +410,7 @@ class BinaryFitResult:
                 from fit_pcsaft._binary._utils import _build_binary_eos as _beos
                 return _beos(self._record1, self._record2, 0.0, self._binary_assoc,
                              T_K=self.kij_t_ref, record_at_T=self._record_at_T)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 return None
 
         path = Path(path)
@@ -456,7 +457,7 @@ class BinaryFitResult:
                         T_out.extend((vle.liquid.temperature / si.KELVIN).tolist())
                         x1_b_out.extend(vle.liquid.molefracs[:, 0].tolist())
                         x1_d_out.extend(vle.vapor.molefracs[:, 0].tolist())
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
                 return {"T": T_out, "x1_bubble": x1_b_out, "x1_dew": x1_d_out}
 
@@ -501,14 +502,14 @@ class BinaryFitResult:
                         x1 = _sle_fixed_point(_eos_at(result_obj, T_i), T_i, Tm_K, dHfus_J, solid_idx, x0_eut)
                         if not np.isnan(x1) and 0.0 <= x1 <= 1.0:
                             T1_out.append(float(T_i)); x1_out_1.append(x1)
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
                 for T_i in np.linspace(T_start, Tm2_K, 120):
                     try:
                         x1 = _sle_fixed_point(_eos_at(result_obj, T_i), T_i, Tm2_K, dHfus2_J, si_idx2, x0_eut)
                         if not np.isnan(x1) and 0.0 <= x1 <= 1.0:
                             T2_out.append(float(T_i)); x1_out_2.append(x1)
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
                 T_all  = T1_out  + T2_out
                 x1_all = x1_out_1 + x1_out_2
@@ -521,7 +522,7 @@ class BinaryFitResult:
                         x1 = _sle_fixed_point(_eos_at(result_obj, T_i), T_i, Tm_K, dHfus_J, solid_idx, x0)
                         if not np.isnan(x1) and 0.0 <= x1 <= 1.0:
                             T_out.append(float(T_i)); x1_out.append(x1); x0 = x1
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
                 return {"T": T_out, "x1": x1_out}
 
@@ -582,7 +583,7 @@ class BinaryFitResult:
                     eos_solvent = feos.EquationOfState.pcsaft(
                         feos.Parameters.new_pure(self._solvent_record)
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
             H_model = []
             for T_i in T_grid:
@@ -599,7 +600,7 @@ class BinaryFitResult:
                         H_model.append(H_pa / (vp[0] / si.PASCAL))
                     else:
                         H_model.append(H_pa / (si.MEGA * si.PASCAL / si.PASCAL))
-                except Exception:
+                except Exception:  # noqa: BLE001
                     H_model.append(float("nan"))
             _write_model({"T": T_grid.tolist(), "H": H_model})
 
@@ -714,9 +715,6 @@ class BinaryFitResult:
         if len(self.kij_coeffs) > 1:
             lines.append(f"  T_ref:               {self.kij_t_ref:.2f} K")
 
-        n = sum(len(v) for v in self.data.values() if hasattr(v, "__len__")) // max(
-            1, len(self.data)
-        )
         rms = np.sqrt(2.0 * self.scipy_result.cost / max(1, len(self.scipy_result.fun)))
         lines.extend(["", "Fitting quality:"])
         if "ard_vle" in self.data and "ard_lle" in self.data:

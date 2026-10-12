@@ -62,17 +62,17 @@ CHECKPOINT = OUT / "_checkpoint.csv"
 # "variant" here since there is only one.
 FRONTS = OUT / "fronts.json"
 
-BASE = dict(
-    id="water",
-    psat_path=DATA / "psat" / "water.csv",
-    density_path=DATA / "density" / "water.csv",
-    sft_path=DATA / "surface_tension" / "water.csv",  # required: "sft" is an objective
-    na=1, nb=1,
-    objectives=("vle", "sft"),
-    bounds=[(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
-    pop_size=30, n_gen=30, n_restarts=3, refine=4,
-    verbose=False,
-)
+BASE = {
+    "id": "water",
+    "psat_path": DATA / "psat" / "water.csv",
+    "density_path": DATA / "density" / "water.csv",
+    "sft_path": DATA / "surface_tension" / "water.csv",  # required: "sft" is an objective
+    "na": 1, "nb": 1,
+    "objectives": ("vle", "sft"),
+    "bounds": [(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
+    "pop_size": 30, "n_gen": 30, "n_restarts": 3, "refine": 4,
+    "verbose": False,
+}
 SEEDS = (101, 202, 303)
 LEVELS = {  # level label -> fit_pure_pareto kwarg overrides; baseline marked with *
     # Explicit, not inherited: the library default moved to "de" after this ran.
@@ -126,8 +126,8 @@ def _checkpoint_roundtrip_selfcheck() -> None:
 
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "cp.csv"
-        _append_checkpoint(path, dict(knob="k", level="l", seed=1, seconds=1.5, F=[[1.0, 2.0]]))
-        _append_checkpoint(path, dict(knob="k2", level="l2", seed=2, seconds=2.5, F=[[3.0, 4.0]]))
+        _append_checkpoint(path, {"knob": "k", "level": "l", "seed": 1, "seconds": 1.5, "F": [[1.0, 2.0]]})
+        _append_checkpoint(path, {"knob": "k2", "level": "l2", "seed": 2, "seconds": 2.5, "F": [[3.0, 4.0]]})
         loaded = _load_checkpoint(path)
         assert len(loaded) == 2
         assert loaded[("k", "l", 1)] == {"seconds": 1.5, "F": [[1.0, 2.0]]}
@@ -211,13 +211,13 @@ def main() -> None:
             if key in done:
                 cached = done[key]
                 F = np.asarray(cached["F"], dtype=float)
-                runs.append(dict(knob=knob, level=label, seed=seed, F=F, seconds=cached["seconds"]))
+                runs.append({"knob": knob, "level": label, "seed": seed, "F": F, "seconds": cached["seconds"]})
                 print(f"{label} seed={seed}: {len(F)} pts, {cached['seconds']:.1f}s [checkpoint]")
                 continue
             t0 = time.perf_counter()
             front = fit_pure_pareto(**{**BASE, **over}, seed=seed)
             dt = time.perf_counter() - t0
-            run = dict(knob=knob, level=label, seed=seed, F=front.F, seconds=dt)
+            run = {"knob": knob, "level": label, "seed": seed, "F": front.F, "seconds": dt}
             runs.append(run)
             _append_checkpoint(CHECKPOINT, {**run, "F": front.F.tolist()})
             print(f"{label} seed={seed}: {len(front.F)} pts, {dt:.1f}s")

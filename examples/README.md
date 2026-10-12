@@ -41,15 +41,15 @@ examples/data/
   vle_lle/       — combined VLE+LLE and VLLE CSVs
   viscosity/     — viscosity CSVs  (T [K], P [MPa], eta [Pa·s])
   parameters/    — feos-compatible JSON parameter files
-    examples_pure.json   — pure records written by the pure/ examples
-    binary_params.json   — binary k_ij records + water and solvent models
-    water_models.json    — 27 PC-SAFT water parameter sets
+    examples_pure.json   — pure records (mibk, 2-methyl-2-butanol) read by binary/05 and 06
+    binary_params.json   — pure records (water and solvents) read by the binary/ examples
+    water_models.json    — 21 PC-SAFT water parameter sets
     alkanols_lle.json    — alkanol records used by the LLE sweep examples
 ```
 
 ## Output layout
 
-`examples/out/` holds curated results checked into git. Running any example
+`examples/out/` is gitignored; some curated results are tracked anyway. Running any example
 regenerates the corresponding PNG(s) and writes/updates the shared JSON files
 (`examples_pure.json`, `binary_kij.json`) via upsert — running multiple
 examples accumulates all results in the same files without overwriting.

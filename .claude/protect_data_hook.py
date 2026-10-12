@@ -1,4 +1,6 @@
-import sys, json, re
+import json
+import re
+import sys
 
 d = json.load(sys.stdin)
 p = d.get("tool_input", {}).get("file_path", "")

@@ -45,8 +45,10 @@ about carvone's parameters.
 Budget ladder x 2 operators x 3 seeds, ``objectives=("psat", "rho")`` (Forte
 et al. 2018) -- no surface-tension data exists for camphor, so the default
 ``("vle", "sft")`` pair isn't available. ~3.7 ms/eval in this mode
-(``fit_pure_pareto``'s own docstring, single-core) makes the whole ladder
-cheap; see ``_print_cost_estimate``.
+(``fit_pure_pareto``'s docstring at the time, single-core -- the pre-batching
+figure the committed camphor/carvone runs were costed with; since ceaf89f the
+search is batched in-process at ~0.108 ms/eval, ``_problems._MS_FORTE``) makes
+the whole ladder cheap; see ``_print_cost_estimate``.
 
 **bounds=None.** Camphor fits only [m, sigma, epsilon_k] (mu fixed, non-
 associating), so the bounds list must have exactly 3 entries, not water's 5.
@@ -110,9 +112,9 @@ import polars as pl
 # why the tests pass either way -- put it on the path here so both work.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmarks._problems import PROBLEMS, requested  # noqa: E402
-from fit_pcsaft import fit_pure_pareto  # noqa: E402
-from fit_pcsaft._pure.front_quality import front_metrics, reference_front  # noqa: E402
+from benchmarks._problems import PROBLEMS, requested
+from fit_pcsaft import fit_pure_pareto
+from fit_pcsaft._pure.front_quality import front_metrics, reference_front
 
 REPO = Path(__file__).parent.parent
 DATA = REPO / "examples" / "data"
@@ -181,10 +183,11 @@ REGION = None  # see module docstring
 
 _SEED_MARKERS = {SEEDS[0]: "o", SEEDS[1]: "s", SEEDS[2]: "^"}
 
-# Per-problem, from the registry: ("psat","rho") is ~3.69 ms/eval single-core
-# (fit_pure_pareto's own docstring) while ("vle","sft") measured ~17 ms/eval wall
-# under the pool on this machine. Mixing the two would put the cost estimate an
-# order of magnitude out on whichever problem it was not written for.
+# Per-problem, from the registry: ("psat","rho") is ~0.108 ms/eval batched in-process
+# (fit_pure_pareto's own docstring, since ceaf89f; ~3.69 single-core before) while
+# ("vle","sft") measured ~17 ms/eval wall under the pool on this machine. Mixing the
+# two would put the cost estimate two orders of magnitude out on whichever problem
+# it was not written for.
 MS_PER_EVAL = PROBLEM.ms_per_eval
 
 
@@ -234,8 +237,8 @@ def _checkpoint_roundtrip_selfcheck() -> None:
 
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "cp.csv"
-        _append_checkpoint(path, dict(op="sbx", rung="2.7k", seed=101, seconds=1.5, F=[[1.0, 2.0]]))
-        _append_checkpoint(path, dict(op="de-cr1.0", rung="10.8k", seed=202, seconds=2.5, F=[[3.0, 4.0]]))
+        _append_checkpoint(path, {"op": "sbx", "rung": "2.7k", "seed": 101, "seconds": 1.5, "F": [[1.0, 2.0]]})
+        _append_checkpoint(path, {"op": "de-cr1.0", "rung": "10.8k", "seed": 202, "seconds": 2.5, "F": [[3.0, 4.0]]})
         loaded = _load_checkpoint(path)
         assert len(loaded) == 2
         assert loaded[("sbx", "2.7k", 101)] == {"seconds": 1.5, "F": [[1.0, 2.0]]}
@@ -252,14 +255,14 @@ def _print_cost_estimate() -> None:
         f"planned: {len(all_cells)} cells ({len(OPS)} ops x {len(LADDER)} rungs x "
         f"{len(SEEDS)} seeds), {total_evals} evaluations total"
     )
-    # The two rates have different bases -- the Forte one is single-core from
-    # fit_pure_pareto's docstring, the ("vle","sft") one is measured wall time
+    # The two rates have different bases -- the Forte one is batched in-process,
+    # from fit_pure_pareto's docstring, the ("vle","sft") one is measured wall time
     # under the pool -- so say which, rather than print a number that is right
     # by a factor of ten on one of them.
     basis = (
         "measured wall under the pool"
         if "sft" in BASE["objectives"]
-        else "single-core, fit_pure_pareto's own docstring; wall time lower under n_jobs=-1"
+        else "batched in-process, fit_pure_pareto's own docstring; n_jobs is a no-op here"
     )
     print(
         f"cost estimate (~{MS_PER_EVAL * 1000:.2f} ms/eval, {basis}): "

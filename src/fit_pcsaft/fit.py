@@ -6,10 +6,10 @@ from fit_pcsaft._binary.vle import fit_kij_vle
 from fit_pcsaft._pure.fit import eval_pure, fit_pure, fit_pure_de
 
 __all__ = [
-    "fit_pure",
-    "fit_pure_de",
     "eval_pure",
-    "fit_kij_vle",
     "fit_kij_lle",
     "fit_kij_sle",
+    "fit_kij_vle",
+    "fit_pure",
+    "fit_pure_de",
 ]

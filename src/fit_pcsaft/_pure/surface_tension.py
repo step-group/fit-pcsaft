@@ -68,7 +68,7 @@ def predict_surface_tension(functional, T_vals, units, options=None) -> np.ndarr
             out[i] = float(gamma / su)
         except (KeyboardInterrupt, SystemExit):
             raise
-        except BaseException:
+        except BaseException:  # noqa: BLE001, S112
             continue
 
     # gamma -> 0 at the critical point and feos can return a tiny negative

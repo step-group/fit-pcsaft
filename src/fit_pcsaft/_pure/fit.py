@@ -135,10 +135,10 @@ def _setup_pure_fit(
     psat_path,
     density_path,
     hvap_path,
-    mu: Optional[float],
+    mu: float | None,
     q: float,
-    na: Optional[int],
-    nb: Optional[int],
+    na: int | None,
+    nb: int | None,
     psat_weight: float,
     density_weight: float,
     hvap_weight: float,
@@ -281,12 +281,12 @@ def fit_pure(
     id: str,
     psat_path: Path | str,
     density_path: Path | str,
-    hvap_path: Optional[Path | str] = None,
-    sft_path: Optional[Path | str] = None,
-    mu: Optional[float] = 0.0,
+    hvap_path: Path | str | None = None,
+    sft_path: Path | str | None = None,
+    mu: float | None = 0.0,
     q: float = 0.0,
-    na: Optional[int] = None,
-    nb: Optional[int] = None,
+    na: int | None = None,
+    nb: int | None = None,
     psat_weight: float = 3.0,
     density_weight: float = 2.0,
     hvap_weight: float = 1.0,
@@ -300,11 +300,11 @@ def fit_pure(
     enthalpy_unit: si.SIObject = si.KILO * si.JOULE / si.MOL,
     surface_tension_unit: si.SIObject = si.MILLI * si.NEWTON / si.METER,
     sft_options=None,
-    scipy_kwargs: Optional[dict] = None,
+    scipy_kwargs: dict | None = None,
 ) -> FitResult:
     """Fit PC-SAFT parameters to vapor pressure and liquid density data.
 
-    Uses sequential multi-start optimization with 6 initial parameter sets.
+    Uses sequential multi-start optimization with 6 initial parameter sets (12 when associating).
 
     Arguments
     ---------
@@ -360,7 +360,7 @@ def fit_pure(
     -------
         FitResult: Fitted parameters, EOS, and fitting quality metrics
     """
-    data, compound, spec, units, config, cost_fn, jac_fn, errors, fit_mu, is_associative = (
+    data, compound, spec, units, _config, cost_fn, jac_fn, errors, fit_mu, is_associative = (
         _setup_pure_fit(
             id=id,
             psat_path=psat_path,
@@ -415,7 +415,7 @@ def fit_pure(
         try:
             res = least_squares(cost_fn, np.sqrt(x0i), jac=jac_fn, **ls_kwargs)
             results.append(res)
-        except Exception:
+        except Exception:  # noqa: BLE001, S112
             continue
 
     if not results:
@@ -459,12 +459,12 @@ def fit_pure_de(
     id: str,
     psat_path: Path | str,
     density_path: Path | str,
-    hvap_path: Optional[Path | str] = None,
-    sft_path: Optional[Path | str] = None,
-    mu: Optional[float] = 0.0,
+    hvap_path: Path | str | None = None,
+    sft_path: Path | str | None = None,
+    mu: float | None = 0.0,
     q: float = 0.0,
-    na: Optional[int] = None,
-    nb: Optional[int] = None,
+    na: int | None = None,
+    nb: int | None = None,
     psat_weight: float = 3.0,
     density_weight: float = 2.0,
     hvap_weight: float = 1.0,
@@ -472,14 +472,14 @@ def fit_pure_de(
     extrapolate_psat: bool = False,
     loss: str = "linear",
     f_scale: "float | dict | None" = None,
-    bounds: Optional[list] = None,
+    bounds: list | None = None,
     pressure_unit: si.SIObject = si.KILO * si.PASCAL,
     temperature_unit: si.SIObject = si.KELVIN,
     density_unit: si.SIObject = si.KILOGRAM / (si.METER**3),
     enthalpy_unit: si.SIObject = si.KILO * si.JOULE / si.MOL,
     surface_tension_unit: si.SIObject = si.MILLI * si.NEWTON / si.METER,
     sft_options=None,
-    de_kwargs: Optional[dict] = None,
+    de_kwargs: dict | None = None,
 ) -> FitResult:
     """Fit PC-SAFT parameters using differential evolution (global optimizer).
 
@@ -646,10 +646,10 @@ def eval_pure(
     hvap_path: Optional["Path | str"] = None,
     sft_path: Optional["Path | str"] = None,
     cp_path: Optional["Path | str"] = None,
-    cp_ig: Optional[list] = None,
+    cp_ig: list | None = None,
     q: float = 0.0,
-    na: Optional[int] = None,
-    nb: Optional[int] = None,
+    na: int | None = None,
+    nb: int | None = None,
     pressure_unit: "si.SIObject" = si.KILO * si.PASCAL,
     temperature_unit: "si.SIObject" = si.KELVIN,
     density_unit: "si.SIObject" = si.KILOGRAM / (si.METER**3),

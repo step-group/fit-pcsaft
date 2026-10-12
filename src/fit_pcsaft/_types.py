@@ -1,7 +1,6 @@
 """Domain dataclasses for fit-pcsaft."""
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 import si_units as si
@@ -31,9 +30,9 @@ class Compound:
 
 @dataclass
 class ModelSpec:
-    mu: Optional[float] = 0.0  # None = fit it
-    na: Optional[int] = None
-    nb: Optional[int] = None
+    mu: float | None = 0.0  # None = fit it
+    na: int | None = None
+    nb: int | None = None
     q: float = 0.0
 
 

@@ -24,14 +24,14 @@ def _pressure_label(pu) -> str:
 
 
 def _scatter_kw(color: str, marker: str = "o") -> dict:
-    return dict(
-        s=40,
-        marker=marker,
-        facecolors="white",
-        edgecolors=color,
-        linewidths=1.2,
-        zorder=5,
-    )
+    return {
+        "s": 40,
+        "marker": marker,
+        "facecolors": "white",
+        "edgecolors": color,
+        "linewidths": 1.2,
+        "zorder": 5,
+    }
 
 
 def _curve_plot(ax, x_arr, y_arr, fit_min_K, fit_max_K, y_is_T: bool, **line_kw):
@@ -189,8 +189,6 @@ def _lle_feed_z1(result) -> float:
 
 def _build_eos_kij0(result):
     """Return a new EOS with k_ij=0.0, or None if the parameters are unavailable."""
-    import feos
-
     if result._record1 is None or result._record2 is None:
         return None
     from fit_pcsaft._binary._utils import _build_binary_eos
@@ -199,7 +197,7 @@ def _build_eos_kij0(result):
         return _build_binary_eos(
             result._record1, result._record2, 0.0, getattr(result, "_binary_assoc", None)
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -265,7 +263,7 @@ def _plot_vle(
                 linestyle="-",
                 label="PC-SAFT (dew)",
             )
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
         if plot_unfitted:
@@ -289,7 +287,7 @@ def _plot_vle(
                         color=_PRED_COLOR,
                         linestyle="--",
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
         if unused_mask.any():
@@ -355,7 +353,7 @@ def _plot_vle(
                     linestyle=ls,
                     alpha=alpha,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
             iso_mask_full = np.abs(T_data_full - T_iso) < 0.6
@@ -470,7 +468,7 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
                     density_initialization="liquid",
                 )
                 anchor_pe = s_a.tp_flash(max_iter=500)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         pe = None
@@ -489,7 +487,7 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
                 if split is not None:
                     pe, pe_split = candidate, split
                     break
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         if pe is not None:
@@ -796,12 +794,11 @@ def _find_eutectic(result, Tm1, dHfus1, si_idx1, Tm2, dHfus2, si_idx2):
         T_eut = brentq(diff, *bracket, xtol=1e-4)
         x1_eut = _sle_fixed_point(_eos_at(result, T_eut), T_eut, Tm1, dHfus1, si_idx1, 0.5)
         return T_eut, x1_eut
-    except Exception:
+    except Exception:  # noqa: BLE001
         return float("nan"), float("nan")
 
 
 def _plot_sle(result, path, temperature_unit):
-    import feos
     import matplotlib.pyplot as plt
     import seaborn as sns
 
@@ -821,7 +818,6 @@ def _plot_sle(result, path, temperature_unit):
     dHfus2_J = result.delta_hfus2_J
     solid_index2 = 1 - solid_index
 
-    T_min = float(T_data.min())
     T_full = result.data_full["T"].astype(float) * t_scale
 
     fit_min_K = result.t_filter_min_K
@@ -854,7 +850,7 @@ def _plot_sle(result, path, temperature_unit):
                         x1_curve.append(x1)
                         T_curve.append(T_i)
                         x0 = x1
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
             if x1_curve:
                 _curve_plot(
@@ -899,7 +895,7 @@ def _plot_sle(result, path, temperature_unit):
                     x1_curve.append(x1)
                     T_curve.append(T_i)
                     x0 = x1
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         if x1_curve:
             _curve_plot(
@@ -999,7 +995,7 @@ def _plot_henry(result, path, temperature_unit, henry_unit):
                 return H_pa / pvap
             else:
                 return H_pa / (henry_unit / si.PASCAL)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     T_min, T_max = float(T_data.min()), float(T_data.max())
@@ -1115,7 +1111,7 @@ def _find_heteroazeotrope(result, pressure_si, x_I_init: float, x_II_init: float
         if x1_liq_I > x1_liq_II:
             x1_liq_I, x1_liq_II = x1_liq_II, x1_liq_I
         return T_het, x1_liq_I, x1_liq_II, y1_vap
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -1158,7 +1154,7 @@ def _vle_branch_isobaric(
             x1_out.append(x1)
             T_out.append(T_K)
             y1_out.append(y1)
-        except Exception:
+        except Exception:  # noqa: BLE001
             break
 
     return x1_out, T_out, y1_out
@@ -1237,7 +1233,7 @@ def _plot_vle_lle(
 
     # ---- VLE computed curves (only for isobaric data) -------------------------
     if is_isobaric and ha is not None:
-        T_het, x1_I_het, x1_II_het, y1_het = ha
+        T_het, x1_I_het, x1_II_het, _y1_het = ha
 
         # Bubble + dew curves: each arm returns (x1_bubble, T, y1_dew) via
         # isobaric bubble_point (pressure first → finds bubble temperature).
@@ -1320,8 +1316,8 @@ def _plot_vle_lle(
                    label=r"Exp. VLE $y_1$", **_scatter_kw(_EXP_COLOR_2, "^"))
 
     # ---- Scatter: LLE ----------------------------------------------------------
-    _lle_kw_I  = dict(s=40, marker="s", facecolors="white", edgecolors="#8B4513", linewidths=1.2, zorder=5)
-    _lle_kw_II = dict(s=40, marker="D", facecolors="white", edgecolors="#2E8B57", linewidths=1.2, zorder=5)
+    _lle_kw_I  = {"s": 40, "marker": "s", "facecolors": "white", "edgecolors": "#8B4513", "linewidths": 1.2, "zorder": 5}
+    _lle_kw_II = {"s": 40, "marker": "D", "facecolors": "white", "edgecolors": "#2E8B57", "linewidths": 1.2, "zorder": 5}
     if has_I:
         x_I_arr = data["lle_x1_I"].astype(float)
         valid = ~np.isnan(x_I_arr)
@@ -1333,7 +1329,7 @@ def _plot_vle_lle(
 
     # ---- Scatter: VLLE (three-phase experimental points) ----------------------
     if has_vlle:
-        _vlle_kw = dict(s=60, marker="*", color="#9400D3", zorder=6)
+        _vlle_kw = {"s": 60, "marker": "*", "color": "#9400D3", "zorder": 6}
         if vlle_x1_I is not None:
             ax.scatter(vlle_x1_I, vlle_T_arr, label="Exp. VLLE phase I", **_vlle_kw)
         if vlle_x1_II is not None:
@@ -1407,7 +1403,7 @@ def _vlle_locus(
 
     T_out, xI_out, xII_out, y1_out = [], [], [], []
     # Last two successful (T, ln P) pairs for extrapolation when warm-start fails.
-    _prev_ok: "list[tuple[float, float]]" = []
+    _prev_ok: list[tuple[float, float]] = []
 
     for P_si in P_arr_si:
         T_guess = T_K if not np.isnan(T_K) else T_init
@@ -1415,7 +1411,7 @@ def _vlle_locus(
         x_II_g = x_II if not np.isnan(x_II) else x_II_init
 
         # Build candidate T guesses: warm-start first, then extrapolation + T_init.
-        T_candidates: "list[float]" = [T_guess]
+        T_candidates: list[float] = [T_guess]
         if len(_prev_ok) >= 2:
             T1, lnP1 = _prev_ok[-1]
             T2, lnP2 = _prev_ok[-2]
@@ -1450,7 +1446,7 @@ def _vlle_locus(
                     _prev_ok.pop(0)
                 success = True
                 break
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         if success:
@@ -1494,7 +1490,6 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
     p_lbl = _pressure_label(pressure_unit)
 
     # --- Experimental VLLE data ----------------------------------------------
-    vlle_key = "vlle_T" if "vlle_T" in data else "T"
     vlle_prefix = "vlle_" if "vlle_T" in data else ""
     T_exp = data[vlle_prefix + "T"].astype(float) * t_scale
     P_exp = data[vlle_prefix + "P"].astype(float)
@@ -1538,12 +1533,12 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
 
     # --- Colors / markers ----------------------------------------------------
     _color_vap = "#2ca02c"
-    _kw_I   = dict(s=45, marker="o", facecolors="white",
-                   edgecolors=_EXP_COLOR_1, linewidths=1.2, zorder=5)
-    _kw_II  = dict(s=45, marker="s", facecolors="white",
-                   edgecolors=_EXP_COLOR_2, linewidths=1.2, zorder=5)
-    _kw_vap = dict(s=45, marker="^", facecolors="white",
-                   edgecolors=_color_vap, linewidths=1.2, zorder=5)
+    _kw_I   = {"s": 45, "marker": "o", "facecolors": "white",
+                   "edgecolors": _EXP_COLOR_1, "linewidths": 1.2, "zorder": 5}
+    _kw_II  = {"s": 45, "marker": "s", "facecolors": "white",
+                   "edgecolors": _EXP_COLOR_2, "linewidths": 1.2, "zorder": 5}
+    _kw_vap = {"s": 45, "marker": "^", "facecolors": "white",
+                   "edgecolors": _color_vap, "linewidths": 1.2, "zorder": 5}
 
     # --- Figure: two panels --------------------------------------------------
     fig, (ax_T, ax_P) = plt.subplots(1, 2, figsize=(15, 5))
@@ -1597,7 +1592,7 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
             _xII_pred = np.interp(_P_exp_pa[_ok], _P_s, _xII_s)
             _y1_pred  = np.interp(_P_exp_pa[_ok], _P_s, _y1_s)
             _T_ok     = T_exp[_ok]
-            _kw_mp = dict(zorder=7, alpha=0.75)
+            _kw_mp = {"zorder": 7, "alpha": 0.75}
             _first_lbl = "PC-SAFT (at exp. $p$)"
             if has_xI:
                 ax_T.scatter(_xI_pred, _T_ok, s=35, marker="o",

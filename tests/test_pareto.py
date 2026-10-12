@@ -208,7 +208,7 @@ def test_psat_rho_sft_is_a_supported_triple():
     is. This key exposes both. It routes to the DFT evaluator, not the batched
     one -- gamma is in it, whatever else is.
     """
-    from fit_pcsaft._pure.pareto import _argmin_scalarized, _batched, _DEFAULT_REFS
+    from fit_pcsaft._pure.pareto import _DEFAULT_REFS, _argmin_scalarized, _batched
     from fit_pcsaft._types import ModelSpec
 
     triple = ("psat", "rho", "sft")
@@ -656,16 +656,16 @@ def test_de_variant_is_reproducible():
     from fit_pcsaft import fit_pure_pareto
 
     d = Path(__file__).parent.parent / "examples" / "data"
-    kwargs = dict(
-        id="water",
-        psat_path=d / "psat" / "water.csv",
-        density_path=d / "density" / "water.csv",
-        na=1, nb=1,
-        objectives=("psat", "rho"),
-        bounds=[(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
-        pop_size=20, n_gen=10, n_restarts=1, refine=0,
-        seed=7, variant="de", n_jobs=1, verbose=False,
-    )
+    kwargs = {
+        "id": "water",
+        "psat_path": d / "psat" / "water.csv",
+        "density_path": d / "density" / "water.csv",
+        "na": 1, "nb": 1,
+        "objectives": ("psat", "rho"),
+        "bounds": [(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
+        "pop_size": 20, "n_gen": 10, "n_restarts": 1, "refine": 0,
+        "seed": 7, "variant": "de", "n_jobs": 1, "verbose": False,
+    }
     r1 = fit_pure_pareto(**kwargs)
     r2 = fit_pure_pareto(**kwargs)
     assert r1.X.shape == r2.X.shape
@@ -809,7 +809,7 @@ def test_merge_drops_a_run_that_is_entirely_behind_another():
     good = (np.array([[1.0, 2.0, 3.0]]), np.array([[1.0, 1.0]]))
     behind = (np.array([[9.0, 9.0, 9.0], [8.0, 8.0, 8.0]]),
               np.array([[5.0, 5.0], [6.0, 4.0]]))
-    X, F = _merge_fronts([good, behind])
+    _X, F = _merge_fronts([good, behind])
 
     assert F.tolist() == [[1.0, 1.0]]
 
@@ -1165,7 +1165,7 @@ def test_polished_front_is_densified_again_and_sorted(monkeypatch, refine):
     from fit_pcsaft._pure import fit as fit_mod
     from fit_pcsaft._pure import pareto, polish
 
-    data, water = _water_data()
+    _data, water = _water_data()
     calls = []
     real_densify = pareto._densify
 
@@ -1207,7 +1207,7 @@ def test_polish_gets_exact_gradients_only_on_the_batched_bulk_path(monkeypatch, 
     from fit_pcsaft._pure import fit as fit_mod
     from fit_pcsaft._pure import pareto, polish
 
-    data, water = _water_data()
+    _data, water = _water_data()
     seen = {}
     real_polish = polish.polish_front
 
@@ -1365,7 +1365,7 @@ def test_cp_objective_needs_cp_path_and_cp_ig():
     comparable to a measured total without the ideal-gas part."""
     from fit_pcsaft import fit_pure_pareto
 
-    base = dict(id="water", psat_path="nope.csv", density_path="nope.csv")
+    base = {"id": "water", "psat_path": "nope.csv", "density_path": "nope.csv"}
     with pytest.raises(ValueError, match="cp_path"):
         fit_pure_pareto(**base, objectives=TRIPLE)
     with pytest.raises(ValueError, match="cp_ig"):

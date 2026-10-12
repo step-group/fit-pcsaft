@@ -11,13 +11,11 @@ from types import SimpleNamespace
 
 import numpy as np
 import si_units as si
-from scipy.optimize import least_squares
 
 from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
     _fit_kij_polynomial,
-    _kij_at_T,
     _load_pure_records,
 )
 from fit_pcsaft._binary.lle import fit_kij_lle

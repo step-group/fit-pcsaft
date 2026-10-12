@@ -84,8 +84,7 @@ def test_acceptance_gates_scale_with_the_penalty():
     """
     from pathlib import Path
 
-    import fit_pcsaft._binary.lle as lle
-    import fit_pcsaft._binary.sle as sle
+    from fit_pcsaft._binary import lle, sle
 
     for mod in (lle, sle):
         text = Path(mod.__file__).read_text(encoding="utf-8")
@@ -101,7 +100,7 @@ def test_both_residuals_at_T_callers_pass_the_flag():
     """
     from pathlib import Path
 
-    import fit_pcsaft._binary.lle as lle
+    from fit_pcsaft._binary import lle
 
     text = Path(lle.__file__).read_text(encoding="utf-8")
     assert text.count("log_residuals=log_residuals") >= 2
@@ -151,7 +150,7 @@ def test_both_residuals_at_T_callers_pass_minority_component():
     """Same two-caller trap as log_residuals: stage 1 and the post-poly ARD pass."""
     from pathlib import Path
 
-    import fit_pcsaft._binary.lle as lle
+    from fit_pcsaft._binary import lle
 
     text = Path(lle.__file__).read_text(encoding="utf-8")
     assert text.count("minority_component=minority_component") >= 2
@@ -180,15 +179,15 @@ def test_lle_fit_runs_in_minority_mode_and_moves_kij():
     DATA = Path(__file__).parent.parent / "examples" / "data"
     water_models_path = DATA / "parameters" / "water_models.json"
     water_name = json.loads(water_models_path.read_text())[0]["identifier"]["name"]
-    kw = dict(
-        id1="1-octanol",
-        id2=water_name,
-        lle_path=DATA / "lle" / "1-octanol_water.csv",
-        params_path=[DATA / "parameters" / "alkanols_lle.json", water_models_path],
-        kij_order=0,
-        require_both_phases=False,
-        log_residuals=True,
-    )
+    kw = {
+        "id1": "1-octanol",
+        "id2": water_name,
+        "lle_path": DATA / "lle" / "1-octanol_water.csv",
+        "params_path": [DATA / "parameters" / "alkanols_lle.json", water_models_path],
+        "kij_order": 0,
+        "require_both_phases": False,
+        "log_residuals": True,
+    }
     plain = fit_kij_lle(**kw)
     minority = fit_kij_lle(**kw, minority_component=True)
     assert math.isfinite(minority.kij_at(298.15))

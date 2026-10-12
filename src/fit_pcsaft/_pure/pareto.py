@@ -17,6 +17,10 @@ and the arbitrariness of a weight choice becomes visible.
         1, 2       as above
         3          AARD(cp)    [%]   total cp = feos residual at (T, P) + DIPPR-107 ideal gas
 
+    objective triple ("psat", "rho", "sft")  -- the bulk pair plus surface tension
+        1, 2       as above
+        3          AAD(sft)    [mN/m]  eq 31; DFT-solved every evaluation
+
     objective quadruple ("psat", "rho", "cp", "sft")  -- every property on its own axis
         1, 2, 3    as above
         4          AAD(sft)    [mN/m]  eq 31; DFT-solved, so it is priced like the sft triple
@@ -91,7 +95,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
 
 import feos
 import numpy as np
@@ -360,7 +363,7 @@ def _evaluate_point(
 
     try:
         eos = _build_eos(params_vec, compound, spec)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return _row(_BIG_VIOLATION)
 
     def _fraction(metrics, n_total):
@@ -388,7 +391,7 @@ def _evaluate_point(
     if "sft" in objectives:
         try:
             functional = _build_functional(params_vec, compound, spec)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return _row(_BIG_VIOLATION)
         gamma = predict_surface_tension(functional, data.T_sft, units, sft_options)
         m_sft = compute_metrics_from_arrays(gamma, data.sft)
@@ -637,7 +640,7 @@ def _worker_init(ident_fields, mw, spec, data, units, sft_options, quiet, object
     # pool oversubscribes the machine badly (feos defaults to 52 threads here).
     try:
         feos.set_num_threads(1)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     if quiet:
@@ -1051,6 +1054,7 @@ def _make_algorithm(
         decomp = Tchebicheff()
 
     if variant == "de":
+        from pymoo.core.population import Population
         from pymoo.operators.crossover.binx import mut_binomial
         from pymoo.operators.crossover.dex import DEX, de_differential, rnd_F
         from pymoo.operators.crossover.expx import mut_exp
@@ -1058,7 +1062,6 @@ def _make_algorithm(
             is_out_of_bounds_by_problem,
             repair_random_init,
         )
-        from pymoo.core.population import Population
 
         class _SeededDEX(DEX):
             """Vendored ``DEX.do`` (pymoo 0.6.2,
@@ -1100,7 +1103,7 @@ def _make_algorithm(
                     0, 1,
                 ).copy()
 
-                n_parents, n_matings, n_var = X.shape
+                n_parents, n_matings, n_var = X.shape  # noqa: RUF059 -- vendored verbatim from pymoo 0.6.2
                 m = np.arange(n_matings)
 
                 F = self.F if self.F is not None else rnd_F(m, random_state=random_state)
@@ -1130,7 +1133,7 @@ def _make_algorithm(
                         at_least_once=self.at_least_once, random_state=random_state,
                     )
                 else:
-                    raise Exception(f"Unknown variant: {self.variant}")
+                    raise Exception(f"Unknown variant: {self.variant}")  # noqa: TRY002 -- vendored verbatim from pymoo 0.6.2
 
                 X = X[0]
                 X[M] = Xp[M]
@@ -1203,11 +1206,12 @@ class ParetoResult:
     def param_names(self) -> list[str]:
         return param_names(self.spec)
 
-    def select(self, refs: "Optional[tuple[float, ...]]" = None):
+    def select(self, refs: tuple[float, ...] | None = None):
         """Pick the point on the front that minimises eq 32, as a FitResult.
 
-        ``refs`` defaults per mode: ``(2.0, 0.7)`` for ``("vle", "sft")`` and
-        ``(2.0, 2.0)`` for ``("psat", "rho")``. Paper weights for the first:
+        ``refs`` defaults per mode, from ``_DEFAULT_REFS``: e.g. ``(2.0, 0.7)``
+        for ``("vle", "sft")`` and ``(2.0, 2.0)`` for ``("psat", "rho")``. Paper
+        weights for the first, of which only water's is the default:
         water 0.7, small alcohols 1.5, alcohols from 1-pentanol up 3.0.
 
         Under ``("psat", "rho")`` with equal refs the tangent has slope -1, so
@@ -1256,11 +1260,11 @@ class ParetoResult:
             functional=functional,
         )
 
-    def plot(self, path=None, refs: "Optional[tuple[float, ...]]" = None):
+    def plot(self, path=None, refs: tuple[float, ...] | None = None):
         from fit_pcsaft._plot import _plot_pareto
         return _plot_pareto(self, path=path, refs=refs)
 
-    def to_csv(self, path: "Path | str") -> None:
+    def to_csv(self, path: Path | str) -> None:
         """Write the front: one row per point, objectives then parameters."""
         import polars as pl
 
@@ -1299,27 +1303,27 @@ class ParetoResult:
 
 def fit_pure_pareto(
     id: str,
-    psat_path: "Path | str",
-    density_path: "Path | str",
-    sft_path: "Optional[Path | str]" = None,
-    hvap_path: "Optional[Path | str]" = None,
-    cp_path: "Optional[Path | str]" = None,
-    cp_ig: "Optional[list[float]]" = None,
-    mu: "Optional[float]" = 0.0,
+    psat_path: Path | str,
+    density_path: Path | str,
+    sft_path: Path | str | None = None,
+    hvap_path: Path | str | None = None,
+    cp_path: Path | str | None = None,
+    cp_ig: list[float] | None = None,
+    mu: float | None = 0.0,
     q: float = 0.0,
-    na: "Optional[int]" = None,
-    nb: "Optional[int]" = None,
-    bounds: "Optional[list]" = None,
+    na: int | None = None,
+    nb: int | None = None,
+    bounds: list | None = None,
     pop_size: int = 60,
     n_gen: int = 60,
     seed: int = 1,
     sft_options=None,
-    pressure_unit: "si.SIObject" = si.KILO * si.PASCAL,
-    temperature_unit: "si.SIObject" = si.KELVIN,
-    density_unit: "si.SIObject" = si.KILOGRAM / (si.METER**3),
-    enthalpy_unit: "si.SIObject" = si.KILO * si.JOULE / si.MOL,
-    surface_tension_unit: "si.SIObject" = si.MILLI * si.NEWTON / si.METER,
-    heat_capacity_unit: "si.SIObject" = si.JOULE / (si.MOL * si.KELVIN),
+    pressure_unit: si.SIObject = si.KILO * si.PASCAL,
+    temperature_unit: si.SIObject = si.KELVIN,
+    density_unit: si.SIObject = si.KILOGRAM / (si.METER**3),
+    enthalpy_unit: si.SIObject = si.KILO * si.JOULE / si.MOL,
+    surface_tension_unit: si.SIObject = si.MILLI * si.NEWTON / si.METER,
+    heat_capacity_unit: si.SIObject = si.JOULE / (si.MOL * si.KELVIN),
     verbose: bool = True,
     quiet_solver: bool = True,
     lhs: bool = True,
@@ -1327,7 +1331,7 @@ def fit_pure_pareto(
     refine: int = 4,
     polish: bool = False,
     objectives: tuple[str, ...] = _DEFAULT_OBJECTIVES,
-    refs: "Optional[tuple[float, ...]]" = None,
+    refs: tuple[float, ...] | None = None,
     n_restarts: int = 1,
     n_neighbors: int = 20,
     prob_neighbor_mating: float = 0.9,
@@ -1340,7 +1344,7 @@ def fit_pure_pareto(
 ) -> ParetoResult:
     """Generate a multi-objective PC-SAFT pareto front with MOEA/D.
 
-    Three modes, chosen by ``objectives``. The default, ``("vle", "sft")``,
+    Five modes, chosen by ``objectives``. The default, ``("vle", "sft")``,
     reproduces Rehner & Gross, J. Chem. Eng. Data 2020, 65, 5698-5707: bulk
     error and interfacial error as two separate AADs (eq 30/31, see the module
     docstring). ``("psat", "rho")`` reproduces Forte et al. 2018: the two bulk
@@ -1350,7 +1354,10 @@ def fit_pure_pareto(
     adds liquid heat capacity as a third axis (``n_obj=3``): AARD of the
     *total* cp, feos's residual at ``(T, P)`` plus the DIPPR-107 ideal gas
     passed as ``cp_ig`` -- see the ``cp_path`` paragraph below. It runs on the
-    same batched, DFT-free path as the bulk pair. See ``_OBJECTIVES`` for what
+    same batched, DFT-free path as the bulk pair. ``("psat", "rho", "sft")``
+    (``n_obj=3``) and ``("psat", "rho", "cp", "sft")`` (``n_obj=4``) put
+    surface tension on its own axis beside the separated bulk AARDs; both
+    DFT-solve every evaluation, like the default. See ``_OBJECTIVES`` for what
     each key reports and the ``objectives`` paragraph below for how the modes
     differ in cost and in what the graded violation covers.
 
@@ -1533,7 +1540,8 @@ def fit_pure_pareto(
     ``lhs`` uses Latin hypercube sampling for generation zero instead of uniform
     random draws, which covers the box more evenly. Pass False to compare.
 
-    ``n_jobs`` applies to ``("vle", "sft")`` only. There the population is
+    ``n_jobs`` applies to every ``objectives`` tuple containing ``"sft"``, and to any
+    when ``q != 0`` (``_batched``). There the population is
     evaluated across worker processes, -1 (the default) meaning every core bar
     two -- processes rather than threads because feos does not release the
     GIL -- and on a spawn platform the call must sit inside an
@@ -1721,7 +1729,7 @@ def fit_pure_pareto(
         )
     if "cp" in objectives and cp_path is None:
         raise ValueError(
-            "objectives=('psat', 'rho', 'cp') needs heat-capacity data: pass "
+            f"objectives={objectives!r} needs heat-capacity data: pass "
             "cp_path (columns T, cp, optional P) together with cp_ig, or use "
             "objectives=('psat', 'rho'), which needs neither."
         )
@@ -1970,8 +1978,3 @@ def fit_pure_pareto(
 # importing `fit_pcsaft._pure.front_quality` first in a fresh interpreter
 # still works, because it drags in `fit_pcsaft/__init__.py` -> this module
 # first regardless of which submodule the caller names.
-from fit_pcsaft._pure.front_quality import (  # noqa: E402
-    compare_fronts,
-    front_metrics,
-    reference_front,
-)

@@ -18,8 +18,8 @@ from fit_pcsaft._binary._utils import (
     _load_pure_records,
     _make_binary_jac_fn,
 )
-from fit_pcsaft._csv import SCHEMA_SLE, load_csv
 from fit_pcsaft._binary.result import BinaryFitResult
+from fit_pcsaft._csv import SCHEMA_SLE, load_csv
 from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 _R = si.RGAS / (si.JOULE / (si.MOL * si.KELVIN))
@@ -47,7 +47,7 @@ def _predict_x1_for(eos, T_K: float, x1_start: float, si_idx: int, Tm: float, dH
             try:
                 liq = _liquid_state(eos, T_K, x_iter)
                 ln_gamma = float(liq.ln_symmetric_activity_coefficient()[0])
-            except Exception:
+            except Exception:  # noqa: BLE001
                 return float("nan")
             x_new = float(np.clip(np.exp(rhs - ln_gamma), 1e-9, 1.0 - 1e-9))
             if abs(x_new - x_iter) < 1e-9:
@@ -60,7 +60,7 @@ def _predict_x1_for(eos, T_K: float, x1_start: float, si_idx: int, Tm: float, dH
             try:
                 liq = _liquid_state(eos, T_K, 1.0 - x_iter)
                 ln_gamma = float(liq.ln_symmetric_activity_coefficient()[1])
-            except Exception:
+            except Exception:  # noqa: BLE001
                 return float("nan")
             x_new = float(np.clip(np.exp(rhs - ln_gamma), 1e-9, 1.0 - 1e-9))
             if abs(x_new - x_iter) < 1e-9:
@@ -208,7 +208,7 @@ def fit_kij_sle(
                         record1, record2, float(kij_per_row[i]),
                         T_K=T_i, record_at_T=record_at_T,
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001
                     eos_map[key] = None
             eos = eos_map[key]
             if eos is None:
@@ -217,13 +217,13 @@ def fit_kij_sle(
             try:
                 x1_pred = _predict_x1(eos, T_i, x1_i)
                 resid = _comp_resid(x1_pred, x1_i, log_residuals)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 resid = LOG_PENALTY if log_residuals else 1.0
             if eutectic:
                 try:
                     x1_pred2 = _predict_x1_branch2(eos, T_i, x1_i)
                     resid2 = _comp_resid(x1_pred2, x1_i, log_residuals)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     resid2 = LOG_PENALTY if log_residuals else 1.0
                 resid = resid if abs(resid) <= abs(resid2) else resid2
             resids[i] = resid
@@ -252,7 +252,7 @@ def fit_kij_sle(
                         resid2 = _comp_resid(x1_pred2, x1, log_residuals)
                         resid = resid if abs(resid) <= abs(resid2) else resid2
                     return np.array([resid])
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     errors.append(exc)
                     return np.array([LOG_PENALTY if log_residuals else 1.0])
 
@@ -263,7 +263,7 @@ def fit_kij_sle(
                     c = 0.5 * float(resid_fn([kv])[0] ** 2)
                     if c < best_cost:
                         best_cost, best_x0 = c, kv
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
             try:
@@ -281,7 +281,7 @@ def fit_kij_sle(
                     T_fitted.append(T_K_i)
                     kij_fitted.append(float(res.x[0]))
                     ard_fitted.append(100.0 * abs(float(res.fun[0])))
-            except Exception:
+            except Exception:  # noqa: BLE001, S112
                 continue
 
         if not T_fitted:

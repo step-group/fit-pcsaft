@@ -54,6 +54,7 @@ uv run python -c "import inspect, fit_pcsaft; print(inspect.signature(fit_pcsaft
        nb=1,
        mu=0.0,
        loss="cauchy",                     # optional: robust loss for noisy literature data
+       f_scale=0.01,                      # required with a robust loss (ValueError otherwise)
    )
    print(result.params)
    result.plot()

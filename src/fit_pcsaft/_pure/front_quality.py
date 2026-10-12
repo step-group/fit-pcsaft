@@ -37,7 +37,7 @@ it costs nothing today and means a future pymoo release that wires the flag
 up for real can't silently start renormalizing ``ref_point`` per front, which
 would break the thing that actually matters here -- one shared ``ref_point``
 producing comparable hypervolumes across the ~45 fronts Task 3 sweeps. What
-``test_hv_is_comparable_across_fronts_with_a_shared_ref_point`` pins is that
+``test_hv_ranks_a_dominating_front_higher_under_a_shared_ref_point`` pins is that
 comparability itself (same ``ref_point``, strictly dominating front scores
 strictly higher), not the ``norm_ref_point`` flag -- on this pymoo build the
 flag has nothing to pin.

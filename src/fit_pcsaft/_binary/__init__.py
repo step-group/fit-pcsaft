@@ -11,4 +11,4 @@ from fit_pcsaft._binary.result import BinaryFitResult
 from fit_pcsaft._binary.sle import fit_kij_sle
 from fit_pcsaft._binary.vle import fit_kij_vle
 
-__all__ = ["fit_kij_vle", "fit_kij_lle", "fit_kij_sle", "fit_kij_henry", "BinaryFitResult"]
+__all__ = ["BinaryFitResult", "fit_kij_henry", "fit_kij_lle", "fit_kij_sle", "fit_kij_vle"]

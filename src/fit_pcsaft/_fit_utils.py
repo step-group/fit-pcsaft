@@ -1,16 +1,13 @@
 import re
 import time
-from functools import lru_cache
-from pathlib import Path
-from typing import Callable, Tuple
+from collections.abc import Callable
+from functools import cache
 
 import feos
 import numpy as np
-import polars as pl
 import pubchempy as pcp
 import si_units as si
 
-from fit_pcsaft._csv import load_density_csv, load_hvap_csv, load_psat_csv
 from fit_pcsaft._pure.surface_tension import predict_surface_tension
 from fit_pcsaft._types import Compound, FitConfig, ModelSpec, PureData, Units
 
@@ -47,8 +44,8 @@ _RETRY_BACKOFF = (5.0, 15.0)
 _LOOKUP_NAMESPACES = ("name", "smiles", "inchi")
 
 
-@lru_cache(maxsize=None)
-def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
+@cache
+def _fetch_compound(id_str: str) -> tuple[feos.Identifier, float]:
     """Fetch compound information from PubChem.
 
     Tries multiple lookup methods:
@@ -72,13 +69,13 @@ def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
     another's.
     """
     compound = None
-    last_exc: "Exception | None" = None
+    last_exc: Exception | None = None
 
     for backoff in (*_RETRY_BACKOFF, None):
         for namespace in _LOOKUP_NAMESPACES:
             try:
                 compounds = pcp.get_compounds(id_str, namespace)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 continue
             if compounds:
@@ -94,7 +91,7 @@ def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
 
     # Extract CAS from synonyms
     cas = None
-    syn_exc: "Exception | None" = None
+    syn_exc: Exception | None = None
     try:
         synonyms = pcp.get_synonyms(compound.cid, "cid")
         if synonyms:
@@ -106,7 +103,7 @@ def _fetch_compound(id_str: str) -> Tuple[feos.Identifier, float]:
                         break
                 if cas:
                     break
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         syn_exc = exc
 
     if not cas:
@@ -189,15 +186,15 @@ def _build_record(
 ) -> feos.PureRecord:
     """Build a feos PureRecord from a vector laid out as ``param_names(spec)``."""
     p = params_dict(params_vec, spec)
-    kwargs = dict(
-        identifier=compound.identifier,
-        molarweight=compound.mw,
-        m=p["m"],
-        sigma=p["sigma"],
-        epsilon_k=p["epsilon_k"],
-        mu=p["mu"] if spec.mu is None else float(spec.mu),
-        q=spec.q,
-    )
+    kwargs = {
+        "identifier": compound.identifier,
+        "molarweight": compound.mw,
+        "m": p["m"],
+        "sigma": p["sigma"],
+        "epsilon_k": p["epsilon_k"],
+        "mu": p["mu"] if spec.mu is None else float(spec.mu),
+        "q": spec.q,
+    }
     if _is_assoc(spec):
         kwargs["association_sites"] = [
             {
@@ -262,7 +259,7 @@ def ideal_gas_cp(compound: Compound, dippr107, T_K) -> np.ndarray:
             )
             for t in np.asarray(T_K, dtype=float)
         ])
-    except BaseException as exc:  # feos panics are BaseException
+    except BaseException as exc:  # noqa: BLE001 -- feos panics are BaseException
         raise ValueError(f"cp_ig: feos rejected the DIPPR-107 model: {exc}") from None
 
 
@@ -416,7 +413,7 @@ def _make_cost_fn(
         try:
             eos = _build_eos(params_vec**2, compound, spec)
             pred = predict_bulk(eos, compound.mw, data, units)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             if errors is not None:
                 errors.append(exc)
             return np.full(n_total, _PENALTY)
@@ -454,7 +451,7 @@ def _make_cost_fn(
         if n_sft > 0:
             try:
                 functional = _build_functional(params_vec**2, compound, spec)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 if errors is not None:
                     errors.append(exc)
                 return np.full(n_total, _PENALTY)
@@ -478,7 +475,7 @@ def _make_f_and_df_numerical(
     spec: ModelSpec,
     units: Units,
     config: FitConfig,
-) -> Tuple[Callable, Callable, list]:
+) -> tuple[Callable, Callable, list]:
     """Create cost function + 2-point numerical Jacobian with shared base-eval cache.
 
     Scipy calls f(x) then jac(x) at the same x each iteration. Caching the last

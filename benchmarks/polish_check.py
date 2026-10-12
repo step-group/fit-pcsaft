@@ -1,4 +1,4 @@
-"""Task 5 Step 6: does polish actually improve a real Pareto front?
+"""Does polish actually improve a real Pareto front?
 
 Fits the same water Forte front (``objectives=("psat", "rho")``) twice at one
 seed -- once with ``polish=False``, once with ``polish=True`` -- so the two
@@ -9,8 +9,8 @@ never sets, so nothing before the polish step depends on ``polish``). Scores
 both with ``front_metrics`` against one shared reference front and one
 shared ``ref_point`` (per-call values would make the two rows
 incomparable), and reports how many points actually moved in parameter
-space. Draws no conclusion -- see task-5-brief.md Step 8: a human decides
-whether polish earns a default.
+space. Draws no conclusion -- see commit 64ac7bd (benchmarks/knob-sweep/polish_check.csv):
+a human decides whether polish earns a default.
 
 Same conventions as knob_sweep.py: every fitting call stays inside main()
 because n_jobs=-1 spawns a worker pool and a worker re-imports this module.
@@ -34,14 +34,14 @@ REPO = Path(__file__).parent.parent
 DATA = REPO / "examples" / "data"
 OUT = Path(__file__).parent / "knob-sweep"
 
-BASE = dict(
-    id="water",
-    psat_path=DATA / "psat" / "water.csv",
-    density_path=DATA / "density" / "water.csv",
-    na=1, nb=1, objectives=("psat", "rho"),
-    bounds=[(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
-    pop_size=80, n_gen=80, n_restarts=8, refine=4, verbose=False, seed=101,
-)
+BASE = {
+    "id": "water",
+    "psat_path": DATA / "psat" / "water.csv",
+    "density_path": DATA / "density" / "water.csv",
+    "na": 1, "nb": 1, "objectives": ("psat", "rho"),
+    "bounds": [(0.8, 3.0), (2.0, 3.5), (150.0, 400.0), (1e-3, 0.35), (1500.0, 4000.0)],
+    "pop_size": 80, "n_gen": 80, "n_restarts": 8, "refine": 4, "verbose": False, "seed": 101,
+}
 REGION = [(0.0, 3.0), None]  # same region knob_sweep.py used: AARD_psat <= 3%
 
 # "Small relative tolerance" in parameter space: each of the 5 parameters has
@@ -102,7 +102,7 @@ def main() -> None:
         t0 = time.perf_counter()
         front_before = fit_pure_pareto(**BASE, polish=False)
         t_before = time.perf_counter() - t0
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- feos/PubChem raise varied types; reported, then exit
         print(
             f"baseline fit failed at startup ({type(exc).__name__}: {exc}). "
             "If this is a PubChem lookup failure, PubChem is flapping -- "
@@ -143,7 +143,7 @@ def main() -> None:
         f.write(
             "# water Forte front (objectives=('psat','rho')), seed=101, "
             "polish=False vs polish=True, same baseline as knob_sweep.py's "
-            "80x80* cell -- see task-5-step6-report.md\n"
+            "80x80* cell -- see commit 64ac7bd\n"
         )
         f.write(
             "# hv/igd_plus/spacing/max_gap are region-clipped to AARD_psat in [0, 3]% "

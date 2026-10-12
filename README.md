@@ -72,7 +72,7 @@ Fitting quality:
 
 The tool expects simple CSV files.
 
-The **first column** must be temperature, and the **second column** must be the property (saturation pressure or mass density).
+A **header row is required**: columns are matched by name — temperature (`T`) and the property (`psat`, `rho` or `hvap`) — not by position.
 
 * **Vapor Pressure**: Default units are **K** and **kPa**.
 * **Liquid Density**: Default units are **K** and **kg/m³**.
@@ -81,16 +81,15 @@ The **first column** must be temperature, and the **second column** must be the 
 
 ## Handling Units
 
-If your data uses different SI units (e.g., Celsius, bar, or g/cm³), you can specify them using the `si_units` package (which is installed automatically):
+If your data uses different SI units (e.g., bar or g/cm³; temperature must be in kelvin), you can specify them using the `si_units` package (which is installed automatically):
 
 ```python
 import si_units as si
 
 result = fit_pure(
     ...,
-    temperature_unit=si.CELSIUS,
     pressure_unit=si.BAR,
-    density_unit=si.GRAM / si.CENTI * si.METER**3,
+    density_unit=si.GRAM / (si.CENTI * si.METER)**3,
     enthalpy_unit=si.JOULE / si.MOL,
 )
 ```
@@ -106,7 +105,7 @@ Future features and improvements:
   * [x] Support for **VLE** (Vapor-Liquid Equilibrium) data.
   * [x] Support for **LLE** (Liquid-Liquid Equilibrium) data.
   * [x] Support for **SLE** (Solid-Liquid Equilibrium) data.
-  * [ ] Support for Henry's law data.
+  * [x] Support for Henry's law data.
 
 * [ ] **Refactor for readability and mantainability** (this was heavily vibe coded)
 

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import feos
 import si_units as si
 
-import fit_pcsaft._binary.lle as lle
+from fit_pcsaft._binary import lle
 
 DATA = Path(__file__).parent.parent / "examples" / "data"
 
@@ -100,4 +100,4 @@ def test_single_phase_rows_keep_the_anchor():
         [DATA / "parameters" / "alkanols_lle.json", DATA / "parameters" / "water_models.json"],
         kij_order=2, kij_bounds=(-0.2, 0.2), require_both_phases=False,
     )
-    assert 428.2 in set(round(float(T), 1) for T in result.data["T_kij"])
+    assert 428.2 in {round(float(T), 1) for T in result.data["T_kij"]}

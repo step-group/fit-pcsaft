@@ -33,17 +33,17 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt
+import numpy as np
 
 # Run as a script, sys.path[0] is benchmarks/ and the repo root is not on it, so
 # `benchmarks._problems` does not resolve. pytest adds the root itself, which is
 # why the tests pass either way -- put it on the path here so both work.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmarks._problems import PROBLEMS, requested  # noqa: E402
-from fit_pcsaft._pure.front_quality import front_metrics, reference_front  # noqa: E402
-from fit_pcsaft._pure.pareto import coverage  # noqa: E402
+from benchmarks._problems import PROBLEMS, requested
+from fit_pcsaft._pure.front_quality import front_metrics, reference_front
+from fit_pcsaft._pure.pareto import coverage
 
 COMPOUND = requested(__file__)
 PROBLEM = PROBLEMS[COMPOUND]
@@ -87,7 +87,8 @@ def _cap_label() -> str:
 
 
 def main() -> None:
-    rows = json.load(open(OUT / "fronts.json"))
+    with open(OUT / "fronts.json") as fh:
+        rows = json.load(fh)
     ops = sorted({r["op"] for r in rows}, key=lambda o: o != "sbx")
 
     clipped = {(r["op"], r["evals"], r["seed"]): _clip(r["F"]) for r in rows}

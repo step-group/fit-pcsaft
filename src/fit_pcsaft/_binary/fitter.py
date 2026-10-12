@@ -105,15 +105,15 @@ class BinaryKijFitter:
     ) -> "BinaryKijFitter":
         """Register a VLE bubble-point dataset."""
         self._sources.append(
-            dict(
-                type="vle",
-                path=path,
-                temperature_unit=temperature_unit,
-                pressure_unit=pressure_unit,
-                t_min=t_min,
-                t_max=t_max,
-                relative_residuals=relative_residuals,
-            )
+            {
+                "type": "vle",
+                "path": path,
+                "temperature_unit": temperature_unit,
+                "pressure_unit": pressure_unit,
+                "t_min": t_min,
+                "t_max": t_max,
+                "relative_residuals": relative_residuals,
+            }
         )
         return self
 
@@ -131,17 +131,17 @@ class BinaryKijFitter:
     ) -> "BinaryKijFitter":
         """Register an LLE tie-line dataset."""
         self._sources.append(
-            dict(
-                type="lle",
-                path=path,
-                temperature_unit=temperature_unit,
-                pressure=pressure,
-                t_min=t_min,
-                t_max=t_max,
-                require_both_phases=require_both_phases,
-                ucst_target=ucst_target,
-                relative_residuals=relative_residuals,
-            )
+            {
+                "type": "lle",
+                "path": path,
+                "temperature_unit": temperature_unit,
+                "pressure": pressure,
+                "t_min": t_min,
+                "t_max": t_max,
+                "require_both_phases": require_both_phases,
+                "ucst_target": ucst_target,
+                "relative_residuals": relative_residuals,
+            }
         )
         return self
 
@@ -157,15 +157,15 @@ class BinaryKijFitter:
     ) -> "BinaryKijFitter":
         """Register a VLLE heteroazeotrope dataset."""
         self._sources.append(
-            dict(
-                type="vlle",
-                path=path,
-                temperature_unit=temperature_unit,
-                pressure_unit=pressure_unit,
-                t_min=t_min,
-                t_max=t_max,
-                relative_residuals=relative_residuals,
-            )
+            {
+                "type": "vlle",
+                "path": path,
+                "temperature_unit": temperature_unit,
+                "pressure_unit": pressure_unit,
+                "t_min": t_min,
+                "t_max": t_max,
+                "relative_residuals": relative_residuals,
+            }
         )
         return self
 
@@ -185,19 +185,19 @@ class BinaryKijFitter:
     ) -> "BinaryKijFitter":
         """Register an SLE solubility dataset."""
         self._sources.append(
-            dict(
-                type="sle",
-                path=path,
-                tm=tm,
-                delta_hfus=delta_hfus,
-                solid_index=solid_index,
-                tm2=tm2,
-                delta_hfus2=delta_hfus2,
-                temperature_unit=temperature_unit,
-                t_min=t_min,
-                t_max=t_max,
-                relative_residuals=relative_residuals,
-            )
+            {
+                "type": "sle",
+                "path": path,
+                "tm": tm,
+                "delta_hfus": delta_hfus,
+                "solid_index": solid_index,
+                "tm2": tm2,
+                "delta_hfus2": delta_hfus2,
+                "temperature_unit": temperature_unit,
+                "t_min": t_min,
+                "t_max": t_max,
+                "relative_residuals": relative_residuals,
+            }
         )
         return self
 

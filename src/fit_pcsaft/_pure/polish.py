@@ -56,7 +56,7 @@ what 50 finite-difference ones did and halved the sum again, to 59.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 from scipy.optimize import minimize
@@ -225,7 +225,7 @@ def polish_front(
                 x_sol, row = _solve_one(
                     s, caps, bounds, axis, others, evaluate, max_iter, evaluate_grad
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001, S112
                 continue
             if not np.all(np.isfinite(row)):
                 continue

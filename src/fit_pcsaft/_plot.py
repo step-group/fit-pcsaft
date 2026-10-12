@@ -70,15 +70,15 @@ def _plot_pure(
     exp_color = _COLOR_PRESETS.get(color, color)
     eos_color = _COLOR_PRESETS.get(line_color, line_color)
 
-    _scatter_defaults = dict(
-        s=40,
-        marker="o",
-        facecolors="white",
-        edgecolors=exp_color,
-        linewidths=1.2,
-        zorder=5,
-    )
-    _line_defaults = dict(color=eos_color, linestyle=linestyle)
+    _scatter_defaults = {
+        "s": 40,
+        "marker": "o",
+        "facecolors": "white",
+        "edgecolors": exp_color,
+        "linewidths": 1.2,
+        "zorder": 5,
+    }
+    _line_defaults = {"color": eos_color, "linestyle": linestyle}
 
     sc_kw = {**_scatter_defaults, **(scatter_kw or {})}
     ln_kw = {**_line_defaults, **(line_kw or {})}

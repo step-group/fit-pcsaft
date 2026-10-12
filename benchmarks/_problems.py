@@ -87,9 +87,12 @@ _MS_FORTE = 0.00011
 # in ~48 s, 10800 in ~190 s and 28800 in ~460 s -> 16-18 ms/eval.
 _MS_VLE_SFT = 0.017
 
-# Thymol's production configuration, copied from TESIS
-# analysis/scripts/pure/s04_fit_thymol.py. Do not widen this box to "be safe": that
-# file's docstring records what the wide box did -- a 121-point front whose eq-32
+# Thymol's ("vle","sft") production configuration, copied from TESIS
+# analysis/scripts/pure/s04_fit_thymol.py (deleted in TESIS 6ca7b6d; the same values
+# became the thymol entry of TESIS analysis/scripts/shared/pure_fits.SPECS at that
+# commit, which has since moved thymol to ("psat","rho","cp") with a different box).
+# Do not widen this box to "be safe": that file's BOUNDS comment (s04_fit_thymol.py,
+# deleted in TESIS 6ca7b6d) records what the wide box did -- a 121-point front whose eq-32
 # tangent was its own lowest-AAD_vle endpoint, because _objective_scale froze a 64x
 # divisor from generation zero and squeezed the interesting region into a sliver of
 # the normalised axis. This box is about 1/17 the volume and is drawn to make
@@ -123,7 +126,7 @@ PROBLEMS: dict[str, Problem] = {
         psat_stem="carvone", density_stem="carvone_rho6",
         axis_labels=_FORTE_AXES, ms_per_eval=_MS_FORTE,
     ),
-    # The only problem here that TESIS actually runs through fit_pure_pareto.
+    # The only problem here that TESIS ran through fit_pure_pareto on ("vle","sft").
     "thymol": Problem(
         fit={
             "id": "thymol",
@@ -137,7 +140,8 @@ PROBLEMS: dict[str, Problem] = {
             # costs nothing.
             "refs": (2.0, 3.0),
             # Seeds only the tanh fallback initializer for the density profile;
-            # measured inert to 12 decimals across 22 K in s04_fit_thymol.py. Passed
+            # measured inert to 12 decimals across 22 K (TESIS
+            # analysis/scripts/shared/compounds.py, above CRITICAL_POINT_K). Passed
             # because the default 500.0 K is a generic placeholder far below any
             # plausible value for a C10H14O phenol.
             "sft_options": SurfaceTensionOptions(critical_temperature_k=698.3),
@@ -145,7 +149,8 @@ PROBLEMS: dict[str, Problem] = {
         psat_stem="thymol", density_stem="thymol", sft_stem="thymol",
         axis_labels=("AAD_vle [%]", "AAD_sft [mN/m]"),
         ms_per_eval=_MS_VLE_SFT,
-        # The front spans AAD_vle ~0.8-8.9% (s04_fit_thymol.py's docstring), so 5% is
+        # The front spans AAD_vle ~0.8-8.9% (s04_fit_thymol.py's comments, deleted in
+        # TESIS 6ca7b6d), so 5% is
         # informed rather than guessed -- and it is the clip the water ("vle","sft")
         # benchmarks already use. AAD_sft is in mN/m and is not clipped.
         rescore_cap=(5.0, None),
