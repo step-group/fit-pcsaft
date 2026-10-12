@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 import feos
@@ -380,6 +381,11 @@ class FitResult:
 
         Export: ``result.residuals().write_csv("out.csv")``.
         """
+        return self._residuals.clone()
+
+    @cached_property
+    def _residuals(self):
+        # Computed once per result: the sft column is a DFT sweep (ms per point).
         return _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units, functional=self.functional
         )
 
@@ -624,6 +630,11 @@ class EvalResult:
 
         Export: ``result.residuals().write_csv("out.csv")``.
         """
+        return self._residuals.clone()
+
+    @cached_property
+    def _residuals(self):
+        # Computed once per result: the sft column is a DFT sweep (ms per point).
         return _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units, functional=self.functional
         )
 

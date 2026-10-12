@@ -356,7 +356,7 @@ def fit_kij_sle(
                                 T_K=kij_t_ref, record_at_T=record_at_T)
 
     # ARD — reuse residuals from final evaluation
-    final_resids = fun(kij_coeffs)
+    final_resids = result.fun
     if log_residuals:
         # The 0.99 validity gate and the mean|resid|/mean(x) ratio are both
         # defined on linear x. Reporting them off log residuals would be a

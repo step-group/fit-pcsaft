@@ -20,6 +20,9 @@ from fit_pcsaft._csv import SCHEMA_VLE, load_csv
 from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 _N_KIJ_SCAN = 13
+# feos default is 400; a bubble point that has not converged by 30 outer
+# iterations almost never does, and each failure then costs ~200x a success.
+_BUBBLE_MAX_ITER_OUTER = 30
 
 
 def fit_kij_vle(
@@ -305,8 +308,8 @@ def fit_kij_vle(
     kij_coeffs = result.x
     eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
 
-    # ARD on pressure — reuse fun() residuals to avoid extra EOS builds
-    final_resids = fun(kij_coeffs)
+    # ARD on pressure — least_squares already holds the residuals at result.x
+    final_resids = result.fun
     P_resids = final_resids[::2] if has_y1 else final_resids
     valid = np.abs(P_resids) < 0.99  # sentinel 1.0 → failed
     P_pred_all = P_arr[valid] * (1.0 + P_resids[valid])
@@ -344,6 +347,7 @@ def _bubble_point(eos, T_K: float, x1: float, P_guess: float, temperature_unit, 
         T_K * temperature_unit,
         np.array([x1, 1.0 - x1]),
         tp_init=P_guess * pressure_unit,
+        max_iter_outer=_BUBBLE_MAX_ITER_OUTER,
     )
 
 

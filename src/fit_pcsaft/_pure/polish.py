@@ -38,7 +38,9 @@ wires this in behind ``polish=True``, ``evaluate`` goes through the same
 ``_map_evaluate`` MOEA/D used. Under ``objectives=("vle", "sft")`` each call
 is a DFT solve and there is no ``evaluate_grad``, so a 5-parameter
 finite-difference gradient is ~6 evaluations (~0.6 s each, ~3.6 s/gradient)
-and a 200-point front polishes in tens of minutes. Under ``("psat", "rho")``
+and a 200-point front polishes in tens of minutes -- serially; the 5
+perturbed rows go to ``evaluate`` as one batch (``_fd_map``), so a worker
+pool runs them side by side. Under ``("psat", "rho")``
 ``evaluate_grad`` is one feos AD call per property (``_evaluate_with_grad``,
 0.28 ms against 0.25 ms for the plain row) and the cost is SLSQP's line
 search. Measured on thymol's production front (170 densified points,
@@ -123,11 +125,40 @@ def _solve_one(
     def _values(theta: np.ndarray) -> np.ndarray:
         return _grad(theta)[0] if evaluate_grad is not None else _row(theta)[:-1]
 
+    def _fd_map(fun, us):
+        """scipy's finite-difference rows, all sent to ``evaluate`` in ONE call.
+
+        SLSQP keeps its own step and bound handling; only the evaluation is
+        batched, so a worker pool runs the n perturbed rows side by side. The
+        constraint's (serial) finite differences then land on the same thetas
+        and hit the cache.
+        """
+        us = list(us)
+        todo = {}
+        for u in us:
+            theta = _theta(u)
+            key = tuple(theta.tolist())
+            if key not in cache:
+                todo[key] = theta
+        if todo:
+            rows = evaluate(np.array(list(todo.values())))
+            for key, row in zip(todo, rows):
+                cache[key] = np.asarray(row, dtype=float)
+        return [fun(u) for u in us]
+
     constraint = {"type": "ineq", "fun": lambda u: caps - _values(_theta(u))[others]}
     kw = {}
+    # ftol doubles as SLSQP's internal constraint-accuracy target (the
+    # Fortran routine's single `acc` parameter serves both), so tightening
+    # it is what keeps the capped objective from drifting past `cap` by
+    # more than solver noise. Both are in objective units, so the unit
+    # box does not retune them.
+    options = {"maxiter": max_iter, "ftol": 1e-12}
     if evaluate_grad is not None:  # chain rule for u = (theta - lo) / span
         kw["jac"] = lambda u: _grad(_theta(u))[1][axis] * span
         constraint["jac"] = lambda u: -_grad(_theta(u))[1][others] * span
+    else:
+        options["workers"] = _fd_map
 
     result = minimize(
         lambda u: _values(_theta(u))[axis],
@@ -135,12 +166,7 @@ def _solve_one(
         method="SLSQP",
         bounds=[(0.0, 1.0)] * len(bounds),
         constraints=[constraint],
-        # ftol doubles as SLSQP's internal constraint-accuracy target (the
-        # Fortran routine's single `acc` parameter serves both), so tightening
-        # it is what keeps the capped objective from drifting past `cap` by
-        # more than solver noise. Both are in objective units, so the unit
-        # box does not retune them.
-        options={"maxiter": max_iter, "ftol": 1e-12},
+        options=options,
         **kw,
     )
     x_sol = _theta(result.x)

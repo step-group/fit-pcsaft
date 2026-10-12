@@ -139,14 +139,10 @@ def _plot_residuals_pure(result, path=None):
     import polars as pl
     import seaborn as sns
 
-    from fit_pcsaft.result import _compute_per_point_rd
-
     sns.set_context("talk")
     sns.set_style("ticks")
 
-    df = _compute_per_point_rd(result.eos, result.compound.mw, result.data, result.units,
-        functional=getattr(result, "functional", None),
-    )
+    df = result.residuals()
     present = set(df["property"].to_list())
 
     _props = [

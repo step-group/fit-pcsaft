@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
+import feos
 import numpy as np
 import si_units as si
 from scipy.optimize import differential_evolution, least_squares
@@ -24,6 +25,8 @@ from fit_pcsaft._fit_utils import (
     _is_assoc,
     _make_f_and_df_numerical,
     _normalize_f_scale,
+    ad_model,
+    ad_rows,
     ideal_gas_cp,
     param_names,
     params_dict,
@@ -100,6 +103,110 @@ def _default_de_bounds(fit_mu: bool, assoc: bool) -> list:
     if assoc:
         bounds.extend(_DE_BOUNDS_ASSOC)
     return bounds
+
+
+def _loss_sum(r: np.ndarray, loss: str):
+    """Sum of scipy's robust loss rho(r**2) over the last axis -- what DE minimizes."""
+    z = r**2
+    if loss == "huber":
+        rho = np.where(z <= 1.0, z, 2.0 * np.sqrt(z) - 1.0)
+    elif loss == "soft_l1":
+        rho = 2.0 * (np.sqrt(1.0 + z) - 1.0)
+    elif loss == "cauchy":
+        rho = np.log1p(z)
+    elif loss == "arctan":
+        rho = np.arctan(z)
+    else:
+        rho = z
+    return np.sum(rho, axis=-1)
+
+
+def _make_de_population_objective(data, compound, spec, units, config, errors):
+    """DE's objective for a whole population: ``x`` is ``(n_params, S)`` or ``(n_params,)``.
+
+    Values only, in PHYSICAL space: the residuals of ``jacobian._make_core``'s
+    ``fun`` -- same scales, same psat extrapolation, same whole-candidate
+    penalty -- from one feos ``*_derivatives`` call per property over every
+    (candidate, temperature) pair, as in ``pareto._evaluate_population``.
+    """
+    model = ad_model(spec)
+    to_p = 1.0 / (units.pressure / si.PASCAL)
+    to_rho = compound.mw / (units.density / (si.KILOGRAM / si.METER**3))
+    to_h = 1.0 / (units.enthalpy / (si.JOULE / si.MOL))
+    blocks = [
+        (fn, np.asarray(T, dtype=float), d, np.sqrt(w / len(T)) / config.f_scale[key], factor)
+        for fn, T, d, w, key, factor in (
+            (feos.Property.vapor_pressure_derivatives,
+             data.T_psat, data.p_psat, config.w_psat, "psat", to_p),
+            (feos.Property.equilibrium_liquid_density_derivatives,
+             data.T_rho, data.rho, config.w_rho, "rho", to_rho),
+            (feos.Property.enthalpy_of_vaporization_derivatives,
+             data.T_hvap, data.hvap, config.w_hvap, "hvap", to_h),
+        )
+        if len(T)
+    ]
+    n_total = sum(len(b[1]) for b in blocks)
+    inv_T_psat = 1.0 / np.asarray(data.T_psat, dtype=float)
+
+    def f(x):
+        X = np.atleast_2d(np.asarray(x, dtype=float).T)
+        S = len(X)
+        f.nfev += S  # scipy's nfev counts vectorized calls, not candidates
+        rows = ad_rows(X, spec)
+        R = np.empty((S, n_total))
+        bad = np.zeros(S, dtype=bool)
+        col = 0
+        for i, (fn, T, d, scale, factor) in enumerate(blocks):
+            # Candidates already penalized are not solved again, as _make_core returns early.
+            live = np.flatnonzero(~bad)
+            if not live.size:
+                break
+            nT, L = len(T), len(live)
+            # T goes in unconverted, exactly as _make_core feeds it.
+            Tin = np.ascontiguousarray(np.tile(T, L)[:, None])
+            try:
+                vals, _, ok = fn(model, [], np.repeat(rows[live], nT, axis=0), Tin)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+                return np.full(S, _loss_sum(np.full(n_total, _PENALTY), config.loss))
+            vals = (vals * factor).reshape(L, nT)
+            ok = ok.reshape(L, nT)
+            if i == 0 and config.extrapolate_psat:
+                # Clausius-Clapeyron fill, row by row: only partly-failed candidates.
+                for j in np.flatnonzero(~ok.all(axis=1) & (ok.sum(axis=1) >= 2)):
+                    m = ok[j]
+                    A = np.column_stack([np.ones(m.sum()), inv_T_psat[m]])
+                    c = np.linalg.lstsq(A, np.log(vals[j, m]), rcond=None)[0]
+                    vals[j, ~m] = np.exp(c[0] + c[1] * inv_T_psat[~m])
+                    ok[j] = True
+            bad[live] |= ~ok.all(axis=1)
+            R[live, col:col + nT] = scale * (vals / d - 1.0)
+            col += nT
+        R[bad] = _PENALTY
+        return _loss_sum(R, config.loss)
+
+    f.nfev = 0
+    return f
+
+
+def _least_squares_start(task):
+    """One ``fit_pure`` start inside a ``pareto._worker_pool`` worker.
+
+    The worker's feos objects live in ``pareto._WORKER`` (``feos.Identifier``
+    does not pickle); the cost function is rebuilt per task, which is free
+    next to its DFT solves. Returns ``(OptimizeResult | None, first error)``.
+    """
+    from fit_pcsaft._pure.pareto import _WORKER
+
+    x0, config, ls_kwargs = task
+    cost_fn, jac_fn, errors = _make_f_and_df_numerical(
+        _WORKER["data"], _WORKER["compound"], _WORKER["spec"], _WORKER["units"], config
+    )
+    try:
+        res = least_squares(cost_fn, x0, jac=jac_fn, **ls_kwargs)
+    except Exception:  # noqa: BLE001
+        res = None
+    return res, errors[:1]
 
 
 def _compute_pure_metrics(
@@ -301,6 +408,7 @@ def fit_pure(
     surface_tension_unit: si.SIObject = si.MILLI * si.NEWTON / si.METER,
     sft_options=None,
     scipy_kwargs: dict | None = None,
+    n_jobs: int = -1,
 ) -> FitResult:
     """Fit PC-SAFT parameters to vapor pressure and liquid density data.
 
@@ -355,6 +463,13 @@ def fit_pure(
             Unit for enthalpy of vaporization in CSV (default: kJ/mol)
         scipy_kwargs : Optional[dict]
             Optional dict to override scipy least_squares defaults
+        n_jobs : int
+            Worker processes for the multi-start runs when ``sft_path`` is given
+            (each Jacobian costs a DFT solve per point and parameter); -1
+            (default) means every core bar two, 1 runs serially. Same results as
+            serial. Processes, not threads -- feos does not release the GIL --
+            spawned, so on a spawn platform the call must sit inside an
+            ``if __name__ == "__main__":`` guard. A no-op without surface tension.
 
     Returns
     -------
@@ -409,14 +524,36 @@ def fit_pure(
     if scipy_kwargs:
         ls_kwargs.update(scipy_kwargs)
 
+    starts = [np.sqrt(x0i) for x0i in _get_initial_sets(fit_mu, assoc=is_associative)]
+    n_workers = 1
+    if sft_path is not None:
+        # The DFT solves are serial per point, so each start is worth a worker.
+        # Not for q != 0 alone: there feos's own threads already parallelize the
+        # bulk calls and single-threaded workers lost (toluene 25 s -> 70 s).
+        # Imported here: pareto imports this module.
+        from fit_pcsaft._pure.pareto import _resolve_n_jobs, _worker_pool
+
+        n_workers = min(_resolve_n_jobs(n_jobs), len(starts))
+
     t0 = time.perf_counter()
     results = []
-    for x0i in _get_initial_sets(fit_mu, assoc=is_associative):
-        try:
-            res = least_squares(cost_fn, np.sqrt(x0i), jac=jac_fn, **ls_kwargs)
-            results.append(res)
-        except Exception:  # noqa: BLE001, S112
-            continue
+    if n_workers > 1:
+        with _worker_pool(
+            n_workers, compound, spec, data, units, _config.sft_options, False, ()
+        ) as pool:
+            # map, not imap_unordered: min() below breaks ties by start order.
+            out = pool.map(_least_squares_start, [(x0, _config, ls_kwargs) for x0 in starts])
+        for res, errs in out:
+            errors.extend(errs)
+            if res is not None:
+                results.append(res)
+    else:
+        for x0 in starts:
+            try:
+                res = least_squares(cost_fn, x0, jac=jac_fn, **ls_kwargs)
+                results.append(res)
+            except Exception:  # noqa: BLE001, S112
+                continue
 
     if not results:
         raise RuntimeError(
@@ -530,6 +667,10 @@ def fit_pure_de(
             Optional dict to override scipy differential_evolution defaults.
             Useful options: seed (int), maxiter (int), popsize (int),
             tol (float), polish (bool, default True — runs L-BFGS-B refinement).
+            Without surface tension and with ``q == 0`` the population is
+            evaluated in one batched feos call per property (``vectorized=True``,
+            hence ``updating="deferred"``); pass ``vectorized=False,
+            updating="immediate"`` for the earlier one-candidate-at-a-time DE.
 
     Returns
     -------
@@ -568,24 +709,8 @@ def fit_pure_de(
     # DE searches in actual param space; cost_fn expects sqrt-transformed params
     # (it squares them internally). Wrapping with sqrt bridges the two spaces.
     # f_scale is pre-applied in cost_fn residuals; apply matching robust loss here.
-    _loss = config.loss
-
     def de_objective(x: np.ndarray) -> float:
-        r = cost_fn(np.sqrt(x))
-        if _loss == "linear":
-            return float(np.sum(r**2))
-        z = r**2
-        if _loss == "huber":
-            rho = np.where(z <= 1.0, z, 2.0 * np.sqrt(z) - 1.0)
-        elif _loss == "soft_l1":
-            rho = 2.0 * (np.sqrt(1.0 + z) - 1.0)
-        elif _loss == "cauchy":
-            rho = np.log1p(z)
-        elif _loss == "arctan":
-            rho = np.arctan(z)
-        else:
-            rho = z
-        return float(np.sum(rho))
+        return float(_loss_sum(cost_fn(np.sqrt(x)), config.loss))
 
     de_defaults = {
         "maxiter": 1000,
@@ -594,6 +719,13 @@ def fit_pure_de(
         "polish": True,
         "seed": None,
     }
+    # With feos AD available the whole population goes through one feos call per
+    # property; scipy then forces updating="deferred" (a different DE variant).
+    if len(data.T_sft) == 0 and q == 0.0:
+        de_objective = _make_de_population_objective(
+            data, compound, spec, units, config, errors
+        )
+        de_defaults.update(vectorized=True, updating="deferred")
     if de_kwargs:
         de_defaults.update(de_kwargs)
 
@@ -611,7 +743,7 @@ def fit_pure_de(
         fun=fun_vec,
         x=de_result.x,
         success=de_result.success,
-        nfev=de_result.nfev,
+        nfev=getattr(de_objective, "nfev", de_result.nfev),
         message=de_result.message,
     )
 

@@ -29,6 +29,9 @@ from fit_pcsaft._csv import SCHEMA_VLLE, load_csv
 from fit_pcsaft._fit_utils import _first_error, _first_error_hint
 
 _N_KIJ_SCAN = 13
+# Outer cap of the inner bubble/dew solves (feos default 400): non-converging
+# k_ij candidates otherwise dominate the fit's wall time.
+_BD_MAX_ITER_OUTER = 30
 
 
 def _predict_vlle_point(
@@ -48,6 +51,7 @@ def _predict_vlle_point(
             x_init=(float(np.clip(x1_I_init, 1e-6, 1.0 - 1e-6)),
                     float(np.clip(x1_II_init, 1e-6, 1.0 - 1e-6))),
             tp_init=T_K * si.KELVIN,
+            max_iter_bd_outer=_BD_MAX_ITER_OUTER,
         )
         T_pred     = float(ha.vapor.temperature / si.KELVIN)
         x1_I_pred  = float(ha.liquid1.molefracs[0])

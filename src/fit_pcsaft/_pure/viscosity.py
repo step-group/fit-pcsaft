@@ -721,20 +721,9 @@ def _plot_viscosity_pure(result: ViscosityFitResult, path=None):
     ax.scatter(T_exp, eta_exp_mPas, label="Experiment", **_scatter_kw(_EXP_COLOR))
 
     if result.eos is not None:
-        T_min, T_max = T_exp.min(), T_exp.max()
-        T_pad = (T_max - T_min) * 0.05
-        T_curve = np.linspace(T_min - T_pad, T_max + T_pad, 80)
-        eta_curve = []
-        for T in T_curve:
-            try:
-                state = feos.State(result.eos, temperature=T * si.KELVIN,
-                                   pressure=0.1 * si.MEGA * si.PASCAL,
-                                   composition=si.MOL,
-                                   density_initialization="liquid")
-                eta_curve.append(float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3)
-            except Exception:  # noqa: BLE001
-                eta_curve.append(float("nan"))
-        eta_curve = np.array(eta_curve)
+        T_curve, _, eta_curve = _smooth_viscosity_curve(result.eos, T_exp.min(), T_exp.max())
+        T_curve = np.array(T_curve)
+        eta_curve = np.array(eta_curve) * 1e3
         valid = np.isfinite(eta_curve)
         ax.plot(T_curve[valid], eta_curve[valid], color=_LINE_COLOR, label="PC-SAFT")
 
@@ -848,6 +837,7 @@ def plot_viscosity_binary(
 
     fig, ax = plt.subplots(figsize=(9, 6))
     x_smooth = np.linspace(0.0, 1.0, 100)
+    smooth = []  # (T_iso, P_iso, eta in Pa·s) per isotherm, reused for csv_out
 
     for k, T_iso in enumerate(unique_T):
         color = colors[k]
@@ -860,10 +850,11 @@ def plot_viscosity_binary(
                 state = feos.State(eos_mix, temperature=T_iso * si.KELVIN,
                                    pressure=P_iso * pressure_unit,
                                    composition=np.array([x1, 1.0 - x1]) * si.MOL)
-                eta_model.append(float(state.viscosity() / (si.PASCAL * si.SECOND)) * 1e3)
+                eta_model.append(float(state.viscosity() / (si.PASCAL * si.SECOND)))
             except Exception:  # noqa: BLE001
                 eta_model.append(float("nan"))
-        eta_model = np.array(eta_model)
+        smooth.append((T_iso, P_iso, eta_model))
+        eta_model = np.array(eta_model) * 1e3
         valid = np.isfinite(eta_model)
         ax.plot(x_smooth[valid], eta_model[valid], color=color, label=f"{T_iso:.1f} K")
 
@@ -910,19 +901,11 @@ def plot_viscosity_binary(
         pl.DataFrame(exp_rows).write_csv(csv_out / f"{stem}_binary_viscosity_exp.csv")
 
         # --- smooth model CSV (100-pt x1 grid per isotherm, stacked) ---
-        model_rows = []
-        for T_iso in unique_T:
-            iso_mask = np.abs(T_arr - T_iso) < 0.5
-            P_iso = float(P_arr[iso_mask][0]) if iso_mask.any() else 0.1
-            for x1 in x_smooth:
-                try:
-                    state = feos.State(eos_mix, temperature=T_iso * si.KELVIN,
-                                       pressure=P_iso * pressure_unit,
-                                       composition=np.array([x1, 1.0 - x1]) * si.MOL)
-                    eta_m = float(state.viscosity() / (si.PASCAL * si.SECOND))
-                except Exception:  # noqa: BLE001
-                    eta_m = float("nan")
-                model_rows.append({"T": float(T_iso), "P": float(P_iso), "x1": float(x1), "eta_model": eta_m})
+        model_rows = [
+            {"T": float(T_iso), "P": float(P_iso), "x1": float(x1), "eta_model": eta_m}
+            for T_iso, P_iso, eta_model in smooth
+            for x1, eta_m in zip(x_smooth, eta_model)
+        ]
         pl.DataFrame(model_rows).write_csv(csv_out / f"{stem}_binary_viscosity_model.csv")
 
     return fig, ax

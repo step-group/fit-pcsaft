@@ -44,6 +44,55 @@ def test_non_dominated_single_point():
     assert non_dominated(np.array([[1.0, 1.0]])).tolist() == [True]
 
 
+def _non_dominated_loop(F):
+    """The original O(n^2) loop, kept as the reference the broadcast must match."""
+    F = np.asarray(F, dtype=float)
+    n = F.shape[0]
+    keep = np.ones(n, dtype=bool)
+    for i in range(n):
+        if not keep[i]:
+            continue
+        for j in range(n):
+            if i == j or not keep[j]:
+                continue
+            if np.all(F[j] <= F[i]) and np.any(F[j] < F[i]):
+                keep[i] = False
+                break
+    seen: set = set()
+    for i in range(n):
+        if not keep[i]:
+            continue
+        key = tuple(F[i])
+        if key in seen:
+            keep[i] = False
+        else:
+            seen.add(key)
+    return keep
+
+
+@pytest.mark.parametrize("k", [2, 3, 4])
+@pytest.mark.parametrize("seed", range(5))
+def test_non_dominated_matches_the_reference_loop(k, seed):
+    rng = np.random.default_rng(seed)
+    t = np.sort(rng.random(30))
+    front = np.column_stack([t, 1.0 - t] + [rng.random(30)] * (k - 2))
+    ties = rng.integers(0, 4, size=(80, k)).astype(float)   # ties and duplicates
+    nan_rows = rng.random((6, k))
+    nan_rows[:3] = np.nan
+    nan_rows[3:, 0] = np.nan                                 # partly NaN
+    cases = [
+        rng.random((60, k)),
+        ties,
+        np.vstack([ties, ties[:10], nan_rows, ties[:5]]),
+        front[rng.permutation(30)],                          # all non-dominated
+        np.vstack([front, front[:4], [[0.0] * k], [[-0.0] * k]]),
+        np.zeros((0, k)),
+        rng.random((1, k)),
+    ]
+    for F in cases:
+        assert non_dominated(F).tolist() == _non_dominated_loop(F).tolist()
+
+
 def test_coverage_is_zero_between_a_front_and_itself():
     """No point on a real front dominates another, in either direction."""
     from fit_pcsaft._pure.pareto import coverage

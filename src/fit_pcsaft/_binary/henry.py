@@ -170,7 +170,7 @@ def fit_kij_henry(
     kij_coeffs = result.x
     eos_ref = _build_binary_eos(record1, record2, float(kij_coeffs[0]))
 
-    final_resids = fun(kij_coeffs)
+    final_resids = result.fun
     # Every residual sitting exactly on the penalty means no point was ever
     # evaluated — the k_ij below is fitted to nothing.
     if len(final_resids) and np.all(final_resids == 1.0):

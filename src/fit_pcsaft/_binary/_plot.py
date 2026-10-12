@@ -391,11 +391,15 @@ def _plot_vle(
 # ---------------------------------------------------------------------------
 
 
-def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int = 301):
+def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int = 301,
+                     T_stop: float | None = None):
     """Compute LLE phase-boundary curve with temperature-dependent k_ij(T).
 
     For each T, builds a fresh EOS from k_ij(T) and flashes with liquid
     initialization + warm-start chained from the previous step's PE.
+
+    The march runs to ``T_stop`` if given, else up to 500 K past ``T_max``
+    to find the UCST; ``T_max`` only sets the step size.
 
     Returns (T_arr, x_I_list, x_II_list) — lists of successfully converged points.
     """
@@ -425,7 +429,8 @@ def _lle_curve_kij_T(result, z1: float, T_min: float, T_max: float, npoints: int
     T_anchor_K = T_min
 
     T_K = T_min
-    while T_K <= T_max + 500.0:  # extend up to 500 K past data range
+    T_end = T_max + 500.0 if T_stop is None else T_stop
+    while T_K <= T_end:
         kij_T = _kij_at_T(result.kij_coeffs, T_K, result.kij_t_ref)
         record_at_T = getattr(result, "_record_at_T", None)
         eos_T = _build_binary_eos(
@@ -1101,6 +1106,7 @@ def _find_heteroazeotrope(result, pressure_si, x_I_init: float, x_II_init: float
             eos, pressure_si,
             x_init=(float(x_I_init), float(x_II_init)),
             tp_init=T_init_K * si.KELVIN,
+            max_iter_bd_outer=30,  # failed solves are otherwise very slow
         )
         # ThreePhaseEquilibrium has liquid1, liquid2, vapor attributes
         T_het = float(ha.vapor.temperature / si.KELVIN)
@@ -1284,7 +1290,9 @@ def _plot_vle_lle(
         curve_T_min = float(_T_ref_lo) - T_pad
         curve_T_max = (float(ha[0]) if ha is not None else float(_T_ref_hi)) + T_pad
 
-        T_c, x_I_c, x_II_c = _lle_curve_kij_T(result, z1, curve_T_min, curve_T_max, npoints=301)
+        T_stop = float(ha[0]) if ha is not None else None
+        T_c, x_I_c, x_II_c = _lle_curve_kij_T(result, z1, curve_T_min, curve_T_max, npoints=301,
+                                              T_stop=T_stop)
         if len(T_c) > 0:
             T_c = np.array(T_c)
             x_I_c = np.array(x_I_c)
@@ -1304,6 +1312,7 @@ def _plot_vle_lle(
                 _record_at_T=getattr(result, "_record_at_T", None),
                 kij_coeffs=np.array([0.0]), kij_t_ref=result.kij_t_ref,
             )
+            # No T_stop: the k_ij = 0 curve is drawn to its own UCST.
             T_u, x_I_u, x_II_u = _lle_curve_kij_T(mock, z1, curve_T_min, curve_T_max, npoints=301)
             if len(T_u) > 0 and np.max(np.abs(np.array(x_I_u) - np.array(x_II_u))) > 1e-4:
                 ax.plot(x_I_u, T_u, color=_PRED_COLOR, linestyle=":", label="Predictive (k_ij = 0)")
@@ -1436,6 +1445,7 @@ def _vlle_locus(
                     x_init=(float(np.clip(x_I_g, 1e-4, 1.0 - 1e-4)),
                             float(np.clip(x_II_g, 1e-4, 1.0 - 1e-4))),
                     tp_init=T_try * si.KELVIN,
+                    max_iter_bd_outer=30,  # failed solves are otherwise very slow
                 )
                 T_K = float(ha.vapor.temperature / si.KELVIN)
                 x_I = float(ha.liquid1.molefracs[0])
@@ -1657,13 +1667,14 @@ def _plot_vlle(result, path, temperature_unit, pressure_unit):
             0.05, 0.95,
         ))
         _lle_T_max = float(lle_T.max())
+        _T_max_show = _lle_T_max + T_pad
         T_c, x_I_c, x_II_c = _lle_curve_kij_T(
             result, z1,
             float(lle_T.min()) - T_pad,
             _lle_T_max + T_pad,
             npoints=301,
+            T_stop=_T_max_show,
         )
-        _T_max_show = _lle_T_max + T_pad
         if len(T_c) > 0:
             _T_c = np.asarray(T_c)
             _keep = _T_c <= _T_max_show

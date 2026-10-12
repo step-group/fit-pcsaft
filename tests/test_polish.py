@@ -154,3 +154,28 @@ def test_polish_caps_every_other_objective_in_three_dimensions():
     cap_b, cap_c = F[:, 1], F[:, 2]
     assert Fp[:, 0] == pytest.approx(1.0 / (cap_b * cap_c), rel=1e-5)
     assert Fp[:, 1] == pytest.approx(cap_b, rel=1e-5)
+
+
+def test_finite_difference_rows_reach_evaluate_as_one_batch():
+    """Without ``evaluate_grad`` SLSQP's forward-difference rows go to ``evaluate``
+    together, one row per parameter, so ``fit_pure_pareto``'s worker pool runs a
+    gradient's DFT solves side by side instead of one at a time."""
+    from fit_pcsaft._pure.polish import polish_front
+
+    sizes = []
+
+    def evaluate(rows):
+        rows = np.asarray(rows, dtype=float)
+        sizes.append(len(rows))
+        a, b, c = rows.T
+        return np.column_stack(
+            [a + (b - 0.5) ** 2, 1.0 / a + (c - 0.5) ** 2, np.zeros(len(rows))]
+        )
+
+    X = np.array([[1.0, 0.2, 0.9], [2.0, 0.8, 0.1]])
+    F = evaluate(X)[:, :2]
+    sizes.clear()
+    _, Fp = polish_front(X, F, evaluate, [(0.5, 4.0), (0.0, 1.0), (0.0, 1.0)])
+    assert max(sizes) == 3
+    assert Fp[:, 1] == pytest.approx(1.0 / Fp[:, 0], rel=1e-5)   # back on the front
+    assert len(Fp) == 2 and np.all(Fp <= F + 1e-9)

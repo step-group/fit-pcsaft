@@ -171,28 +171,14 @@ def non_dominated(F: np.ndarray) -> np.ndarray:
     least one. Exact duplicates: the first occurrence is kept.
     """
     F = np.asarray(F, dtype=float)
-    n = F.shape[0]
-    keep = np.ones(n, dtype=bool)
-    for i in range(n):
-        if not keep[i]:
-            continue
-        for j in range(n):
-            if i == j or not keep[j]:
-                continue
-            if np.all(F[j] <= F[i]) and np.any(F[j] < F[i]):
-                keep[i] = False
-                break
-    # Drop exact duplicates, keeping the first.
-    seen: set = set()
-    for i in range(n):
-        if not keep[i]:
-            continue
-        key = tuple(F[i])
-        if key in seen:
-            keep[i] = False
-        else:
-            seen.add(key)
-    return keep
+    le = (F[:, None, :] <= F[None, :, :]).all(axis=2)
+    eq = (F[:, None, :] == F[None, :, :]).all(axis=2)
+    # <= everywhere and not equal everywhere is "< somewhere"; a row with a NaN
+    # compares False both ways, so it neither dominates nor is dominated, and
+    # (NaN != NaN) is never treated as anyone's duplicate.
+    dominated = (le & ~eq).any(axis=0)
+    later_duplicate = np.triu(eq, k=1).any(axis=0)
+    return ~dominated & ~later_duplicate
 
 
 def coverage(A: np.ndarray, B: np.ndarray) -> float:
