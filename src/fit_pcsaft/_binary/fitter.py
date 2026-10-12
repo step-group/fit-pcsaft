@@ -29,10 +29,112 @@ import si_units as si
 from fit_pcsaft._binary._utils import (
     _apply_induced_association,
     _build_binary_eos,
+    _comp_resid,
     _fit_kij_polynomial,
+    _kij_at_T,
     _load_pure_records,
 )
 from fit_pcsaft._binary.result import BinaryFitResult
+
+
+def _ard_at_coeffs(res: BinaryFitResult, kij_coeffs, kij_t_ref: float,
+                   src: "dict | None" = None) -> float:
+    """ARD [%] of a single-type result's data at the k_ij polynomial `kij_coeffs`.
+
+    `res` is a vle/lle/vlle/sle result (its `data`, records and LLE/SLE settings
+    are reused); `src` is a `BinaryKijFitter` source spec, read for
+    temperature_unit, pressure_unit, require_both_phases, ucst_target and
+    relative_residuals (defaults: K, kPa, True, False, True, as add_lle/add_vle).
+    Every data row is scored, 100 * mean|residual| per point (VLLE: the T
+    residual only), points below 0.01 % dropped as machine-precision exact fits,
+    failed predictions counted as 100 %, as vle.py/lle.py's own post-polynomial
+    ARD counts them; vlle.py and sle.py never scored their polynomial. k_ij(T)
+    is evaluated in kelvin.
+    """
+    src = src or {}
+    tu = src.get("temperature_unit", si.KELVIN)
+    pu = src.get("pressure_unit", si.KILO * si.PASCAL)
+    rel = src.get("relative_residuals", True)
+    t_scale = float(tu / si.KELVIN)
+    d, r1, r2, eq = res.data, res._record1, res._record2, res.equilibrium_type
+    T_csv = d["T"].astype(float)
+    ards: list[float] = []
+
+    if eq == "vle":
+        from fit_pcsaft._binary.vle import _residuals_vle_point
+        for i, T in enumerate(T_csv):
+            r = _residuals_vle_point(
+                [_kij_at_T(kij_coeffs, T * t_scale, kij_t_ref)], T, float(d["P"][i]),
+                float(d["x1"][i]), float(d["y1"][i]) if "y1" in d else None,
+                r1, r2, tu, pu,
+            )
+            ards.append(100.0 * float(np.mean(np.abs(r))))  # failure: penalty of ones
+    elif eq == "lle":
+        from fit_pcsaft._binary.lle import (
+            _LLE_FEEDS,
+            _exp_feeds,
+            _individual_lle_points,
+            _residuals_at_T,
+        )
+        pts = _individual_lle_points(
+            T_csv, d["x1_I"].astype(float) if "x1_I" in d else None,
+            d["x1_II"].astype(float) if "x1_II" in d else None, t_scale,
+        )
+        if src.get("require_both_phases", True):
+            pts = [p for p in pts if p[1] is not None and p[2] is not None]
+        T_anchor_K = min(p[0] for p in pts)
+        if src.get("ucst_target", False):
+            T_ucst = max(p[0] for p in pts)
+            pts = [p for p in pts if abs(p[0] - T_ucst) < 1e-3]
+        warm: list = [None, None, None]
+        for T_K, exp_I, exp_II in pts:
+            r = _residuals_at_T(
+                [_kij_at_T(kij_coeffs, T_K, kij_t_ref)], T_K, exp_I, exp_II, r1, r2,
+                res.lle_pressure_bar * si.BAR, _exp_feeds(exp_I, exp_II) + _LLE_FEEDS,
+                T_anchor_K=T_anchor_K, relative_residuals=rel,
+                require_liquid_phases=res.lle_require_liquid_phases, warm=warm,
+                binary_assoc=res._binary_assoc, record_at_T=res._record_at_T,
+            )
+            ards.append(100.0 * float(np.mean(np.abs(r))))  # failure: penalty of ones
+    elif eq == "vlle":
+        from fit_pcsaft._binary.vlle import _predict_vlle_point
+        p_scale = float(pu / si.PASCAL)
+        for i, T in enumerate(T_csv):
+            T_K = T * t_scale
+            T_pred = _predict_vlle_point(
+                r1, r2, _kij_at_T(kij_coeffs, T_K, kij_t_ref), T_K,
+                float(d["P"][i]) * p_scale,
+                float(d["x1_I"][i]) if "x1_I" in d else 0.01,
+                float(d["x1_II"][i]) if "x1_II" in d else 0.90,
+                binary_assoc=res._binary_assoc,
+            )[0]
+            # T only, as fit_kij_vlle scores its points
+            ards.append(100.0 * abs((T_pred - T_K) / T_K if rel else T_pred - T_K)
+                        if np.isfinite(T_pred) else 100.0)
+    elif eq == "sle":
+        from fit_pcsaft._binary.sle import _predict_x1_for
+        solids = [(res.solid_index, res.tm_K, res.delta_hfus_J)]
+        if np.isfinite(res.tm2_K):
+            solids.append((1 - res.solid_index, res.tm2_K, res.delta_hfus2_J))
+        for T, x1 in zip(T_csv * t_scale, d["x1"].astype(float)):
+            try:
+                eos = _build_binary_eos(
+                    r1, r2, _kij_at_T(kij_coeffs, T, kij_t_ref), res._binary_assoc,
+                    T_K=T, record_at_T=res._record_at_T,
+                )
+                resid = min((_comp_resid(_predict_x1_for(eos, T, x1, *s), x1, False)
+                             for s in solids), key=abs)
+            except Exception:  # noqa: BLE001 -- solver failure counts as 100 %
+                resid = 1.0
+            ards.append(100.0 * abs(resid))
+    else:
+        raise NotImplementedError(f"no ARD evaluation for {eq!r}")
+
+    arr = np.array(ards)
+    if len(arr) == 0:
+        return float("nan")
+    meaningful = arr[arr > 0.01]
+    return float(meaningful.mean()) if len(meaningful) > 0 else float(arr.mean())
 
 
 class BinaryKijFitter:
@@ -235,6 +337,7 @@ class BinaryKijFitter:
         data_exp: dict[str, np.ndarray] = {}
         ard_by_type: dict[str, float] = {}
         types_seen: list[str] = []
+        sub_fits: list = []
 
         # --- run per-point fitting for each source ---
         for src in self._sources:
@@ -346,7 +449,7 @@ class BinaryKijFitter:
             kij_all.append(kij_pts)
             ard_all.append(ard_pts)
             source_labels.append(np.full(len(T_pts), stype))
-            ard_by_type[stype] = res.ard  # post-polynomial ARD (not per-point optimal)
+            sub_fits.append((src, res))
             total_nfev += res.scipy_result.nfev
 
         # --- combine and fit polynomial ---
@@ -366,6 +469,9 @@ class BinaryKijFitter:
             nfev=total_nfev,
             message="Combined per-point fitting completed",
         )
+        # Each source scored at the combined polynomial, not its own sub-fit's.
+        for src, res in sub_fits:
+            ard_by_type[src["type"]] = _ard_at_coeffs(res, kij_coeffs, self.kij_t_ref, src)
 
         # overall ARD: weighted by number of points per type
         counts = {t: int(np.sum(source == t)) for t in types_seen}

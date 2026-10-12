@@ -1187,6 +1187,7 @@ class ParetoResult:
     input_name: str = ""
     objectives: tuple[str, ...] = _DEFAULT_OBJECTIVES
     algorithm_result: object = None
+    sft_options: object = None  # SurfaceTensionOptions; None -> module default
 
     @property
     def param_names(self) -> list[str]:
@@ -1220,8 +1221,8 @@ class ParetoResult:
             else None
         )
         params = params_dict(params_vec, self.spec)
-        metrics = _compute_pure_metrics(eos, self.compound.mw, self.data, self.units, functional=functional
-        )
+        metrics = _compute_pure_metrics(eos, self.compound.mw, self.data, self.units,
+                                        functional=functional, sft_options=self.sft_options)
         cost = float((self.F[i] / np.asarray(refs, dtype=float)).sum())
         scipy_result = SimpleNamespace(
             # FitResult.__str__ derives RMS from 2*cost/len(fun)
@@ -1244,6 +1245,7 @@ class ParetoResult:
             time_elapsed=self.time_elapsed,
             input_name=self.input_name,
             functional=functional,
+            sft_options=self.sft_options,
         )
 
     def plot(self, path=None, refs: tuple[float, ...] | None = None):
@@ -1952,6 +1954,7 @@ def fit_pure_pareto(
         input_name=id,
         objectives=objectives,
         algorithm_result=res,
+        sft_options=sft_options,
     )
 
 

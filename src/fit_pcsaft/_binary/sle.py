@@ -194,7 +194,7 @@ def fit_kij_sle(
     def fun(coeffs: np.ndarray) -> np.ndarray:
         resids = np.empty(n_rows)
         kij_per_row = np.array(
-            [_kij_at_T(coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)]
+            [_kij_at_T(coeffs, float(T_arr[i]) * t_scale, kij_t_ref) for i in range(n_rows)]
         )
         # Keyed on k_ij alone unless record_at_T makes the EOS T-dependent too.
         eos_map: dict = {}

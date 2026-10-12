@@ -216,6 +216,7 @@ def _compute_pure_metrics(
     spec: ModelSpec,
     units: Units,
     eos=None,
+    sft_options=None,
 ):
     """Compute per-property Metrics for fitted parameters.
 
@@ -234,7 +235,9 @@ def _compute_pure_metrics(
         if len(data.T_sft) > 0
         else None
     )
-    return eos, functional, _result_metrics(eos, compound.mw, data, units, functional=functional)
+    return eos, functional, _result_metrics(
+        eos, compound.mw, data, units, functional=functional, sft_options=sft_options
+    )
 
 
 def _setup_pure_fit(
@@ -575,6 +578,7 @@ def fit_pure(
         compound,
         spec,
         units,
+        sft_options=_config.sft_options,
     )
 
     return FitResult(
@@ -589,6 +593,7 @@ def fit_pure(
         time_elapsed=time_elapsed,
         input_name=id,
         functional=functional,
+        sft_options=_config.sft_options,
     )
 
 
@@ -753,6 +758,7 @@ def fit_pure_de(
         compound,
         spec,
         units,
+        sft_options=config.sft_options,
     )
 
     return FitResult(
@@ -767,6 +773,7 @@ def fit_pure_de(
         time_elapsed=time_elapsed,
         input_name=id,
         functional=functional,
+        sft_options=config.sft_options,
     )
 
 
@@ -914,7 +921,7 @@ def eval_pure(
     params_vec = np.array([params[k] for k in param_names(spec)], dtype=float)
 
     eos, functional, metrics = _compute_pure_metrics(
-        params_vec, data, compound, spec, units
+        params_vec, data, compound, spec, units, sft_options=sft_options
     )
 
     return EvalResult(
@@ -927,4 +934,5 @@ def eval_pure(
         metrics=metrics,
         input_name=id,
         functional=functional,
+        sft_options=sft_options,
     )

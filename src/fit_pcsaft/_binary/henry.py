@@ -95,6 +95,7 @@ def fit_kij_henry(
     T_arr = data["T"]
     H_arr = data["H"]
     n_rows = len(T_arr)
+    t_scale = float(temperature_unit / si.KELVIN)
 
     use_molfrac = henry_unit == "molfrac"
     if use_molfrac:
@@ -114,7 +115,7 @@ def fit_kij_henry(
 
     def fun(coeffs: np.ndarray) -> np.ndarray:
         resids = np.empty(n_rows)
-        kij_per_row = np.array([_kij_at_T(coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)])
+        kij_per_row = np.array([_kij_at_T(coeffs, float(T_arr[i]) * t_scale, kij_t_ref) for i in range(n_rows)])
         unique_kijs = np.unique(kij_per_row)
         eos_map: dict[float, object] = {}
         for kij_val in unique_kijs:

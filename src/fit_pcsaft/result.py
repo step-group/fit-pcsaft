@@ -10,7 +10,7 @@ from fit_pcsaft._fit_utils import predict_bulk
 from fit_pcsaft._types import Compound, ModelSpec, PureData, Units
 
 
-def _predict_per_property(eos, mw, data, units, *, functional=None):
+def _predict_per_property(eos, mw, data, units, *, functional=None, sft_options=None):
     """Return (model_arr, exp_arr) per property, NaN where feos did not converge.
 
     Keys "psat", "rho", "hvap", "cp", "sft"; each value a tuple (model, exp) of equal
@@ -23,30 +23,34 @@ def _predict_per_property(eos, mw, data, units, *, functional=None):
         model["sft"] = np.full(len(data.T_sft), np.nan)
     else:
         from fit_pcsaft._pure.surface_tension import predict_surface_tension
-        model["sft"] = predict_surface_tension(functional, data.T_sft, units)
+        model["sft"] = predict_surface_tension(functional, data.T_sft, units, sft_options)
     exp = {"psat": data.p_psat, "rho": data.rho, "hvap": data.hvap, "cp": data.cp, "sft": data.sft}
     return {k: (model[k], np.asarray(exp[k], dtype=float)) for k in exp}
 
 
-def _compute_pure_metrics(eos, mw, data, units, *, functional=None):
+def _compute_pure_metrics(eos, mw, data, units, *, functional=None, sft_options=None):
     """Compute per-property Metrics from an EOS + experimental data.
 
     Returns dict keyed by "psat", "rho", "hvap", "sft". Properties with no input rows
     return Metrics.empty(0).
     """
     from fit_pcsaft._metrics import compute_metrics_from_arrays
-    preds = _predict_per_property(eos, mw, data, units, functional=functional)
+    preds = _predict_per_property(
+        eos, mw, data, units, functional=functional, sft_options=sft_options
+    )
     return {
         prop: compute_metrics_from_arrays(model, exp, n_total=len(exp))
         for prop, (model, exp) in preds.items()
     }
 
 
-def _compute_per_point_rd(eos, mw, data, units, *, functional=None):
+def _compute_per_point_rd(eos, mw, data, units, *, functional=None, sft_options=None):
     """Compute per-point signed RD% and ARD% for all experimental datasets."""
     import polars as pl
 
-    preds = _predict_per_property(eos, mw, data, units, functional=functional)
+    preds = _predict_per_property(
+        eos, mw, data, units, functional=functional, sft_options=sft_options
+    )
 
     rows = []
     prop_labels = {"psat": (data.T_psat, data.p_psat),
@@ -124,6 +128,7 @@ class FitResult:
     time_elapsed: float
     input_name: str = ""
     functional: object = None  # feos DFT functional; needed for surface tension
+    sft_options: object = None  # SurfaceTensionOptions; None -> module default
 
     # --- backwards-compat shims -------------------------------------------
     @property
@@ -318,9 +323,7 @@ class FitResult:
         name = self.input_name or self.compound.identifier.name
 
         # --- experimental CSV (long/tidy: one row per data point) ---
-        _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units).write_csv(
-            path / f"{name}_exp.csv"
-        )
+        self._residuals.write_csv(path / f"{name}_exp.csv")
 
         # --- model curve CSV ---
         _model_curve_df(
@@ -386,7 +389,9 @@ class FitResult:
     @cached_property
     def _residuals(self):
         # Computed once per result: the sft column is a DFT sweep (ms per point).
-        return _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units, functional=self.functional
+        return _compute_per_point_rd(
+            self.eos, self.compound.mw, self.data, self.units,
+            functional=self.functional, sft_options=self.sft_options,
         )
 
     def plot_residuals(self, path=None):
@@ -504,6 +509,7 @@ class EvalResult:
     metrics: dict
     input_name: str = ""
     functional: object = None  # feos DFT functional; needed for surface tension
+    sft_options: object = None  # SurfaceTensionOptions; None -> module default
 
     # --- backwards-compat shims -------------------------------------------
     @property
@@ -592,9 +598,7 @@ class EvalResult:
         name = self.input_name or self.compound.identifier.name
 
         # --- experimental CSV (long/tidy: one row per data point) ---
-        _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units).write_csv(
-            path / f"{name}_exp.csv"
-        )
+        self._residuals.write_csv(path / f"{name}_exp.csv")
 
         _model_curve_df(
             self.eos, self.data, self.units, T_min, T_max, n_points
@@ -635,7 +639,9 @@ class EvalResult:
     @cached_property
     def _residuals(self):
         # Computed once per result: the sft column is a DFT sweep (ms per point).
-        return _compute_per_point_rd(self.eos, self.compound.mw, self.data, self.units, functional=self.functional
+        return _compute_per_point_rd(
+            self.eos, self.compound.mw, self.data, self.units,
+            functional=self.functional, sft_options=self.sft_options,
         )
 
     def plot_residuals(self, path=None):

@@ -254,7 +254,7 @@ def fit_kij_vle(
         resids = np.empty(n_resid)
         # Group rows by unique kij to avoid rebuilding EOS for every row.
         # For kij_order=0 this means 1 EOS build per fun() call.
-        kij_per_row = np.array([_kij_at_T(coeffs, float(T_arr[i]), kij_t_ref) for i in range(n_rows)])
+        kij_per_row = np.array([_kij_at_T(coeffs, float(T_arr[i]) * t_scale, kij_t_ref) for i in range(n_rows)])
         unique_kijs = np.unique(kij_per_row)
         eos_map: dict[float, object] = {}
         for kij_val in unique_kijs:

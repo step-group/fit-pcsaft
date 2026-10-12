@@ -121,7 +121,6 @@ def fit_kij_vle_lle(
     )
     T_vle_K = vle_res.data["T_kij"]
     kij_vle = vle_res.data["kij_pointwise"]
-    ard_vle = float(np.mean(vle_res.data["ard_pointwise"]))
 
     # --- Stage 1b: LLE per-point k_ij -----------------------------------------
     lle_res = fit_kij_lle(
@@ -141,7 +140,6 @@ def fit_kij_vle_lle(
     )
     T_lle_K = lle_res.data["T_kij"]
     kij_lle = lle_res.data["kij_pointwise"]
-    ard_lle = float(np.mean(lle_res.data["ard_pointwise"]))
 
     # --- Stage 2: polynomial fit to combined (T, k_ij) pairs ------------------
     T_combined = np.concatenate([T_vle_K, T_lle_K])
@@ -162,6 +160,15 @@ def fit_kij_vle_lle(
         nfev=total_nfev,
         message="VLE+LLE two-stage fitting completed",
     )
+
+    # Per-type ARD at the combined polynomial, not at each sub-fit's own k_ij.
+    from fit_pcsaft._binary.fitter import _ard_at_coeffs
+
+    ard_vle = _ard_at_coeffs(vle_res, kij_coeffs, kij_t_ref,
+                             {"temperature_unit": temperature_unit, "pressure_unit": pressure_unit})
+    ard_lle = _ard_at_coeffs(lle_res, kij_coeffs, kij_t_ref,
+                             {"temperature_unit": temperature_unit,
+                              "require_both_phases": require_both_phases})
 
     # Combined ARD (weighted by number of points)
     n_vle = len(T_vle_K)
