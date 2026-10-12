@@ -5,38 +5,36 @@ models × 3 fitting scenarios (LLE-only, VLE-only, VLE+LLE) × order 0 and 1,
 fits k_ij and reports ARD% at the fitted polynomial for BOTH data types,
 including cross-evaluation (e.g. LLE-fitted k_ij evaluated against VLE data).
 
+Each (water model, system) group runs the per-point k_ij fits once per data
+type, then fits every scenario's k_ij(T) polynomial from them -- exactly what
+``BinaryKijFitter.fit()`` does per combination, since its per-point stage does
+not depend on order or scenario. Groups run in parallel worker processes.
+
 Usage::
 
     uv run python benchmarks/run_test.py
 """
 
 import json
+import multiprocessing as mp
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
-import si_units as si
 from tqdm import tqdm
 
-from fit_pcsaft import BinaryKijFitter
-from fit_pcsaft._binary._utils import (
-    _apply_induced_association,
-    _kij_at_T,
-    _load_pure_records,
-)
-from fit_pcsaft._binary.lle import (
-    _LLE_FEEDS,
-    _aggregate_lle_data,
-    _exp_feeds,
-    _residuals_at_T,
-)
-from fit_pcsaft._binary.vle import _residuals_vle_point
-from fit_pcsaft._csv import SCHEMA_LLE, SCHEMA_VLE, load_csv
+from fit_pcsaft._binary._utils import _fit_kij_polynomial
+from fit_pcsaft._binary.fitter import _ard_at_coeffs
+from fit_pcsaft._binary.lle import fit_kij_lle
+from fit_pcsaft._binary.vle import fit_kij_vle
 
 TEST_DIR = Path(__file__).parent
 PARAMS_DIR = Path(__file__).parent.parent / "examples" / "data" / "parameters"
 
 PURE_PARAMS = TEST_DIR / "test_pure.json"
 WATER_MODELS_PATH = PARAMS_DIR / "water_models.json"
+LOG_PATH = TEST_DIR / "run_test.log"
 
 # --------------------------------------------------------------------------- #
 # Water model names
@@ -79,242 +77,145 @@ SYSTEMS = [
 
 SCENARIOS = ["lle", "vle", "vle+lle"]
 ORDERS = [0, 1]
+KIJ_BOUNDS = (-0.3, 0.3)  # BinaryKijFitter's default
 
-# --------------------------------------------------------------------------- #
-# Cross-evaluation helpers
-# Evaluate a pre-fitted k_ij polynomial against a data type WITHOUT re-fitting.
-# --------------------------------------------------------------------------- #
+PARAMS = [PURE_PARAMS, WATER_MODELS_PATH]
 
-def _eval_vle(
-    id1, id2, params, kij_coeffs, kij_t_ref, vle_path, induced_assoc
-) -> float:
-    """ARD% at the given k_ij polynomial evaluated on VLE data (no re-fitting)."""
-    record1, record2 = _load_pure_records(params, id1, id2)
-    if induced_assoc:
-        record1, record2 = _apply_induced_association(record1, record2)
 
-    data = load_csv(vle_path, SCHEMA_VLE)
-    T_arr = data["T"].astype(float)
-    P_arr = data["P"].astype(float)
-    x1_arr = data["x1"].astype(float)
-    has_y1 = "y1" in data
-    y1_arr = data["y1"].astype(float) if has_y1 else None
+def _init_worker() -> None:
+    import feos
 
-    # drop pure-component endpoints (same as fit_kij_vle)
-    mix_mask = (x1_arr > 1e-4) & (x1_arr < 1.0 - 1e-4)
-    T_arr = T_arr[mix_mask]
-    P_arr = P_arr[mix_mask]
-    x1_arr = x1_arr[mix_mask]
-    if y1_arr is not None:
-        y1_arr = y1_arr[mix_mask]
+    feos.set_num_threads(1)
 
-    ards = []
-    for i in range(len(T_arr)):
-        T_i = float(T_arr[i])
-        kij_i = _kij_at_T(kij_coeffs, T_i, kij_t_ref)
+
+def _run_group(water_name: str, sys: dict) -> "list[tuple[dict, str]]":
+    """All scenario × order rows for one (water model, system), each with its log line."""
+    id1, id2, t_ref = sys["id1"], water_name, sys["kij_t_ref"]
+    common = {
+        "kij_order": 0, "kij_t_ref": t_ref, "kij_bounds": KIJ_BOUNDS,
+        "kij_per_point": True, "induced_assoc": sys["induced_assoc"],
+    }
+    # Per-point stage, once per data type; LLE first, matching the source
+    # order BinaryKijFitter concatenated for vle+lle.
+    srcs = {"lle": {"require_both_phases": sys["require_both_phases"]}, "vle": {}}
+    sub: dict = {}
+    for stype, fit_fn in (("lle", fit_kij_lle), ("vle", fit_kij_vle)):
         try:
-            resid = _residuals_vle_point(
-                [kij_i],
-                T_i,
-                float(P_arr[i]),
-                float(x1_arr[i]),
-                float(y1_arr[i]) if y1_arr is not None else None,
-                record1,
-                record2,
-                si.KELVIN,
-                si.KILO * si.PASCAL,
-            )
-            if resid is not None and len(resid) > 0:
-                ards.append(100.0 * float(np.mean(np.abs(resid))))
-        except Exception:  # noqa: BLE001, S110 -- solver failure: point skipped
-            pass
+            sub[stype] = fit_fn(id1, id2, sys[f"{stype}_path"], PARAMS, **common, **srcs[stype])
+        except Exception as exc:  # noqa: BLE001 -- recorded on every row that needs it
+            sub[stype] = exc
 
-    return float(np.mean(ards)) if ards else float("nan")
-
-
-def _eval_lle(
-    id1, id2, params, kij_coeffs, kij_t_ref, lle_path, induced_assoc,
-    require_both_phases=False
-) -> float:
-    """ARD% at the given k_ij polynomial evaluated on LLE data (no re-fitting)."""
-    record1, record2 = _load_pure_records(params, id1, id2)
-    if induced_assoc:
-        record1, record2 = _apply_induced_association(record1, record2)
-
-    raw = load_csv(lle_path, SCHEMA_LLE)
-    T_arr = raw["T"].astype(float)
-    x1_I = raw["x1_I"].astype(float) if "x1_I" in raw else None
-    x1_II = raw["x1_II"].astype(float) if "x1_II" in raw else None
-
-    aggregated = _aggregate_lle_data(T_arr, x1_I, x1_II, t_scale=1.0)
-    if require_both_phases:
-        aggregated = [
-            (T, xi, xii) for T, xi, xii in aggregated
-            if xi is not None and xii is not None
-        ]
-
-    if not aggregated:
-        return float("nan")
-
-    T_anchor_K = min(t for t, _, __ in aggregated)
-    pressure = 1.01325 * si.BAR
-
-    ards = []
-    for T_K, exp_I, exp_II in aggregated:
-        kij_i = _kij_at_T(kij_coeffs, T_K, kij_t_ref)
-        feeds = _exp_feeds(exp_I, exp_II) + _LLE_FEEDS
-        try:
-            resid = _residuals_at_T(
-                [kij_i], T_K, exp_I, exp_II,
-                record1, record2, pressure, feeds,
-                T_anchor_K=T_anchor_K,
-            )
-            if resid is not None and len(resid) > 0:
-                ards.append(100.0 * float(np.mean(np.abs(resid))))
-        except Exception:  # noqa: BLE001, S110 -- solver failure: point skipped
-            pass
-
-    return float(np.mean(ards)) if ards else float("nan")
-
-
-# --------------------------------------------------------------------------- #
-# Run fits
-# --------------------------------------------------------------------------- #
-Row = dict
-results: list[Row] = []
-
-params = [PURE_PARAMS, WATER_MODELS_PATH]
-
-combos = [
-    (water_name, sys, scenario, order)
-    for water_name in WATER_MODELS
-    for sys in SYSTEMS
-    for scenario in SCENARIOS
-    for order in ORDERS
-]
-
-LOG_PATH = TEST_DIR / "run_test.log"
-_log = LOG_PATH.open("w", buffering=1, encoding="utf-8")  # line-buffered
-
-def _log_write(msg: str) -> None:
-    print(msg, file=_log, flush=True)
-    tqdm.write(msg)
-
-with tqdm(combos, desc="Fitting", unit="fit", dynamic_ncols=True) as pbar:
-    for water_name, sys, scenario, order in pbar:
-        pbar.set_postfix_str(f"{sys['name']} | {water_name} | {scenario} | ord={order}")
-        id1 = sys["id1"]
-        id2 = water_name
-        tag = f"{sys['name']:20s}  {water_name:30s}  {scenario:8s}  ord={order}"
-
-        try:
-            fitter = BinaryKijFitter(
-                id1,
-                id2,
-                params,
-                kij_order=order,
-                kij_t_ref=sys["kij_t_ref"],
-                induced_assoc=sys["induced_assoc"],
-            )
-            if "lle" in scenario:
-                fitter.add_lle(
-                    sys["lle_path"],
-                    require_both_phases=sys["require_both_phases"],
+    out = []
+    for scenario in SCENARIOS:
+        types = [t for t in ("lle", "vle") if t in scenario]
+        for order in ORDERS:
+            tag = f"{sys['name']:20s}  {water_name:30s}  {scenario:8s}  ord={order}"
+            row = {"system": sys["name"], "water": water_name, "scenario": scenario, "order": order}
+            try:
+                for t in types:
+                    if isinstance(sub[t], Exception):
+                        raise sub[t]
+                fitted = [sub[t].data for t in types]
+                kij_coeffs, _ = _fit_kij_polynomial(
+                    np.concatenate([d["T_kij"] for d in fitted]),
+                    np.concatenate([d["kij_pointwise"] for d in fitted]),
+                    np.concatenate([d["ard_pointwise"] for d in fitted]),
+                    order, t_ref,
                 )
-            if "vle" in scenario:
-                fitter.add_vle(sys["vle_path"])
-
-            _log_write(f"  fitting   {tag} ...")
-            res = fitter.fit()
-            _log_write(f"  fit done  {tag}  kij0={res.kij_coeffs[0]:.4f}  ARD={res.ard:.2f}%")
-
-            kij_coeffs = res.kij_coeffs
-            kij_t_ref = sys["kij_t_ref"]
-
-            # ARD at polynomial for the fitted type(s) (post-poly, from fitter)
-            ard_lle_fit = float(res.data["ard_lle"][0]) if "ard_lle" in res.data else float("nan")
-            ard_vle_fit = float(res.data["ard_vle"][0]) if "ard_vle" in res.data else float("nan")
-
-            # Cross-evaluation: evaluate fitted polynomial on the unfitted type
-            if scenario == "lle":
-                _log_write(f"  xeval VLE {tag} ...")
-                ard_vle_fit = _eval_vle(
-                    id1, id2, params, kij_coeffs, kij_t_ref,
-                    sys["vle_path"], sys["induced_assoc"]
+                # Both types at the polynomial: fitted ones as fit() reports
+                # them, the unfitted one as cross-evaluation (NaN if its own
+                # per-point fit failed, since that is where its data loads).
+                ards = {
+                    t: (float("nan") if isinstance(r, Exception)
+                        else _ard_at_coeffs(r, kij_coeffs, t_ref, srcs[t]))
+                    for t, r in sub.items()
+                }
+                counts = {t: len(sub[t].data["T_kij"]) for t in types}
+                ard = sum(ards[t] * counts[t] for t in types) / sum(counts.values())
+                row.update(
+                    ard=ard, ard_lle=ards["lle"], ard_vle=ards["vle"],
+                    kij0=float(kij_coeffs[0]),
+                    kij1=float(kij_coeffs[1]) if len(kij_coeffs) > 1 else float("nan"),
                 )
-                _log_write(f"  xeval done {tag}  ARD_VLE={ard_vle_fit:.2f}%")
-            elif scenario == "vle":
-                _log_write(f"  xeval LLE {tag} ...")
-                ard_lle_fit = _eval_lle(
-                    id1, id2, params, kij_coeffs, kij_t_ref,
-                    sys["lle_path"], sys["induced_assoc"],
-                    sys["require_both_phases"]
-                )
-                _log_write(f"  xeval done {tag}  ARD_LLE={ard_lle_fit:.2f}%")
-            # for "vle+lle" both are already filled from the fitter
+                msg = f"  OK        {tag}  LLE={ards['lle']:.2f}%  VLE={ards['vle']:.2f}%"
+            except Exception as exc:  # noqa: BLE001 -- solver failure recorded as a NaN row
+                row.update({k: float("nan") for k in ("ard", "ard_lle", "ard_vle", "kij0", "kij1")})
+                msg = f"  FAIL      {tag}  {exc}"
+            out.append((row, msg))
+    return out
 
-            results.append({
-                "system": sys["name"],
-                "water": water_name,
-                "scenario": scenario,
-                "order": order,
-                "ard": res.ard,
-                "ard_lle": ard_lle_fit,
-                "ard_vle": ard_vle_fit,
-                "kij0": float(kij_coeffs[0]),
-                "kij1": float(kij_coeffs[1]) if len(kij_coeffs) > 1 else float("nan"),
-            })
-            _log_write(f"  OK        {tag}  LLE={ard_lle_fit:.2f}%  VLE={ard_vle_fit:.2f}%")
 
-        except Exception as exc:  # noqa: BLE001 -- solver failure recorded as a NaN row
-            results.append({
-                "system": sys["name"],
-                "water": water_name,
-                "scenario": scenario,
-                "order": order,
-                "ard": float("nan"),
-                "ard_lle": float("nan"),
-                "ard_vle": float("nan"),
-                "kij0": float("nan"),
-                "kij1": float("nan"),
-            })
-            _log_write(f"  FAIL      {tag}  {exc}")
+def main() -> None:
+    groups = [(w, s) for w in WATER_MODELS for s in SYSTEMS]
+    by_group: dict[int, list] = {}
+    # spawn: forking a process with feos' live rayon threads risks a deadlock
+    with (
+        LOG_PATH.open("w", buffering=1, encoding="utf-8") as log,
+        ProcessPoolExecutor(
+            max_workers=max(1, (os.cpu_count() or 3) - 2),
+            mp_context=mp.get_context("spawn"),
+            initializer=_init_worker,
+        ) as pool,
+        tqdm(total=len(groups) * len(SCENARIOS) * len(ORDERS),
+             desc="Fitting", unit="fit", dynamic_ncols=True) as pbar,
+    ):
+        futures = {pool.submit(_run_group, w, s): i for i, (w, s) in enumerate(groups)}
+        for fut in as_completed(futures):
+            i = futures[fut]
+            try:
+                by_group[i] = fut.result()
+            except Exception as exc:  # noqa: BLE001 -- e.g. a worker died
+                w, s = groups[i]
+                by_group[i] = [
+                    ({"system": s["name"], "water": w, "scenario": scn, "order": o,
+                      **dict.fromkeys(("ard", "ard_lle", "ard_vle", "kij0", "kij1"), float("nan"))},
+                     f"  FAIL      {s['name']:20s}  {w:30s}  {scn:8s}  ord={o}  {exc}")
+                    for scn in SCENARIOS for o in ORDERS
+                ]
+            for _, msg in by_group[i]:
+                print(msg, file=log, flush=True)
+                tqdm.write(msg)
+            pbar.update(len(by_group[i]))
 
-_log.close()
+    results = [row for i in sorted(by_group) for row, _ in by_group[i]]
+    _print_summary(results)
 
-# --------------------------------------------------------------------------- #
-# Summary table
-# --------------------------------------------------------------------------- #
-W_SYS = 22
-W_WAT = 32
-W_SCN = 10
-W_ORD = 6
-W_VAL = 12
-SEP = "-" * (W_SYS + W_WAT + W_SCN + W_ORD + W_VAL * 3 + 4)
 
-print(f"\n{'='*len(SEP)}")
-print("SUMMARY  (ARD at polynomial in %;  cross-eval shown for single-type scenarios)")
-print(f"{'='*len(SEP)}")
-print(
-    f"{'System':<{W_SYS}} {'Water model':<{W_WAT}} {'Scenario':<{W_SCN}} "
-    f"{'Order':<{W_ORD}} {'ARD_LLE%':>{W_VAL}} {'ARD_VLE%':>{W_VAL}} {'kij0':>{W_VAL}}"
-)
-print(SEP)
+def _print_summary(results: list[dict]) -> None:
+    W_SYS = 22
+    W_WAT = 32
+    W_SCN = 10
+    W_ORD = 6
+    W_VAL = 12
+    SEP = "-" * (W_SYS + W_WAT + W_SCN + W_ORD + W_VAL * 3 + 4)
 
-prev_sys = None
-prev_water = None
-for r in results:
-    if r["system"] != prev_sys or r["water"] != prev_water:
-        if prev_sys is not None:
-            print()
-        prev_sys = r["system"]
-        prev_water = r["water"]
-
-    lle_str = f"{r['ard_lle']:.2f}" if not np.isnan(r["ard_lle"]) else "FAIL"
-    vle_str = f"{r['ard_vle']:.2f}" if not np.isnan(r["ard_vle"]) else "FAIL"
-    kij0_str = f"{r['kij0']:.4f}" if not np.isnan(r["kij0"]) else "FAIL"
-
+    print(f"\n{'='*len(SEP)}")
+    print("SUMMARY  (ARD at polynomial in %;  cross-eval shown for single-type scenarios)")
+    print(f"{'='*len(SEP)}")
     print(
-        f"{r['system']:<{W_SYS}} {r['water']:<{W_WAT}} {r['scenario']:<{W_SCN}} "
-        f"{r['order']:<{W_ORD}} {lle_str:>{W_VAL}} {vle_str:>{W_VAL}} {kij0_str:>{W_VAL}}"
+        f"{'System':<{W_SYS}} {'Water model':<{W_WAT}} {'Scenario':<{W_SCN}} "
+        f"{'Order':<{W_ORD}} {'ARD_LLE%':>{W_VAL}} {'ARD_VLE%':>{W_VAL}} {'kij0':>{W_VAL}}"
     )
+    print(SEP)
+
+    prev_sys = None
+    prev_water = None
+    for r in results:
+        if r["system"] != prev_sys or r["water"] != prev_water:
+            if prev_sys is not None:
+                print()
+            prev_sys = r["system"]
+            prev_water = r["water"]
+
+        lle_str = f"{r['ard_lle']:.2f}" if not np.isnan(r["ard_lle"]) else "FAIL"
+        vle_str = f"{r['ard_vle']:.2f}" if not np.isnan(r["ard_vle"]) else "FAIL"
+        kij0_str = f"{r['kij0']:.4f}" if not np.isnan(r["kij0"]) else "FAIL"
+
+        print(
+            f"{r['system']:<{W_SYS}} {r['water']:<{W_WAT}} {r['scenario']:<{W_SCN}} "
+            f"{r['order']:<{W_ORD}} {lle_str:>{W_VAL}} {vle_str:>{W_VAL}} {kij0_str:>{W_VAL}}"
+        )
+
+
+if __name__ == "__main__":
+    main()

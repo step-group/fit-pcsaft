@@ -248,13 +248,16 @@ def fit_kij_vle(
 
     # --- Global polynomial fit (default) -------------------------------------
     n_rows = len(T_arr)
-    n_resid = n_rows * (2 if has_y1 else 1)
+    n_r = 2 if has_y1 else 1
+    last: dict = {}  # serial P_pred at the last full fun() call, for the AD Jacobian
 
-    def fun(coeffs: np.ndarray) -> np.ndarray:
-        resids = np.empty(n_resid)
+    def fun(coeffs: np.ndarray, rows: "np.ndarray | None" = None) -> np.ndarray:
+        idx = np.arange(n_rows) if rows is None else rows
+        resids = np.empty(len(idx) * n_r)
+        P_preds = np.full(len(idx), np.nan)
         # Group rows by unique kij to avoid rebuilding EOS for every row.
         # For kij_order=0 this means 1 EOS build per fun() call.
-        kij_per_row = np.array([_kij_at_T(coeffs, float(T_arr[i]) * t_scale, kij_t_ref) for i in range(n_rows)])
+        kij_per_row = np.array([_kij_at_T(coeffs, float(T_arr[i]) * t_scale, kij_t_ref) for i in idx])
         unique_kijs = np.unique(kij_per_row)
         eos_map: dict[float, object] = {}
         for kij_val in unique_kijs:
@@ -263,29 +266,35 @@ def fit_kij_vle(
             except Exception:  # noqa: BLE001
                 eos_map[kij_val] = None
 
-        r = 0
-        for i in range(n_rows):
+        for j, i in enumerate(idx):
+            r = j * n_r
             T_i = float(T_arr[i])
             P_i = float(P_arr[i])
             x1_i = float(x1_arr[i])
-            eos = eos_map[kij_per_row[i]]
-            n_r = 2 if has_y1 else 1
+            eos = eos_map[kij_per_row[j]]
             if eos is None:
                 resids[r:r + n_r] = 1.0
             else:
                 try:
                     bp = _bubble_point(eos, T_i, x1_i, P_i, temperature_unit, pressure_unit)
-                    P_pred = bp.liquid.pressure() / pressure_unit
-                    resids[r] = (P_pred - P_i) / P_i
+                    P_preds[j] = bp.liquid.pressure() / pressure_unit
+                    resids[r] = (P_preds[j] - P_i) / P_i
                     if has_y1:
                         resids[r + 1] = float(bp.vapor.molefracs[0]) - float(y1_arr[i])
                 except Exception:  # noqa: BLE001
                     resids[r:r + n_r] = 1.0
-            r += n_r
+        if rows is None:
+            last["x"], last["P"] = np.array(coeffs, dtype=float), P_preds
         return resids
 
     n_coeffs = kij_order + 1
-    jac = _make_binary_jac_fn(fun, n_coeffs)
+    if has_y1:
+        jac = _make_binary_jac_fn(fun, n_coeffs)
+    else:
+        jac = _make_bubble_p_ad_jac_fn(
+            fun, last, record1, record2, T_arr * t_scale, x1_arr, P_arr,
+            float(pressure_unit / si.PASCAL), kij_t_ref, n_coeffs,
+        )
 
     x0 = np.zeros(n_coeffs)
     lb = [kij_bounds[0]] + [-0.01] * kij_order
@@ -336,6 +345,64 @@ def fit_kij_vle(
         _record1=record1,
         _record2=record2,
     )
+
+
+def _make_bubble_p_ad_jac_fn(
+    fun, last: dict, record1, record2, T_K: np.ndarray, x1: np.ndarray,
+    P_exp: np.ndarray, pa: float, t_ref: float, n_coeffs: int,
+):
+    """Jacobian of the global P-only residuals ``(P_pred - P)/P`` from feos AD.
+
+    dP/dk_ij comes from ``bubble_point_pressure_derivatives``, chained through
+    dk_ij/dc_n = (T - t_ref)^n. A row uses it only where feos's AD solve lands
+    on the serial solver's pressure to 1e-8: the AD solver can report a
+    converged but different root (gradient off by ~10%) or no convergence,
+    and the AD model has no quadrupole or second association site, so such
+    records (toluene's q) miss on every row.
+    Such a row is dropped from AD for the rest of the fit -- a non-converging
+    row costs ~20 ms there against ~0.07 ms for a good one, with no iteration
+    cap to pass -- and gets the central-difference column as before.
+    ``pa`` converts ``P_exp`` (and fun's pressures) to Pa.
+    """
+    import feos
+
+    def ad_row(rec):
+        m = rec.model_record
+        s = rec.association_sites[0] if rec.association_sites else {}
+        return [m["m"], m["sigma"], m["epsilon_k"], m.get("mu", 0.0),
+                s.get("kappa_ab", 0.0), s.get("epsilon_k_ab", 0.0), s.get("na", 0.0), s.get("nb", 0.0)]
+
+    pars = np.tile(ad_row(record1) + ad_row(record2) + [0.0], (len(T_K), 1))
+    powers = (T_K - t_ref)[:, None] ** np.arange(n_coeffs)
+    trusted = np.ones(len(T_K), dtype=bool)
+
+    def jac(x: np.ndarray) -> np.ndarray:
+        if "x" not in last or not np.array_equal(last["x"], x):
+            fun(x)
+        P_pa = last["P"] * pa
+        J = np.empty((len(T_K), n_coeffs))
+        good = np.zeros(len(T_K), dtype=bool)
+        use = np.flatnonzero(trusted & np.isfinite(P_pa))
+        if len(use):
+            pars[use, -1] = powers[use] @ x
+            try:
+                P_ad, dP, ok = feos.Property.bubble_point_pressure_derivatives(
+                    feos.EquationOfStateAD.PcSaftFull, ["k_ij"], pars[use],
+                    np.column_stack([T_K[use], x1[use], P_pa[use]]),
+                )
+                hit = ok & (np.abs(P_ad / P_pa[use] - 1.0) < 1e-8)
+            except BaseException:  # noqa: BLE001 -- feos panics are not Exceptions
+                hit = np.zeros(len(use), dtype=bool)
+            trusted[use[~hit]] = False
+            good[use[hit]] = True
+            if hit.any():  # dP is unbound when the AD call raised
+                J[use[hit]] = (dP[hit, 0] / (P_exp[use[hit]] * pa))[:, None] * powers[use[hit]]
+        fd = np.flatnonzero(~good)
+        if len(fd):
+            J[fd] = _make_binary_jac_fn(lambda c: fun(c, fd), n_coeffs)(x)
+        return J
+
+    return jac
 
 
 def _bubble_point(eos, T_K: float, x1: float, P_guess: float, temperature_unit, pressure_unit):

@@ -63,9 +63,10 @@ def _ard_at_coeffs(res: BinaryFitResult, kij_coeffs, kij_t_ref: float,
     if eq == "vle":
         from fit_pcsaft._binary.vle import _residuals_vle_point
         for i, T in enumerate(T_csv):
+            y1 = float(d["y1"][i]) if "y1" in d else float("nan")
             r = _residuals_vle_point(
                 [_kij_at_T(kij_coeffs, T * t_scale, kij_t_ref)], T, float(d["P"][i]),
-                float(d["x1"][i]), float(d["y1"][i]) if "y1" in d else None,
+                float(d["x1"][i]), y1 if np.isfinite(y1) else None,  # blank y1: P only
                 r1, r2, tu, pu,
             )
             ards.append(100.0 * float(np.mean(np.abs(r))))  # failure: penalty of ones
@@ -86,13 +87,14 @@ def _ard_at_coeffs(res: BinaryFitResult, kij_coeffs, kij_t_ref: float,
         if src.get("ucst_target", False):
             T_ucst = max(p[0] for p in pts)
             pts = [p for p in pts if abs(p[0] - T_ucst) < 1e-3]
-        warm: list = [None, None, None]
         for T_K, exp_I, exp_II in pts:
             r = _residuals_at_T(
                 [_kij_at_T(kij_coeffs, T_K, kij_t_ref)], T_K, exp_I, exp_II, r1, r2,
                 res.lle_pressure_bar * si.BAR, _exp_feeds(exp_I, exp_II) + _LLE_FEEDS,
                 T_anchor_K=T_anchor_K, relative_residuals=rel,
-                require_liquid_phases=res.lle_require_liquid_phases, warm=warm,
+                # Cold (anchor) start per row: a warm start chained from a far-off
+                # k_ij can lock onto the wrong branch (one row scored 21 840 %).
+                require_liquid_phases=res.lle_require_liquid_phases,
                 binary_assoc=res._binary_assoc, record_at_T=res._record_at_T,
             )
             ards.append(100.0 * float(np.mean(np.abs(r))))  # failure: penalty of ones
