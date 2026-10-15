@@ -98,6 +98,12 @@ uv run python -c "import inspect, fit_pcsaft; print(inspect.signature(fit_pcsaft
 - Under `("psat", "rho")` or `("vle", "sft")`, `cp_path` is loaded and reported by
   `.select()` but never optimized — the `hvap_path` rule.
 - Worked example: `examples/pure/13_water_cp_pareto.py`.
+- Asking a bare feos `State` for *total* cp **panics** (a `PanicException` that is not an `Exception`); PC-SAFT is a residual model. The ideal-gas cp is evaluated once, at the data temperatures, in `_setup_pure_fit` (`_fit_utils.ideal_gas_cp`) and carried on `PureData.cp_ig`.
+- The triple runs on the batched in-process path (`_batched` is `"sft" not in objectives and q == 0`): one extra `vapor_pressure_derivatives` call where P is absent and one `residual_isobaric_heat_capacity_derivatives` call, row-for-row equal to `_evaluate_point` (`test_evaluate_population_matches_evaluate_point_row_for_row_with_cp`; explicit P to 1e-9, saturation to 1e-6 because psat then comes from two different feos entry points). Also valid: `("psat", "rho", "cp", "sft")` (`n_obj=4`), not batched; `.plot()` has no four-axis branch and raises `ValueError` on it.
+- With an explicit `P`, feos returns a *converged* gas-like root above the candidate's Tc (residual cp ≈ 0.0025 J/(mol·K), `ok=True`), so cp never flags "no liquid" — the bad candidate shows in `AARD_cp`, and psat/rho, which always fold into the violation, catch it.
+- Default `refs=(2, 2, 2)` makes `select()` the lowest *mean* of the three AARDs; PC-SAFT liquid-cp errors are typically 5–15%, so pass refs that reflect that if the selection is meant to be a trade-off.
+- Shape changes at three objectives: `_densify` pairs each point with its 3 nearest neighbours in normalized objective space (`_edges`), about 3n edges, so `refine=1` costs ~3× the 2-D pass; `.plot()` draws three pairwise projections coloured by the third axis, no tangent; `front_quality` stays 2-D and raises. Every MOEA/D knob (`n_neighbors=20`, `n_replace=2`, `de_f`/`de_cr`, scaling ranking, restarts-beat-depth, refine numbers) was measured at `n_obj=2` only.
+- Pinned by `test_cp_is_reported_but_never_optimized_under_the_bulk_pair`; data: `examples/data/heat_capacity/water.csv` (IAPWS-95 quasi-data, saturated liquid, no P column).
 
 ## Gotchas
 
