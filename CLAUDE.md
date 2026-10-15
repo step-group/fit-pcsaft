@@ -24,7 +24,7 @@ uv run ruff check .
 Use `uv` for all package management — not `pip`.
 
 `pyproject.toml`'s `[tool.uv.sources]` pins `feos` to a locally-compiled wheel at
-`../feos/dist/feos-0.10.2-cp310-abi3-macosx_11_0_arm64.whl` (full LTO,
+`../feos/dist/feos-0.10.3-cp310-abi3-macosx_11_0_arm64.whl` (full LTO,
 `-Ctarget-cpu=native`, Cargo features trimmed to `pcsaft dft multiparameter ad
 rayon`) — same version as PyPI's, different bytes, marker-gated to
 darwin+arm64. **If that wheel is absent, `uv sync` fails.** Escape hatch:
